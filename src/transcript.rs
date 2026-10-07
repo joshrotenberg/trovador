@@ -12,6 +12,9 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
+/// Bumped whenever the projection changes what it emits, which invalidates every index row.
+pub const PROJECTION_VERSION: i64 = 1;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -184,11 +187,25 @@ fn project_claude(r: &Value, limits: &Limits, out: &mut Vec<Draft>) {
 /// - `Events`: older versions, `event_msg/user_message` and `event_msg/agent_message`.
 /// - `Responses`: the oldest files, where `response_item` (or a bare top-level record) is
 ///   all there is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum CodexMode {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CodexMode {
+    #[default]
     Responses,
     Events,
     Items,
+}
+
+impl CodexMode {
+    pub fn as_i64(self) -> i64 {
+        self as i64
+    }
+    pub fn from_i64(v: i64) -> Self {
+        match v {
+            2 => CodexMode::Items,
+            1 => CodexMode::Events,
+            _ => CodexMode::Responses,
+        }
+    }
 }
 
 /// The mode a single record proves the file is in, if any.
@@ -399,50 +416,117 @@ fn project_codex_item(item: &Value, limits: &Limits, out: &mut Vec<Draft>) {
 
 // --- reading ---------------------------------------------------------------
 
+/// Where a projection stopped, so the index can continue an append-only file from there
+/// and assign exactly the record indexes a full read would.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectionState {
+    /// Bytes consumed, always at a line boundary.
+    pub offset: u64,
+    pub next_index: usize,
+    pub mode: CodexMode,
+    /// Whether `mode` is what a fresh read of the grown file would also start with. It is
+    /// not when the file was still shorter than the pre-scan window and showed no item
+    /// stream yet; such a file must be read again from the start once it grows.
+    pub mode_final: bool,
+    /// An omitted run still open at `offset`. A full read would merge records appended
+    /// after it into the same run, so it is carried rather than flushed.
+    pub run: Option<(String, usize)>,
+}
+
 /// Streams a session's projected records, with omitted runs collapsed and indexes assigned.
 pub struct Projection {
-    lines: std::io::Lines<BufReader<File>>,
+    reader: BufReader<File>,
     backend: Backend,
     limits: Limits,
-    mode: CodexMode,
+    state: ProjectionState,
     pending: std::collections::VecDeque<Draft>,
-    /// The omitted run still being counted, held until a different record arrives.
-    run: Option<(String, usize)>,
-    next_index: usize,
+    /// Indexing reads only whole lines and leaves an open run open at the end; a transcript
+    /// page reads whatever is there and closes the run.
+    for_index: bool,
     done: bool,
+    line: Vec<u8>,
 }
 
 impl Projection {
+    /// A full read from the start, as a transcript page wants it.
     pub fn open(e: &ArchiveEntry, limits: &Limits) -> std::io::Result<Self> {
-        let mode = match e.backend {
-            Backend::Codex => initial_codex_mode(e, limits),
-            Backend::Claude => CodexMode::Responses,
+        Self::start(e, limits, None, false)
+    }
+
+    /// A read for the index: from `resume` when given, whole lines only, with the final
+    /// state available from [`Projection::state`] once the iterator is exhausted.
+    pub fn for_index(
+        e: &ArchiveEntry,
+        limits: &Limits,
+        resume: Option<ProjectionState>,
+    ) -> std::io::Result<Self> {
+        Self::start(e, limits, resume, true)
+    }
+
+    fn start(
+        e: &ArchiveEntry,
+        limits: &Limits,
+        resume: Option<ProjectionState>,
+        for_index: bool,
+    ) -> std::io::Result<Self> {
+        let mut file = File::open(&e.file)?;
+        let state = match resume {
+            Some(s) => {
+                use std::io::{Seek, SeekFrom};
+                file.seek(SeekFrom::Start(s.offset))?;
+                s
+            }
+            None => {
+                let (mode, mode_final) = match e.backend {
+                    Backend::Codex => initial_codex_mode(e, limits),
+                    Backend::Claude => (CodexMode::Responses, true),
+                };
+                ProjectionState {
+                    mode,
+                    mode_final,
+                    ..Default::default()
+                }
+            }
         };
         Ok(Self {
-            lines: BufReader::new(File::open(&e.file)?).lines(),
+            reader: BufReader::new(file),
             backend: e.backend,
             limits: limits.clone(),
-            mode,
+            state,
             pending: Default::default(),
-            run: None,
-            next_index: 0,
+            for_index,
             done: false,
+            line: Vec::new(),
         })
+    }
+
+    /// Where the read stopped. Meaningful once the iterator has returned `None`.
+    pub fn state(&self) -> &ProjectionState {
+        &self.state
     }
 
     fn fill(&mut self) {
         while self.pending.is_empty() && !self.done {
-            let Some(line) = self.lines.next() else {
+            self.line.clear();
+            let n = match self.reader.read_until(b'\n', &mut self.line) {
+                Ok(0) | Err(_) => {
+                    self.done = true;
+                    break;
+                }
+                Ok(n) => n,
+            };
+            // A torn final line is normal in a session still being written. The index
+            // leaves it for the next pass; a transcript page tries it and skips it.
+            if !self.line.ends_with(b"\n") && self.for_index {
                 self.done = true;
                 break;
-            };
-            // A line that is not valid UTF-8 or not JSON is skipped, as a torn final line
-            // in a session still being written is normal.
-            let Ok(line) = line else { continue };
-            if line.trim().is_empty() {
+            }
+            self.state.offset += n as u64;
+            let text = String::from_utf8_lossy(&self.line);
+            if text.trim().is_empty() {
                 continue;
             }
-            let Ok(r) = serde_json::from_str::<Value>(&line) else {
+            let Ok(r) = serde_json::from_str::<Value>(&text) else {
                 continue;
             };
             let mut drafts = Vec::new();
@@ -452,9 +536,9 @@ impl Projection {
                     // A stream seen later than the pre-scan reached still takes over from
                     // that point on.
                     if let Some(m) = codex_mode_signal(&r) {
-                        self.mode = self.mode.max(m);
+                        self.state.mode = self.state.mode.max(m);
                     }
-                    project_codex(&r, self.mode, &self.limits, &mut drafts)
+                    project_codex(&r, self.state.mode, &self.limits, &mut drafts)
                 }
             }
             self.pending.extend(drafts);
@@ -462,8 +546,8 @@ impl Projection {
     }
 
     fn assign(&mut self, d: Draft, count: Option<usize>) -> Record {
-        let index = self.next_index;
-        self.next_index += 1;
+        let index = self.state.next_index;
+        self.state.next_index += 1;
         Record {
             index,
             kind: d.kind,
@@ -481,23 +565,26 @@ impl Iterator for Projection {
         loop {
             self.fill();
             let Some(d) = self.pending.pop_front() else {
-                // End of file: flush the run in progress.
-                let (cat, n) = self.run.take()?;
+                if self.for_index {
+                    return None;
+                }
+                // End of file: close the run in progress.
+                let (cat, n) = self.state.run.take()?;
                 return Some(self.assign(Draft::omitted(cat), Some(n)));
             };
             if d.kind == RecordKind::Omitted {
                 let cat = d.name.clone().unwrap_or_default();
-                match &mut self.run {
+                match &mut self.state.run {
                     Some((c, n)) if *c == cat => *n += 1,
                     Some(_) => {
-                        let (prev, n) = self.run.replace((cat, 1)).expect("run is some");
+                        let (prev, n) = self.state.run.replace((cat, 1)).expect("run is some");
                         return Some(self.assign(Draft::omitted(prev), Some(n)));
                     }
-                    None => self.run = Some((cat, 1)),
+                    None => self.state.run = Some((cat, 1)),
                 }
                 continue;
             }
-            if let Some((cat, n)) = self.run.take() {
+            if let Some((cat, n)) = self.state.run.take() {
                 self.pending.push_front(d);
                 return Some(self.assign(Draft::omitted(cat), Some(n)));
             }
@@ -508,29 +595,35 @@ impl Iterator for Projection {
 
 /// Decides the starting stream from the head of the file, so the first user turn, which
 /// Codex writes as a `response_item` just before its first UI event, is not projected twice.
-fn initial_codex_mode(e: &ArchiveEntry, limits: &Limits) -> CodexMode {
+/// The decision is final once the item stream is seen or the whole window has been read.
+fn initial_codex_mode(e: &ArchiveEntry, limits: &Limits) -> (CodexMode, bool) {
     let Ok(f) = File::open(&e.file) else {
-        return CodexMode::Responses;
+        return (CodexMode::Responses, false);
     };
     let budget = limits.head_steps.get(1).copied().unwrap_or(512 * 1024) as u64;
     let mut mode = CodexMode::Responses;
     let mut read = 0u64;
-    for line in BufReader::new(f).lines() {
-        let Ok(line) = line else { break };
-        read += line.len() as u64 + 1;
-        if let Ok(r) = serde_json::from_str::<Value>(&line)
+    let mut reader = BufReader::new(f);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => read += n as u64,
+        }
+        if let Ok(r) = serde_json::from_slice::<Value>(&line)
             && let Some(m) = codex_mode_signal(&r)
         {
             mode = mode.max(m);
             if mode == CodexMode::Items {
-                break;
+                return (mode, true);
             }
         }
         if read >= budget {
-            break;
+            return (mode, true);
         }
     }
-    mode
+    (mode, false)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

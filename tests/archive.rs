@@ -423,6 +423,23 @@ fn a_torn_final_line_in_a_live_session_is_skipped_not_fatal() {
 }
 
 #[test]
+fn an_archived_codex_thread_is_still_listed_and_marked() {
+    let f = Fixture::new();
+    f.codex(ID_A, &[codex_meta("/w", json!("cli"))], 10);
+    f.codex_archived(
+        ID_B,
+        &[codex_meta("/w", json!("cli")), codex_user_item("old work")],
+        20,
+    );
+    let r = sessions::list(&f.ctx(), &ListOpts::default());
+    assert_eq!(r.total_sessions, 2);
+    let archived: Vec<_> = r.sessions.iter().filter(|s| s.archived).collect();
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].session_id, ID_B);
+    assert_eq!(archived[0].meta.snippet.as_deref(), Some("old work"));
+}
+
+#[test]
 fn claude_subagent_transcripts_are_not_listed_as_sessions() {
     let f = Fixture::new();
     f.claude("-w", ID_A, &[claude_user("/w", "parent")], 0);

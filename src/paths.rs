@@ -12,6 +12,9 @@ pub struct Paths {
     pub claude_archive: PathBuf,
     /// `~/.codex/sessions`: date-nested directories of `rollout-*-<uuid>.jsonl` files.
     pub codex_archive: PathBuf,
+    /// `~/.codex/archived_sessions`: where Codex moves a thread when it is archived. Flat,
+    /// same file names.
+    pub codex_archived: PathBuf,
     /// `~/.trovador`: everything trovador owns.
     pub home: PathBuf,
 }
@@ -27,6 +30,12 @@ impl Paths {
         Self {
             claude_archive: var("TROVADOR_CLAUDE_ARCHIVE")
                 .unwrap_or_else(|| home.join(".claude").join("projects")),
+            codex_archived: var("TROVADOR_CODEX_ARCHIVED").unwrap_or_else(|| {
+                // Beside the sessions root, so overriding that root moves both.
+                var("TROVADOR_CODEX_ARCHIVE")
+                    .and_then(|p| p.parent().map(|d| d.join("archived_sessions")))
+                    .unwrap_or_else(|| home.join(".codex").join("archived_sessions"))
+            }),
             codex_archive: var("TROVADOR_CODEX_ARCHIVE")
                 .unwrap_or_else(|| home.join(".codex").join("sessions")),
             home: var("TROVADOR_HOME").unwrap_or_else(|| home.join(".trovador")),
@@ -38,6 +47,7 @@ impl Paths {
         Self {
             claude_archive: root.join(".claude").join("projects"),
             codex_archive: root.join(".codex").join("sessions"),
+            codex_archived: root.join(".codex").join("archived_sessions"),
             home: root.join(".trovador"),
         }
     }

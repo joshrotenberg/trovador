@@ -55,6 +55,8 @@ pub struct ArchiveEntry {
     pub file: PathBuf,
     pub size_bytes: u64,
     pub mtime: SystemTime,
+    /// Codex moved this thread to `archived_sessions`.
+    pub archived: bool,
 }
 
 impl ArchiveEntry {
@@ -85,7 +87,7 @@ pub fn scan_claude(root: &Path) -> Vec<ArchiveEntry> {
             let Some(id) = name.strip_suffix(".jsonl") else {
                 continue;
             };
-            if let Some(e) = entry(Backend::Claude, id, &path) {
+            if let Some(e) = entry(Backend::Claude, id, &path, false) {
                 out.push(e);
             }
         }
@@ -93,9 +95,10 @@ pub fn scan_claude(root: &Path) -> Vec<ArchiveEntry> {
     out
 }
 
-/// Codex nests by date, `<root>/YYYY/MM/DD/rollout-<timestamp>-<uuid>.jsonl`. The id is
+/// Codex nests by date, `<root>/YYYY/MM/DD/rollout-<timestamp>-<uuid>.jsonl`, and moves an
+/// archived thread to a flat `archived_sessions` directory under the same name. The id is
 /// the trailing UUID, which is what `codex resume` accepts.
-pub fn scan_codex(root: &Path) -> Vec<ArchiveEntry> {
+pub fn scan_codex(root: &Path, archived: bool) -> Vec<ArchiveEntry> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -113,7 +116,7 @@ pub fn scan_codex(root: &Path) -> Vec<ArchiveEntry> {
                 continue;
             };
             if let Some(id) = trailing_uuid(name)
-                && let Some(e) = entry(Backend::Codex, id, &path)
+                && let Some(e) = entry(Backend::Codex, id, &path, archived)
             {
                 out.push(e);
             }
@@ -132,7 +135,7 @@ fn trailing_uuid(name: &str) -> Option<&str> {
     shape_ok.then_some(id)
 }
 
-fn entry(backend: Backend, id: &str, path: &Path) -> Option<ArchiveEntry> {
+fn entry(backend: Backend, id: &str, path: &Path, archived: bool) -> Option<ArchiveEntry> {
     let md = fs::metadata(path).ok()?;
     if !md.is_file() {
         return None;
@@ -143,13 +146,15 @@ fn entry(backend: Backend, id: &str, path: &Path) -> Option<ArchiveEntry> {
         file: path.to_path_buf(),
         size_bytes: md.len(),
         mtime: md.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+        archived,
     })
 }
 
 /// Every session in both archives, newest first.
 pub fn scan_all(paths: &Paths) -> Vec<ArchiveEntry> {
     let mut all = scan_claude(&paths.claude_archive);
-    all.extend(scan_codex(&paths.codex_archive));
+    all.extend(scan_codex(&paths.codex_archive, false));
+    all.extend(scan_codex(&paths.codex_archived, true));
     all.sort_by(|a, b| b.mtime.cmp(&a.mtime).then(a.session_id.cmp(&b.session_id)));
     all
 }
