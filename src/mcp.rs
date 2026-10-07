@@ -28,6 +28,9 @@ for FTS5 syntax, regex=true for a regular expression. Each hit gives match index
 as the transcript offset. If exhaustive is false, finding nothing proves nothing; the note \
 says what was not covered.
 
+summarize returns a summary of a session, from the cache when the session has not \
+changed; a miss costs tokens. session://{backend}/{id}/summary returns only a cached one.
+
 ask runs a turn and costs real model tokens. Without session it starts a new session; with \
 session it continues that one, if consent allows. Sessions trovador starts may always be \
 continued. Keep the session_id it returns: it is the handle to that conversation, and a run \
@@ -35,6 +38,18 @@ that timed out still returns it. Consent is changed only by a person at the CLI,
 through this server.
 
 Reading is free: nothing here runs a model.";
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SummarizeInput {
+    /// Session id or unambiguous prefix.
+    session_id: String,
+    backend: Option<Backend>,
+    /// Make a new summary even if a current one is cached.
+    #[serde(default)]
+    force: bool,
+    /// Model for the summary; haiku by default.
+    model: Option<String>,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -199,7 +214,9 @@ pub fn router(ctx: Ctx) -> McpRouter {
              started are always allowed, others need a person to approve them at the CLI. \
              fork=true resumes a claude session's context into a new one. Returns the reply, \
              the session_id to continue with, and whether it can be continued. A run that \
-             times out still returns its session_id.",
+             times out still returns its session_id. about=<session> consults instead: it \
+             summarizes that session and asks a new session on the other backend, which \
+             works for sessions too large to resume.",
         )
         .handler(move |input: AskOpts| {
             let ctx = c.clone();
@@ -211,6 +228,58 @@ pub fn router(ctx: Ctx) -> McpRouter {
             }
         })
         .build();
+
+    let c = ctx.clone();
+    let summarize_tool = ToolBuilder::new("summarize")
+        .title("Summarize a session")
+        .description(
+            "Summarize one session: goal, what happened, key decisions, current state, open \
+             items. Served from the cache when the session has not changed since it was \
+             summarized (cached=true, no cost); otherwise costs model tokens (haiku by \
+             default). force=true makes a new one.",
+        )
+        .handler(move |input: SummarizeInput| {
+            let ctx = c.clone();
+            async move {
+                match crate::summary::summarize(
+                    &ctx,
+                    &input.session_id,
+                    input.backend,
+                    input.force,
+                    input.model.as_deref(),
+                )
+                .await
+                {
+                    Ok(s) => json_result(&s),
+                    Err(e) => Ok(CallToolResult::error(e.to_string())),
+                }
+            }
+        })
+        .build();
+
+    let c = ctx.clone();
+    let summary_resource = ResourceTemplateBuilder::new("session://{backend}/{id}/summary")
+        .name("Session summary")
+        .description("A session's cached summary, if one is current. Never generates one.")
+        .mime_type("application/json")
+        .handler(move |uri: String, vars: HashMap<String, String>| {
+            let ctx = c.clone();
+            async move {
+                let (backend, id) = template_args(&vars)?;
+                let found = blocking(move || {
+                    crate::archive::find_session(&ctx.paths, &id, backend)
+                        .map(|e| crate::summary::cached(&ctx, &e))
+                })
+                .await?;
+                match found {
+                    Ok(Some(s)) => resource_json(uri, &s),
+                    Ok(None) => Err(tower_mcp::Error::invalid_params(
+                        "no current summary; the summarize tool makes one",
+                    )),
+                    Err(e) => Err(tower_mcp::Error::invalid_params(e.to_string())),
+                }
+            }
+        });
 
     let c = ctx.clone();
     let session_resource = ResourceTemplateBuilder::new("session://{backend}/{id}")
@@ -253,6 +322,8 @@ pub fn router(ctx: Ctx) -> McpRouter {
         .tool(sessions_tool)
         .tool(search_tool)
         .tool(ask_tool)
+        .tool(summarize_tool)
         .resource_template(session_resource)
         .resource_template(transcript_resource)
+        .resource_template(summary_resource)
 }

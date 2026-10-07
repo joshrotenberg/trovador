@@ -246,8 +246,8 @@ async fn no_mcp_tool_can_change_consent() {
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(names.len(), 3, "{names:?}");
-    for n in ["sessions", "search", "ask"] {
+    assert_eq!(names.len(), 4, "{names:?}");
+    for n in ["sessions", "search", "ask", "summarize"] {
         assert!(names.iter().any(|x| x == n));
     }
     assert!(names.iter().all(|n| !n.contains("consent")));
@@ -265,4 +265,52 @@ async fn a_denied_continuation_over_mcp_names_the_cli_command_a_person_would_run
     let text = r.all_text();
     assert!(text.starts_with("continuation denied"), "{text}");
     assert!(text.contains(&format!("trovador consent approve {ID_A} --backend claude")));
+}
+
+#[tokio::test]
+async fn a_cached_summary_is_identical_through_both_doors_and_the_resource() {
+    let f = fixture().with_fakes();
+    let ctx = f.ctx();
+    let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
+    client.initialize().await;
+    // The resource only serves what exists; it never spends tokens making one.
+    let missing = client
+        .send_request_expect_error(
+            "resources/read",
+            Some(json!({"uri": format!("session://claude/{ID_A}/summary")})),
+        )
+        .await;
+    assert!(
+        missing.to_string().contains("no current summary"),
+        "{missing}"
+    );
+    assert!(f.calls("claude").is_empty());
+
+    trovador::summary::summarize(&ctx, ID_A, None, false, None)
+        .await
+        .unwrap();
+    let lib = serde_json::to_value(
+        trovador::summary::summarize(&ctx, ID_A, None, false, None)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(lib["cached"], true);
+    assert_eq!(cli(&f, &["summarize", ID_A]), lib);
+    assert_eq!(
+        client
+            .call_tool_json("summarize", json!({"session_id": ID_A}))
+            .await,
+        lib
+    );
+    let res = client
+        .read_resource(&format!("session://claude/{ID_A}/summary"))
+        .await;
+    let body: Value = serde_json::from_str(res.first_text().unwrap()).unwrap();
+    assert_eq!(body, lib);
+    assert_eq!(
+        f.calls("claude").len(),
+        1,
+        "only the first summary ran a model"
+    );
 }

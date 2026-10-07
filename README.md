@@ -24,7 +24,7 @@ is tracked in [#1](https://github.com/joshrotenberg/trovador/issues/1).
 | Archive reading: list, show, transcript | Done |
 | Full-text index and search | Done |
 | Execution: ask, continue, fork, with consent | Done |
-| Summaries, consult, import from spike | Not started |
+| Summaries, consult, import from spike | Done |
 
 ## Install
 
@@ -51,6 +51,9 @@ trovador ask "review the diff" --cwd ~/code/x # start a claude session (costs to
 trovador ask "and the tests?" --session 3e22  # continue it
 trovador ask "try another way" --session 3e22 --fork
 trovador ask - --backend codex < prompt.md    # prompt from stdin
+trovador ask "what was decided?" --about 27d1 # consult: summary of 27d1, asked of codex
+trovador summarize 27d1f434                   # cached until the session changes
+trovador import --dry-run                     # what would come over from spike
 trovador consent status                       # who may be continued
 trovador consent approve 27d1f434             # allow one session trovador did not start
 trovador consent policy approved              # ...and honour approvals
@@ -148,6 +151,32 @@ another turn.
   passed down and a run at `TROVADOR_MAX_DEPTH` (2) is refused.
 - **Log.** Every run's start and end is a line in `~/.trovador/runs.jsonl`.
 
+## Summaries and consulting
+
+`summarize` renders a session's transcript, cuts it into 250,000-character chunks,
+summarizes each with `haiku`, and merges them into one summary: goal, what happened, key
+decisions, current state, open items. Past 8 chunks the first and last halves are kept and
+the summary says which parts were left out, which bounds the cost of a very large session.
+
+Summary runs use `--no-session-persistence`, so they leave no transcript in the archive and
+are never offered for continuation. The result is cached in `~/.trovador/summaries/` against
+the source file's size and mtime; a cache hit costs nothing and says `cached: true`. The
+`session://{backend}/{id}/summary` resource returns only a cached summary and never makes one.
+
+`ask` with `about: <session>` consults instead of continuing: it summarizes that session and
+starts a new session, on the other backend unless `backend` says otherwise, seeded with the
+summary and the question, in the source session's project. That works for sessions too
+large to resume, and the new session can be continued like any trovador started.
+
+## Importing from spike
+
+`trovador import` reads spike's `~/.agent-sessions` and never writes to it. Spawned records
+and approvals or denials are merged into trovador's consent state, keeping trovador's own
+decision where both have one; spike's level is adopted only if trovador has none yet.
+Summaries come over when the session has not changed since spike made them. Standing
+sessions, pads, blobs, windows, runners, and reports are counted and not imported.
+`--dry-run` reports without changing anything, and a second import changes nothing.
+
 ## Consent
 
 Starting a session is always allowed. Continuing one is decided by `~/.trovador/consent.json`
@@ -170,7 +199,7 @@ report a check (`sessions show` includes one) but has no tool that changes it.
 
 trovador reads `~/.claude/projects`, `~/.codex/sessions`, and `~/.codex/archived_sessions`
 and never writes to any of them itself; the providers write there when `ask` runs them. Its
-own state goes under `~/.trovador`: `index.db`, `consent.json`, `runs.jsonl`.
+own state goes under `~/.trovador`: `index.db`, `consent.json`, `runs.jsonl`, `summaries/`.
 `sessions list` reads the index when it exists but never creates it. Override the paths with
 `TROVADOR_CLAUDE_ARCHIVE`, `TROVADOR_CODEX_ARCHIVE`, `TROVADOR_CODEX_ARCHIVED`,
 `TROVADOR_HOME`, and choose the provider binaries with `TROVADOR_CLAUDE_BIN` and

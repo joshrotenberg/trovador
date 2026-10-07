@@ -7,6 +7,7 @@ use trovador::consent::{self, Decision, Level};
 use trovador::index::{Order, SearchOpts};
 use trovador::run::{self, AskOpts};
 use trovador::sessions::{self, Ctx, ListOpts};
+use trovador::summary;
 use trovador::{Backend, archive};
 
 /// Local Claude Code and Codex sessions as one MCP server and CLI.
@@ -17,6 +18,8 @@ struct Cli {
     command: Command,
 }
 
+// Parsed once per process; boxing the large variants would only add indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     /// Run the MCP server over stdio.
@@ -73,6 +76,10 @@ enum Command {
         /// With --session, resume its context into a new session (claude only).
         #[arg(long, requires = "session")]
         fork: bool,
+        /// Consult about this session: summarize it and ask a new session, on the other
+        /// backend unless --backend says otherwise.
+        #[arg(long, conflicts_with_all = ["session", "fork"])]
+        about: Option<String>,
         #[arg(long)]
         cwd: Option<String>,
         #[arg(long = "add-dir")]
@@ -98,6 +105,27 @@ enum Command {
         /// codex sandbox: read-only (default) or workspace-write.
         #[arg(long)]
         sandbox: Option<String>,
+    },
+    /// Summarize a session: cached until the session changes. Costs tokens on a miss.
+    Summarize {
+        id: String,
+        #[arg(long)]
+        backend: Option<Backend>,
+        /// Make a new summary even if a current one is cached.
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        model: Option<String>,
+    },
+    /// Import consent and summaries from spike (agent-sessions). Reads, never writes, the
+    /// spike directory.
+    Import {
+        /// spike's state directory.
+        #[arg(long)]
+        from: Option<std::path::PathBuf>,
+        /// Report what would be imported without changing anything.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Which existing sessions trovador may continue. Only this command changes it.
     Consent {
@@ -279,6 +307,7 @@ fn main() -> ExitCode {
             backend,
             session,
             fork,
+            about,
             cwd,
             add_dirs,
             model,
@@ -306,6 +335,7 @@ fn main() -> ExitCode {
                 backend,
                 session,
                 fork,
+                about,
                 cwd,
                 add_dirs,
                 model,
@@ -329,6 +359,34 @@ fn main() -> ExitCode {
             }
         }
         Command::Consent { action } => consent_cmd(&ctx, action),
+        Command::Summarize {
+            id,
+            backend,
+            force,
+            model,
+        } => {
+            let runtime = match tokio::runtime::Runtime::new() {
+                Ok(r) => r,
+                Err(e) => return fail(e),
+            };
+            match runtime.block_on(summary::summarize(
+                &ctx,
+                &id,
+                backend,
+                force,
+                model.as_deref(),
+            )) {
+                Ok(s) => print(&s),
+                Err(e) => fail(e),
+            }
+        }
+        Command::Import { from, dry_run } => {
+            let from = from.unwrap_or_else(trovador::import::default_from);
+            match trovador::import::import(&ctx, &from, dry_run) {
+                Ok(r) => print(&r),
+                Err(e) => fail(e),
+            }
+        }
         Command::Doctor => {
             let claude = archive::scan_claude(&ctx.paths.claude_archive);
             let codex = archive::scan_codex(&ctx.paths.codex_archive, false);
