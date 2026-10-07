@@ -266,6 +266,18 @@ fn a_codex_run_killed_by_timeout_returns_its_id_and_can_be_continued_without_app
 }
 
 #[test]
+fn a_run_that_ends_before_any_transcript_exists_is_not_offered_for_continuation() {
+    let f = Fixture::new().with_fakes();
+    let ctx = f.ctx();
+    let r = ask(&ctx, prompt("vanish now")).unwrap();
+    assert!(r.is_error);
+    assert!(r.session_id.is_some(), "the id is still reported");
+    let c = r.continuation.unwrap();
+    assert!(!c.resumable && !c.allowed);
+    assert!(c.reason.unwrap().contains("no transcript"));
+}
+
+#[test]
 fn codex_gets_a_longer_default_timeout_than_claude() {
     let l = Limits::default();
     assert!(l.codex_timeout_s > l.claude_timeout_s);
