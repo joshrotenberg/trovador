@@ -10,6 +10,7 @@ use tower_mcp::protocol::{ReadResourceResult, ResourceContent};
 use tower_mcp::{CallToolResult, McpRouter, ResourceTemplateBuilder, ToolBuilder};
 
 use crate::archive::Backend;
+use crate::index::SearchOpts;
 use crate::sessions::{self, Ctx, ListOpts};
 
 const INSTRUCTIONS: &str = "\
@@ -20,6 +21,11 @@ sessions(action=list) finds sessions, newest first, filterable by backend and pr
 sessions(action=show) gives one session's metadata, resumability, and the command to resume \
 it in a terminal. sessions(action=transcript) pages through a projected transcript; follow \
 next_offset while has_more is true. The session:// resources return the same data.
+
+search finds text across every session: words and \"quoted phrases\" by default, fts=true \
+for FTS5 syntax, regex=true for a regular expression. Each hit gives match indexes to pass \
+as the transcript offset. If exhaustive is false, finding nothing proves nothing; the note \
+says what was not covered.
 
 Reading is free: nothing here runs a model.";
 
@@ -152,6 +158,31 @@ pub fn router(ctx: Ctx) -> McpRouter {
         .build();
 
     let c = ctx.clone();
+    let search_tool = ToolBuilder::new("search")
+        .title("Search sessions")
+        .description(
+            "Full-text search across every local Claude Code and Codex session. query is \
+             words and \"quoted phrases\", all required; fts=true takes FTS5 syntax; \
+             regex=true takes a regular expression. Returns sessions with match counts and \
+             excerpts; each match has the record index to open the transcript at. Brings \
+             the index up to date first, within a time budget; exhaustive=false means the \
+             index was not fully current and an empty result is not proof of absence. \
+             Costs no model tokens.",
+        )
+        .read_only_safe()
+        .handler(move |input: SearchOpts| {
+            let ctx = c.clone();
+            async move {
+                blocking(move || match sessions::search(&ctx, &input) {
+                    Ok(r) => json_result(&r),
+                    Err(e) => Ok(CallToolResult::error(e.to_string())),
+                })
+                .await?
+            }
+        })
+        .build();
+
+    let c = ctx.clone();
     let session_resource = ResourceTemplateBuilder::new("session://{backend}/{id}")
         .name("Session")
         .description("One session's metadata, resumability, and resume command")
@@ -190,6 +221,7 @@ pub fn router(ctx: Ctx) -> McpRouter {
         .server_info("trovador", env!("CARGO_PKG_VERSION"))
         .instructions(INSTRUCTIONS)
         .tool(sessions_tool)
+        .tool(search_tool)
         .resource_template(session_resource)
         .resource_template(transcript_resource)
 }

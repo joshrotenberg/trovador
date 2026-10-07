@@ -44,6 +44,18 @@ impl Fixture {
         write(dir.join(format!("{id}.jsonl")), records, age)
     }
 
+    /// Writes `<codex archived_sessions>/rollout-...-<id>.jsonl`, where Codex moves a thread
+    /// it has archived.
+    pub fn codex_archived(&self, id: &str, records: &[Value], age: u64) -> PathBuf {
+        write(
+            self.paths
+                .codex_archived
+                .join(format!("rollout-2026-09-01T12-00-00-{id}.jsonl")),
+            records,
+            age,
+        )
+    }
+
     /// Writes `<codex>/2026/10/07/rollout-...-<id>.jsonl`.
     pub fn codex(&self, id: &str, records: &[Value], age: u64) -> PathBuf {
         let dir = self.paths.codex_archive.join("2026/10/07");

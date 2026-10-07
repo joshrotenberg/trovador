@@ -3,6 +3,7 @@
 //! answer.
 
 pub mod archive;
+pub mod index;
 pub mod limits;
 pub mod mcp;
 pub mod paths;

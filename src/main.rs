@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
+use trovador::index::{Order, SearchOpts};
 use trovador::sessions::{self, Ctx, ListOpts};
 use trovador::{Backend, archive};
 
@@ -23,7 +24,42 @@ enum Command {
         #[command(subcommand)]
         action: SessionsCmd,
     },
-    /// Report paths, limits, and what the archives contain.
+    /// Full-text search across every session. Brings the index up to date first, within
+    /// TROVADOR_INDEX_BUDGET_MS.
+    Search {
+        /// Words and "quoted phrases", all required.
+        query: String,
+        /// Treat the query as an FTS5 expression.
+        #[arg(long, conflicts_with = "regex")]
+        fts: bool,
+        /// Treat the query as a case-insensitive regular expression.
+        #[arg(long)]
+        regex: bool,
+        #[arg(long)]
+        backend: Option<Backend>,
+        /// Only sessions whose project path contains this text.
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        origin: Option<String>,
+        #[arg(long)]
+        include_subagents: bool,
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Matching records shown per session.
+        #[arg(long)]
+        per_session: Option<usize>,
+        /// Order sessions by most recent instead of best match.
+        #[arg(long)]
+        recent: bool,
+    },
+    /// Bring the search index fully up to date, with no time budget.
+    Index {
+        /// Discard the index and build it again.
+        #[arg(long)]
+        rebuild: bool,
+    },
+    /// Report paths, limits, the index, and what the archives contain.
     Doctor,
 }
 
@@ -124,17 +160,61 @@ fn main() -> ExitCode {
                 Err(e) => fail(e),
             },
         },
+        Command::Search {
+            query,
+            fts,
+            regex,
+            backend,
+            project,
+            origin,
+            include_subagents,
+            limit,
+            per_session,
+            recent,
+        } => {
+            let opts = SearchOpts {
+                query,
+                fts,
+                regex,
+                backend,
+                project,
+                origin,
+                include_subagents,
+                limit,
+                per_session,
+                order: if recent {
+                    Order::Recent
+                } else {
+                    Order::Relevance
+                },
+            };
+            match sessions::search(&ctx, &opts) {
+                Ok(r) => print(&r),
+                Err(e) => fail(e),
+            }
+        }
+        Command::Index { rebuild } => match sessions::reindex(&ctx, rebuild) {
+            Ok(r) => print(&json!({ "refresh": r, "index": sessions::index_status(&ctx) })),
+            Err(e) => fail(e),
+        },
         Command::Doctor => {
             let claude = archive::scan_claude(&ctx.paths.claude_archive);
-            let codex = archive::scan_codex(&ctx.paths.codex_archive);
+            let codex = archive::scan_codex(&ctx.paths.codex_archive, false);
+            let archived = archive::scan_codex(&ctx.paths.codex_archived, true);
             print(&json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "paths": {
                     "claude_archive": ctx.paths.claude_archive,
                     "codex_archive": ctx.paths.codex_archive,
+                    "codex_archived": ctx.paths.codex_archived,
                     "home": ctx.paths.home,
                 },
-                "sessions": { "claude": claude.len(), "codex": codex.len() },
+                "sessions": {
+                    "claude": claude.len(),
+                    "codex": codex.len(),
+                    "codex_archived": archived.len(),
+                },
+                "index": sessions::index_status(&ctx),
                 "limits": ctx.limits,
             }))
         }

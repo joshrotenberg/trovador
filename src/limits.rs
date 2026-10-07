@@ -29,6 +29,14 @@ pub struct Limits {
     pub resume_limit_bytes: u64,
     /// Default number of sessions a list returns.
     pub list_default: usize,
+    /// How long a search may spend bringing the index up to date before it queries what is
+    /// there. The first build of a large archive takes longer; `trovador index` has no
+    /// budget.
+    pub index_budget_ms: usize,
+    /// Default number of sessions a search returns.
+    pub search_default: usize,
+    /// Default number of matching records shown per session.
+    pub per_session_default: usize,
 }
 
 impl Default for Limits {
@@ -41,6 +49,9 @@ impl Default for Limits {
             page_size: 200,
             resume_limit_bytes: 900_000,
             list_default: 20,
+            index_budget_ms: 15_000,
+            search_default: 20,
+            per_session_default: 3,
         }
     }
 }
@@ -82,6 +93,9 @@ impl Limits {
             page_size: num("TROVADOR_PAGE_SIZE", d.page_size).max(1),
             resume_limit_bytes: num("TROVADOR_RESUME_LIMIT", d.resume_limit_bytes as usize) as u64,
             list_default: num("TROVADOR_LIST_DEFAULT", d.list_default).max(1),
+            index_budget_ms: num("TROVADOR_INDEX_BUDGET_MS", d.index_budget_ms),
+            search_default: num("TROVADOR_SEARCH_DEFAULT", d.search_default).max(1),
+            per_session_default: num("TROVADOR_PER_SESSION", d.per_session_default).max(1),
         }
     }
 }

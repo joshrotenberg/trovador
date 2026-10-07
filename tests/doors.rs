@@ -39,6 +39,7 @@ fn cli(f: &Fixture, args: &[&str]) -> Value {
         .args(args)
         .env("TROVADOR_CLAUDE_ARCHIVE", &f.paths.claude_archive)
         .env("TROVADOR_CODEX_ARCHIVE", &f.paths.codex_archive)
+        .env("TROVADOR_CODEX_ARCHIVED", &f.paths.codex_archived)
         .env("TROVADOR_HOME", &f.paths.home)
         .output()
         .expect("run trovador");
@@ -50,10 +51,14 @@ fn cli(f: &Fixture, args: &[&str]) -> Value {
     serde_json::from_slice(&out.stdout).expect("stdout is one JSON document")
 }
 
-async fn mcp(f: &Fixture, args: Value) -> Value {
+async fn mcp_tool(f: &Fixture, tool: &str, args: Value) -> Value {
     let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
     client.initialize().await;
-    client.call_tool_json("sessions", args).await
+    client.call_tool_json(tool, args).await
+}
+
+async fn mcp(f: &Fixture, args: Value) -> Value {
+    mcp_tool(f, "sessions", args).await
 }
 
 #[tokio::test]
@@ -143,4 +148,43 @@ async fn the_session_resource_matches_show() {
         .await;
     let body: Value = serde_json::from_str(t.first_text().unwrap()).unwrap();
     assert_eq!(body["records"][0]["text"], "claude question");
+}
+
+fn without_timing(mut v: Value) -> Value {
+    if let Some(r) = v.pointer_mut("/coverage/refresh") {
+        r.as_object_mut().unwrap().remove("ms");
+    }
+    v
+}
+
+#[tokio::test]
+async fn search_is_identical_from_the_library_the_cli_and_the_mcp_tool() {
+    let f = fixture();
+    // Index once so every door sees the same unchanged archive.
+    sessions::reindex(&f.ctx(), false).unwrap();
+    let opts = trovador::index::SearchOpts {
+        query: "question".into(),
+        ..Default::default()
+    };
+    let lib =
+        without_timing(serde_json::to_value(sessions::search(&f.ctx(), &opts).unwrap()).unwrap());
+    assert_eq!(lib["sessions_matched"], 2);
+    assert_eq!(lib["coverage"]["refresh"]["unchanged"], 2);
+    assert_eq!(without_timing(cli(&f, &["search", "question"])), lib);
+    assert_eq!(
+        without_timing(mcp_tool(&f, "search", json!({"query": "question"})).await),
+        lib
+    );
+}
+
+#[tokio::test]
+async fn a_bad_query_is_a_readable_tool_error() {
+    let f = fixture();
+    let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
+    client.initialize().await;
+    let r = client
+        .call_tool("search", json!({"query": "(", "regex": true}))
+        .await;
+    assert!(r.is_error);
+    assert!(r.all_text().starts_with("invalid query"));
 }
