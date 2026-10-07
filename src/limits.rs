@@ -37,6 +37,14 @@ pub struct Limits {
     pub search_default: usize,
     /// Default number of matching records shown per session.
     pub per_session_default: usize,
+    /// Seconds a Claude turn may run before it is killed.
+    pub claude_timeout_s: usize,
+    /// Seconds a Codex turn may run. Longer than Claude's: spike's 120 s default killed a
+    /// Codex turn between two MCP writes it was making (spike#107).
+    pub codex_timeout_s: usize,
+    /// Nesting depth at which a run is refused. Every session trovador starts can reach
+    /// trovador again, so without a ceiling one prompt could recurse indefinitely.
+    pub max_depth: usize,
 }
 
 impl Default for Limits {
@@ -52,6 +60,9 @@ impl Default for Limits {
             index_budget_ms: 15_000,
             search_default: 20,
             per_session_default: 3,
+            claude_timeout_s: 600,
+            codex_timeout_s: 900,
+            max_depth: 2,
         }
     }
 }
@@ -96,6 +107,9 @@ impl Limits {
             index_budget_ms: num("TROVADOR_INDEX_BUDGET_MS", d.index_budget_ms),
             search_default: num("TROVADOR_SEARCH_DEFAULT", d.search_default).max(1),
             per_session_default: num("TROVADOR_PER_SESSION", d.per_session_default).max(1),
+            claude_timeout_s: num("TROVADOR_CLAUDE_TIMEOUT_S", d.claude_timeout_s).max(1),
+            codex_timeout_s: num("TROVADOR_CODEX_TIMEOUT_S", d.codex_timeout_s).max(1),
+            max_depth: num("TROVADOR_MAX_DEPTH", d.max_depth),
         }
     }
 }

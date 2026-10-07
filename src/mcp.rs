@@ -11,6 +11,7 @@ use tower_mcp::{CallToolResult, McpRouter, ResourceTemplateBuilder, ToolBuilder}
 
 use crate::archive::Backend;
 use crate::index::SearchOpts;
+use crate::run::{self, AskOpts};
 use crate::sessions::{self, Ctx, ListOpts};
 
 const INSTRUCTIONS: &str = "\
@@ -26,6 +27,12 @@ search finds text across every session: words and \"quoted phrases\" by default,
 for FTS5 syntax, regex=true for a regular expression. Each hit gives match indexes to pass \
 as the transcript offset. If exhaustive is false, finding nothing proves nothing; the note \
 says what was not covered.
+
+ask runs a turn and costs real model tokens. Without session it starts a new session; with \
+session it continues that one, if consent allows. Sessions trovador starts may always be \
+continued. Keep the session_id it returns: it is the handle to that conversation, and a run \
+that timed out still returns it. Consent is changed only by a person at the CLI, never \
+through this server.
 
 Reading is free: nothing here runs a model.";
 
@@ -183,6 +190,29 @@ pub fn router(ctx: Ctx) -> McpRouter {
         .build();
 
     let c = ctx.clone();
+    let ask_tool = ToolBuilder::new("ask")
+        .title("Ask a session")
+        .description(
+            "Run one turn on claude or codex. Costs real model tokens. Without session, \
+             starts a new session (claude unless backend says otherwise). With session (an \
+             id or unambiguous prefix), continues it, if consent allows; sessions trovador \
+             started are always allowed, others need a person to approve them at the CLI. \
+             fork=true resumes a claude session's context into a new one. Returns the reply, \
+             the session_id to continue with, and whether it can be continued. A run that \
+             times out still returns its session_id.",
+        )
+        .handler(move |input: AskOpts| {
+            let ctx = c.clone();
+            async move {
+                match run::ask(&ctx, &input).await {
+                    Ok(r) => json_result(&r),
+                    Err(e) => Ok(CallToolResult::error(e.to_string())),
+                }
+            }
+        })
+        .build();
+
+    let c = ctx.clone();
     let session_resource = ResourceTemplateBuilder::new("session://{backend}/{id}")
         .name("Session")
         .description("One session's metadata, resumability, and resume command")
@@ -222,6 +252,7 @@ pub fn router(ctx: Ctx) -> McpRouter {
         .instructions(INSTRUCTIONS)
         .tool(sessions_tool)
         .tool(search_tool)
+        .tool(ask_tool)
         .resource_template(session_resource)
         .resource_template(transcript_resource)
 }

@@ -81,6 +81,118 @@ fn write(path: PathBuf, records: &[Value], age: u64) -> PathBuf {
     path
 }
 
+// --- fake providers --------------------------------------------------------
+
+/// The id the fake claude gives a forked session, and the fake codex a new one.
+pub const FORK_ID: &str = "f0f0f0f0-0000-4000-8000-00000000000f";
+pub const CODEX_NEW_ID: &str = "c0dec0de-0000-4000-8000-00000000000c";
+
+const FAKE_CLAUDE: &str = r#"#!/bin/bash
+# Speaks claude -p --output-format stream-json. Prompts containing "slow" sleep past any
+# test timeout; prompts containing "fail" end with an error result.
+{ printf '%s\n' "---" "cwd=$PWD" "depth=$TROVADOR_DEPTH"; printf 'arg=%s\n' "$@"; } >> "__LOG__"
+sid=""; resume=""; fork=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --session-id) sid="$2"; shift;;
+    --resume) resume="$2"; shift;;
+    --fork-session) fork=1;;
+  esac
+  shift
+done
+prompt="$(cat)"
+if [ -n "$resume" ]; then
+  if [ $fork = 1 ]; then id="__FORK__"; else id="$resume"; fi
+else
+  id="$sid"
+fi
+printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$id"
+if [ -z "$resume" ] || [ $fork = 1 ]; then
+  mkdir -p "__ARCHIVE__/-fake"
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"started"}}\n' "$PWD" > "__ARCHIVE__/-fake/$id.jsonl"
+fi
+case "$prompt" in *slow*) sleep 30;; esac
+case "$prompt" in *fail*)
+  printf '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"it failed","session_id":"%s"}\n' "$id"
+  exit 1;;
+esac
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}\n'
+printf '{"type":"result","subtype":"success","is_error":false,"result":"echo: %s","session_id":"%s","total_cost_usd":0.01,"num_turns":1,"usage":{"input_tokens":3}}\n' "$prompt" "$id"
+"#;
+
+const FAKE_CODEX: &str = r#"#!/bin/bash
+# Speaks codex exec --json, for exec and exec resume.
+{ printf '%s\n' "---" "cwd=$PWD" "depth=$TROVADOR_DEPTH"; printf 'arg=%s\n' "$@"; } >> "__LOG__"
+resume=0; id="__NEW__"; pos=(); skip=0
+for a in "$@"; do
+  if [ $skip = 1 ]; then skip=0; continue; fi
+  case "$a" in
+    exec|-) ;;
+    resume) resume=1;;
+    -c|--config|-m|--model|-s|--sandbox|--add-dir|-C|--cd|--output-schema|-p|--profile) skip=1;;
+    -*) ;;
+    *) pos+=("$a");;
+  esac
+done
+if [ $resume = 1 ] && [ ${#pos[@]} -gt 0 ]; then id="${pos[0]}"; fi
+prompt="$(cat)"
+printf '{"type":"thread.started","thread_id":"%s"}\n' "$id"
+if [ $resume = 0 ]; then
+  mkdir -p "__ARCHIVE__/2026/10/07"
+  printf '{"type":"session_meta","payload":{"cwd":"%s","source":"exec"}}\n' "$PWD" > "__ARCHIVE__/2026/10/07/rollout-2026-10-07T00-00-00-$id.jsonl"
+fi
+case "$prompt" in *slow*) sleep 30;; esac
+case "$prompt" in *fail*) echo '{"type":"turn.failed","error":{"message":"it failed"}}'; exit 1;; esac
+printf '{"type":"item.completed","item":{"type":"agent_message","text":"echo: %s"}}\n' "$prompt"
+echo '{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":2}}'
+"#;
+
+impl Fixture {
+    /// Points this fixture at fake claude and codex binaries that write into its archives.
+    pub fn with_fakes(mut self) -> Self {
+        let bin = self.dir.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let claude = FAKE_CLAUDE
+            .replace("__LOG__", &bin.join("claude.args").display().to_string())
+            .replace(
+                "__ARCHIVE__",
+                &self.paths.claude_archive.display().to_string(),
+            )
+            .replace("__FORK__", FORK_ID);
+        let codex = FAKE_CODEX
+            .replace("__LOG__", &bin.join("codex.args").display().to_string())
+            .replace(
+                "__ARCHIVE__",
+                &self.paths.codex_archive.display().to_string(),
+            )
+            .replace("__NEW__", CODEX_NEW_ID);
+        for (name, body) in [("claude", claude), ("codex", codex)] {
+            let p = bin.join(name);
+            fs::write(&p, body).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        self.paths.claude_bin = Some(bin.join("claude"));
+        self.paths.codex_bin = Some(bin.join("codex"));
+        self
+    }
+
+    /// Every invocation of a fake binary, as the lines it logged: cwd=, depth=, arg=.
+    pub fn calls(&self, name: &str) -> Vec<Vec<String>> {
+        let log = self.dir.path().join("bin").join(format!("{name}.args"));
+        let Ok(text) = fs::read_to_string(log) else {
+            return Vec::new();
+        };
+        text.split("---\n")
+            .filter(|c| !c.trim().is_empty())
+            .map(|c| c.lines().map(str::to_string).collect())
+            .collect()
+    }
+}
+
 // --- record builders, in each provider's current shape ---------------------
 
 pub fn claude_user(cwd: &str, text: &str) -> Value {

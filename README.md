@@ -10,6 +10,10 @@ What is on disk is what the providers kept. Claude Code removes old transcripts 
 to its `cleanupPeriodDays` setting, and Codex moves archived threads to
 `~/.codex/archived_sessions`, which trovador also reads. A transcript the provider deleted is
 gone from trovador's list and index on the next refresh.
+
+It can also run turns: start a Claude or Codex session, continue one it started, or fork
+one, with a consent policy deciding which existing sessions it may add a turn to.
+
 It is the Rust successor to [spike](https://github.com/joshrotenberg/spike); the v0.1 scope
 is tracked in [#1](https://github.com/joshrotenberg/trovador/issues/1).
 
@@ -19,8 +23,8 @@ is tracked in [#1](https://github.com/joshrotenberg/trovador/issues/1).
 |---|---|
 | Archive reading: list, show, transcript | Done |
 | Full-text index and search | Done |
-| Execution: ask, continue, consult, with consent | Not started |
-| Summaries, import from spike | Not started |
+| Execution: ask, continue, fork, with consent | Done |
+| Summaries, consult, import from spike | Not started |
 
 ## Install
 
@@ -43,6 +47,13 @@ trovador search 'consent NOT spawned' --fts  # FTS5 syntax
 trovador search 'retry_after:\s*\d+' --regex # regular expression, newest first
 trovador index                               # bring the index fully up to date
 trovador index --rebuild                     # discard it and build again
+trovador ask "review the diff" --cwd ~/code/x # start a claude session (costs tokens)
+trovador ask "and the tests?" --session 3e22  # continue it
+trovador ask "try another way" --session 3e22 --fork
+trovador ask - --backend codex < prompt.md    # prompt from stdin
+trovador consent status                       # who may be continued
+trovador consent approve 27d1f434             # allow one session trovador did not start
+trovador consent policy approved              # ...and honour approvals
 trovador doctor                              # paths, limits, archive counts
 trovador serve                               # MCP over stdio
 ```
@@ -114,13 +125,56 @@ Measured on 5,366 local sessions (12.4 GB of JSONL) on 2026-10-07, release build
 | A search that picks up two appended sessions | 234 ms |
 | `sessions list` over every session, index present | 0.09 s (8.8 s without) |
 
+## Running turns
+
+`ask` runs one turn through the provider's own CLI (`claude -p` with stream-json, `codex exec
+--json`). It starts a new session unless given `session`, an id or unambiguous prefix, in
+which case it continues that one from the directory the session lives in. `fork` (Claude
+only) resumes a session's context into a new session. The result carries the reply, the
+`session_id`, cost or usage as the provider reports them, and whether the session can take
+another turn.
+
+- **The session id is recorded as soon as it exists.** For a new Claude session trovador
+  chooses the id and records it before the process starts; for Codex and for forks it is
+  recorded from the first streamed event that names it. A run that times out or fails still
+  returns its `session_id`, and can be continued like any session trovador started.
+- **Timeouts** default to 600 s for Claude and 900 s for Codex (`TROVADOR_CLAUDE_TIMEOUT_S`,
+  `TROVADOR_CODEX_TIMEOUT_S`), or `timeout_s` per call. A timeout kills the provider's whole
+  process group and comes back as a result with `timed_out: true`.
+- **Options a backend cannot honour** (for example `max_turns` or `allowed_tools` on Codex)
+  are reported in `warnings` rather than failing the run, so one set of options can be sent
+  to both backends. `bypassPermissions` and Codex's `danger-full-access` are refused.
+- **Depth.** Every session trovador starts can reach trovador again. `TROVADOR_DEPTH` is
+  passed down and a run at `TROVADOR_MAX_DEPTH` (2) is refused.
+- **Log.** Every run's start and end is a line in `~/.trovador/runs.jsonl`.
+
+## Consent
+
+Starting a session is always allowed. Continuing one is decided by `~/.trovador/consent.json`
+(mode 0600):
+
+| Level | May continue |
+|---|---|
+| `deny` | nothing |
+| `spawned` (default) | sessions trovador started |
+| `approved` | those, plus sessions approved with `trovador consent approve` |
+| `all` | everything |
+
+An explicit `trovador consent deny` wins at every level. Consent is checked against the
+canonical session id, which is the only id the provider is given, so a prefix cannot get
+around a denial. A state file that cannot be read denies everything and is never
+overwritten. The policy changes only through the `trovador consent` CLI; the MCP server can
+report a check (`sessions show` includes one) but has no tool that changes it.
+
 ## Where things live
 
 trovador reads `~/.claude/projects`, `~/.codex/sessions`, and `~/.codex/archived_sessions`
-and never writes to any of them. Its own state, the index, goes under `~/.trovador`.
+and never writes to any of them itself; the providers write there when `ask` runs them. Its
+own state goes under `~/.trovador`: `index.db`, `consent.json`, `runs.jsonl`.
 `sessions list` reads the index when it exists but never creates it. Override the paths with
 `TROVADOR_CLAUDE_ARCHIVE`, `TROVADOR_CODEX_ARCHIVE`, `TROVADOR_CODEX_ARCHIVED`,
-`TROVADOR_HOME`. Limits are listed by `trovador doctor` and
+`TROVADOR_HOME`, and choose the provider binaries with `TROVADOR_CLAUDE_BIN` and
+`TROVADOR_CODEX_BIN`. Limits are listed by `trovador doctor` and
 overridable with `TROVADOR_*` variables (see `src/limits.rs`).
 
 ## License
