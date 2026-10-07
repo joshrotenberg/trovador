@@ -173,6 +173,8 @@ pub struct SessionDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_blocked_by: Option<String>,
     pub transcript_resource: String,
+    /// Whether trovador may add a turn to this session, and what would change that.
+    pub consent: crate::consent::Check,
 }
 
 pub fn show(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<SessionDetail, Error> {
@@ -184,6 +186,7 @@ pub fn show(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<SessionDeta
         size_bytes: e.size_bytes,
         resume_blocked_by: archive::resumability(&e, &ctx.limits).reason,
         transcript_resource: format!("{}/transcript", r.resource),
+        consent: crate::consent::check(&ctx.paths, e.backend, &e.session_id),
         row: r,
     })
 }

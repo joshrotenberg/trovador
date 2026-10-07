@@ -41,6 +41,14 @@ fn cli(f: &Fixture, args: &[&str]) -> Value {
         .env("TROVADOR_CODEX_ARCHIVE", &f.paths.codex_archive)
         .env("TROVADOR_CODEX_ARCHIVED", &f.paths.codex_archived)
         .env("TROVADOR_HOME", &f.paths.home)
+        .env(
+            "TROVADOR_CLAUDE_BIN",
+            f.paths.claude_bin.clone().unwrap_or_default(),
+        )
+        .env(
+            "TROVADOR_CODEX_BIN",
+            f.paths.codex_bin.clone().unwrap_or_default(),
+        )
         .output()
         .expect("run trovador");
     assert!(
@@ -187,4 +195,74 @@ async fn a_bad_query_is_a_readable_tool_error() {
         .await;
     assert!(r.is_error);
     assert!(r.all_text().starts_with("invalid query"));
+}
+
+fn without_duration(mut v: Value) -> Value {
+    v.as_object_mut().unwrap().remove("duration_ms");
+    v
+}
+
+#[tokio::test]
+async fn ask_is_identical_from_the_library_the_cli_and_the_mcp_tool() {
+    let f = fixture().with_fakes();
+    let ctx = f.ctx();
+    let started = trovador::run::ask(
+        &ctx,
+        &trovador::run::AskOpts {
+            prompt: "begin".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let id = started.session_id.unwrap();
+    let opts = trovador::run::AskOpts {
+        prompt: "next".into(),
+        session: Some(id.clone()),
+        ..Default::default()
+    };
+    let lib = without_duration(
+        serde_json::to_value(trovador::run::ask(&ctx, &opts).await.unwrap()).unwrap(),
+    );
+    assert_eq!(lib["result"], "echo: next");
+    assert_eq!(lib["continuation"]["allowed"], true);
+    // The CLI is a separate process, so blocking this test thread on it is fine.
+    let from_cli = cli(&f, &["ask", "next", "--session", &id]);
+    assert_eq!(without_duration(from_cli), lib);
+    assert_eq!(
+        without_duration(mcp_tool(&f, "ask", json!({"prompt": "next", "session": id})).await),
+        lib
+    );
+}
+
+#[tokio::test]
+async fn no_mcp_tool_can_change_consent() {
+    let f = fixture();
+    let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
+    client.initialize().await;
+    let names: Vec<String> = client
+        .list_tools()
+        .await
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names.len(), 3, "{names:?}");
+    for n in ["sessions", "search", "ask"] {
+        assert!(names.iter().any(|x| x == n));
+    }
+    assert!(names.iter().all(|n| !n.contains("consent")));
+}
+
+#[tokio::test]
+async fn a_denied_continuation_over_mcp_names_the_cli_command_a_person_would_run() {
+    let f = fixture().with_fakes();
+    let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
+    client.initialize().await;
+    let r = client
+        .call_tool("ask", json!({"prompt": "hi", "session": ID_A}))
+        .await;
+    assert!(r.is_error);
+    let text = r.all_text();
+    assert!(text.starts_with("continuation denied"), "{text}");
+    assert!(text.contains(&format!("trovador consent approve {ID_A} --backend claude")));
 }

@@ -3,10 +3,12 @@
 //! answer.
 
 pub mod archive;
+pub mod consent;
 pub mod index;
 pub mod limits;
 pub mod mcp;
 pub mod paths;
+pub mod run;
 pub mod sessions;
 pub mod transcript;
 
