@@ -142,6 +142,43 @@ fn a_young_codex_file_that_later_shows_its_item_stream_is_reindexed_not_appended
 }
 
 #[test]
+fn indexing_split_between_a_turn_and_its_copy_in_the_other_stream_matches_a_full_read() {
+    // The first pass ends after a first turn larger than the pre-scan window, so its mode
+    // is final and its last turn is remembered; the copy arrives in the next pass.
+    let f = Fixture::new();
+    let ctx = f.ctx();
+    let huge = "q".repeat(600_000);
+    let path = f.codex(
+        ID_A,
+        &[
+            codex_meta("/w", json!("vscode")),
+            codex_response("user", &huge),
+        ],
+        0,
+    );
+    refresh(&ctx);
+    append(
+        &path,
+        &[
+            codex_user_item(&huge),
+            codex_response("assistant", "fine"),
+            codex_agent_item("fine"),
+        ],
+    );
+    let r = refresh(&ctx);
+    assert_eq!((r.appended, r.reindexed), (1, 0));
+    assert_index_matches_transcript(&ctx, Backend::Codex, ID_A);
+    let users = Index::open(&ctx.paths)
+        .unwrap()
+        .session_records(Backend::Codex, ID_A)
+        .unwrap()
+        .into_iter()
+        .filter(|(_, k, _)| k == "user")
+        .count();
+    assert_eq!(users, 1);
+}
+
+#[test]
 fn a_torn_final_line_is_left_for_the_next_pass_and_indexed_once() {
     let f = Fixture::new();
     let ctx = f.ctx();
