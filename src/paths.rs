@@ -1,0 +1,44 @@
+//! Where the provider archives are and where trovador keeps its own state.
+//!
+//! Every path the library touches comes from a `Paths` value. Tests build one from a temp
+//! directory; only `Paths::from_env` ever looks at the real home directory, so the suite
+//! cannot reach real state by forgetting an override.
+
+use std::path::{Path, PathBuf};
+
+#[derive(Clone, Debug)]
+pub struct Paths {
+    /// `~/.claude/projects`: one directory per project, one JSONL file per session.
+    pub claude_archive: PathBuf,
+    /// `~/.codex/sessions`: date-nested directories of `rollout-*-<uuid>.jsonl` files.
+    pub codex_archive: PathBuf,
+    /// `~/.trovador`: everything trovador owns.
+    pub home: PathBuf,
+}
+
+impl Paths {
+    pub fn from_env() -> Self {
+        let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let var = |k: &str| {
+            std::env::var_os(k)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        };
+        Self {
+            claude_archive: var("TROVADOR_CLAUDE_ARCHIVE")
+                .unwrap_or_else(|| home.join(".claude").join("projects")),
+            codex_archive: var("TROVADOR_CODEX_ARCHIVE")
+                .unwrap_or_else(|| home.join(".codex").join("sessions")),
+            home: var("TROVADOR_HOME").unwrap_or_else(|| home.join(".trovador")),
+        }
+    }
+
+    /// All three under one root, laid out like a real home directory.
+    pub fn under(root: &Path) -> Self {
+        Self {
+            claude_archive: root.join(".claude").join("projects"),
+            codex_archive: root.join(".codex").join("sessions"),
+            home: root.join(".trovador"),
+        }
+    }
+}
