@@ -29,9 +29,39 @@ is tracked in [#1](https://github.com/joshrotenberg/trovador/issues/1).
 ## Install
 
 ```sh
-cargo install --path .
-claude mcp add --scope user trovador -- trovador serve
+cargo install --path . --locked
+trovador import --dry-run      # optional: see what would come over from spike
+trovador import                # optional: spike's consent records and summaries
+trovador index                 # build the search index once; searches keep it current
+claude mcp add --scope user trovador -- ~/.cargo/bin/trovador serve
+codex mcp add trovador -- ~/.cargo/bin/trovador serve
 ```
+
+Register the absolute path: a client launched from the desktop may not have `~/.cargo/bin`
+on its `PATH`. A stdio server is started once per client session and never reloads, so
+restart the client after reinstalling.
+
+## Coming from spike
+
+trovador covers the parts of spike that were used, through fewer tools. On 2026-10-07 the
+local transcripts held 28 calls to spike's MCP tools across 6 sessions, all to `ask`,
+`search`, `list_sessions`, `whoami`, `digest`, `route`, `standing_list`, `surface`,
+`operations`, `board`, and `pad_set`.
+
+| spike | trovador |
+|---|---|
+| `list_sessions`, `dump` | `sessions` with `action: list` or `show` |
+| `session://{backend}/{id}/transcript` | `sessions` with `action: transcript`, or the same resource |
+| `search` | `search`, over a full-text index rather than the newest 400 files |
+| `ask` | `ask` |
+| `consult` | `ask` with `about` |
+| `summarize`, `session://.../summary` | `summarize`, and the same resource |
+| `agent-sessions consent ...` | `trovador consent ...` |
+| `diagnose` | `trovador doctor` (CLI) |
+| `canvass`, `digest`, `board`, `activity`, `windows`, `pin`, `pad`, `pad_set`, `standing_*`, `route`, `runners`, `usage`, `whoami`, `surface`, `operations`, `gc` | not ported |
+
+`docs/parity-2026-10-07.md` compares the two on this machine's archive, produced by
+`scripts/parity.py`.
 
 ## Use
 
