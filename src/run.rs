@@ -376,12 +376,17 @@ async fn run_turn(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
     let (continuation, resource, open_with) = match &session_id {
         Some(id) => {
             let entry = archive::find_session(&ctx.paths, id, Some(backend)).ok();
+            // A run killed in its first seconds can end before the provider writes any
+            // transcript. The id is real but there is nothing to resume; saying it can be
+            // continued sent the next turn into a not-found error (found by tests/live.rs).
             let r = entry
                 .as_ref()
                 .map(|e| archive::resumability(e, &ctx.limits))
-                .unwrap_or(archive::Resumability {
-                    resumable: true,
-                    reason: None,
+                .unwrap_or_else(|| archive::Resumability {
+                    resumable: false,
+                    reason: Some(
+                        "the provider wrote no transcript for this session before the run ended, so there is nothing to continue; start a new session".into(),
+                    ),
                 });
             let consent = consent::check(&ctx.paths, backend, id);
             let project = entry

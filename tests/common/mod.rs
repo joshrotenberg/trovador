@@ -118,6 +118,11 @@ elif [ -n "$sid" ]; then
 else
   id="00000000-0000-4000-8000-000000000000"
 fi
+# "vanish" dies right after naming the session, before any transcript exists.
+case "$first" in *vanish*)
+  printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$id"
+  exit 1;;
+esac
 if [ $persist = 1 ] && { [ -z "$resume" ] || [ $fork = 1 ]; }; then
   mkdir -p "__ARCHIVE__/-fake"
   printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"started"}}\n' "$PWD" > "__ARCHIVE__/-fake/$id.jsonl"

@@ -236,6 +236,25 @@ own state goes under `~/.trovador`: `index.db`, `consent.json`, `runs.jsonl`, `s
 `TROVADOR_CODEX_BIN`. Limits are listed by `trovador doctor` and
 overridable with `TROVADOR_*` variables (see `src/limits.rs`).
 
+## Testing on a new machine
+
+`cargo test` runs fixture archives only. `tests/live.rs` checks properties that must hold for
+any machine's real archives, whatever CLI versions wrote them: every session file listed
+once, transcripts contiguous and capped, the index equal to the transcript projection,
+search finding a phrase taken from any indexed record, CLI and MCP agreeing, and archive
+files left untouched. Its state goes to the cargo target directory, never `~/.trovador`.
+
+```sh
+cargo test --release --test live -- --ignored --nocapture
+TROVADOR_LIVE_SPEND=1 cargo test --release --test live -- --ignored --nocapture
+```
+
+The second form also runs turns on both backends, a timeout, a summary, and a consult, on
+sessions the tests create themselves; no existing transcript is sent to a provider.
+Sampling is seeded and the seed is printed (`TROVADOR_LIVE_SEED` repeats a run). The
+output ends with a drift report of record kinds and omitted categories, where a record type
+a newer CLI introduced shows up as a new category.
+
 ## License
 
 MIT or Apache-2.0, at your option.
