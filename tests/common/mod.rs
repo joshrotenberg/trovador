@@ -88,41 +88,65 @@ pub const FORK_ID: &str = "f0f0f0f0-0000-4000-8000-00000000000f";
 pub const CODEX_NEW_ID: &str = "c0dec0de-0000-4000-8000-00000000000c";
 
 const FAKE_CLAUDE: &str = r#"#!/bin/bash
-# Speaks claude -p --output-format stream-json. Prompts containing "slow" sleep past any
-# test timeout; prompts containing "fail" end with an error result.
-{ printf '%s\n' "---" "cwd=$PWD" "depth=$TROVADOR_DEPTH"; printf 'arg=%s\n' "$@"; } >> "__LOG__"
-sid=""; resume=""; fork=0
+# Speaks claude -p in stream-json or json. A prompt whose first line contains "slow" sleeps
+# past any test timeout; "fail" ends with an error result. --no-session-persistence writes
+# no transcript. Full prompts are appended to the .prompts log.
+# One write per invocation, so concurrent runs cannot interleave their lines.
+rec="$(printf '%s\n' "---" "cwd=$PWD" "depth=$TROVADOR_DEPTH"; printf 'arg=%s\n' "$@")"
+printf '%s\n' "$rec" >> "__LOG__"
+sid=""; resume=""; fork=0; fmt=""; persist=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --session-id) sid="$2"; shift;;
     --resume) resume="$2"; shift;;
     --fork-session) fork=1;;
+    --output-format) fmt="$2"; shift;;
+    --no-session-persistence) persist=0;;
   esac
   shift
 done
 prompt="$(cat)"
+# Each prompt in its own file: summary chunks run in parallel.
+mkdir -p "__LOG__.prompts.d"
+printf '%s' "$prompt" > "$(mktemp "__LOG__.prompts.d/p.XXXXXX")"
+first="$(printf '%s' "$prompt" | head -n1)"
+safe="$(printf '%s' "$first" | tr -d '"\\' | cut -c1-200)"
 if [ -n "$resume" ]; then
   if [ $fork = 1 ]; then id="__FORK__"; else id="$resume"; fi
-else
+elif [ -n "$sid" ]; then
   id="$sid"
+else
+  id="00000000-0000-4000-8000-000000000000"
 fi
-printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$id"
-if [ -z "$resume" ] || [ $fork = 1 ]; then
+if [ $persist = 1 ] && { [ -z "$resume" ] || [ $fork = 1 ]; }; then
   mkdir -p "__ARCHIVE__/-fake"
   printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"started"}}\n' "$PWD" > "__ARCHIVE__/-fake/$id.jsonl"
 fi
-case "$prompt" in *slow*) sleep 30;; esac
-case "$prompt" in *fail*)
+case "$first" in
+  "This is part"*) reply="partial summary";;
+  "These are sequential"*) reply="merged summary";;
+  "Summarize this"*) reply="single summary";;
+  *) reply="echo: $safe";;
+esac
+if [ "$fmt" = "json" ]; then
+  printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","session_id":"%s","total_cost_usd":0.001,"num_turns":1}\n' "$reply" "$id"
+  exit 0
+fi
+printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$id"
+case "$first" in *slow*) sleep 30;; esac
+case "$first" in *fail*)
   printf '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"it failed","session_id":"%s"}\n' "$id"
   exit 1;;
 esac
 printf '{"type":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}\n'
-printf '{"type":"result","subtype":"success","is_error":false,"result":"echo: %s","session_id":"%s","total_cost_usd":0.01,"num_turns":1,"usage":{"input_tokens":3}}\n' "$prompt" "$id"
+printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","session_id":"%s","total_cost_usd":0.01,"num_turns":1,"usage":{"input_tokens":3}}\n' "$reply" "$id"
 "#;
 
 const FAKE_CODEX: &str = r#"#!/bin/bash
 # Speaks codex exec --json, for exec and exec resume.
-{ printf '%s\n' "---" "cwd=$PWD" "depth=$TROVADOR_DEPTH"; printf 'arg=%s\n' "$@"; } >> "__LOG__"
+# One write per invocation, so concurrent runs cannot interleave their lines.
+rec="$(printf '%s\n' "---" "cwd=$PWD" "depth=$TROVADOR_DEPTH"; printf 'arg=%s\n' "$@")"
+printf '%s\n' "$rec" >> "__LOG__"
 resume=0; id="__NEW__"; pos=(); skip=0
 for a in "$@"; do
   if [ $skip = 1 ]; then skip=0; continue; fi
@@ -136,14 +160,19 @@ for a in "$@"; do
 done
 if [ $resume = 1 ] && [ ${#pos[@]} -gt 0 ]; then id="${pos[0]}"; fi
 prompt="$(cat)"
+# Each prompt in its own file: summary chunks run in parallel.
+mkdir -p "__LOG__.prompts.d"
+printf '%s' "$prompt" > "$(mktemp "__LOG__.prompts.d/p.XXXXXX")"
+first="$(printf '%s' "$prompt" | head -n1)"
+safe="$(printf '%s' "$first" | tr -d '"\\' | cut -c1-200)"
 printf '{"type":"thread.started","thread_id":"%s"}\n' "$id"
 if [ $resume = 0 ]; then
   mkdir -p "__ARCHIVE__/2026/10/07"
   printf '{"type":"session_meta","payload":{"cwd":"%s","source":"exec"}}\n' "$PWD" > "__ARCHIVE__/2026/10/07/rollout-2026-10-07T00-00-00-$id.jsonl"
 fi
-case "$prompt" in *slow*) sleep 30;; esac
-case "$prompt" in *fail*) echo '{"type":"turn.failed","error":{"message":"it failed"}}'; exit 1;; esac
-printf '{"type":"item.completed","item":{"type":"agent_message","text":"echo: %s"}}\n' "$prompt"
+case "$first" in *slow*) sleep 30;; esac
+case "$first" in *fail*) echo '{"type":"turn.failed","error":{"message":"it failed"}}'; exit 1;; esac
+printf '{"type":"item.completed","item":{"type":"agent_message","text":"echo: %s"}}\n' "$safe"
 echo '{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":2}}'
 "#;
 
@@ -178,6 +207,31 @@ impl Fixture {
         self.paths.claude_bin = Some(bin.join("claude"));
         self.paths.codex_bin = Some(bin.join("codex"));
         self
+    }
+
+    /// Every prompt a fake binary received, oldest first. Calls that ran in parallel
+    /// have no meaningful order among themselves.
+    pub fn prompts(&self, name: &str) -> Vec<String> {
+        let dir = self
+            .dir
+            .path()
+            .join("bin")
+            .join(format!("{name}.args.prompts.d"));
+        let Ok(entries) = fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut files: Vec<_> = entries
+            .flatten()
+            .map(|e| {
+                let t = e.metadata().and_then(|m| m.modified()).ok();
+                (t, e.path())
+            })
+            .collect();
+        files.sort();
+        files
+            .into_iter()
+            .map(|(_, p)| fs::read_to_string(p).unwrap_or_default())
+            .collect()
     }
 
     /// Every invocation of a fake binary, as the lines it logged: cwd=, depth=, arg=.

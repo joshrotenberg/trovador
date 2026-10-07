@@ -45,6 +45,15 @@ pub struct Limits {
     /// Nesting depth at which a run is refused. Every session trovador starts can reach
     /// trovador again, so without a ceiling one prompt could recurse indefinitely.
     pub max_depth: usize,
+    /// Model for summaries. They read a lot and write little, so a small model.
+    pub summary_model: String,
+    /// Characters of rendered transcript per summary chunk.
+    pub summary_chunk_chars: usize,
+    /// Chunks summarized at most. Past this the first and last halves are kept, which
+    /// bounds the cost of summarizing a very large session.
+    pub summary_max_chunks: usize,
+    /// Provider runs started at once by one operation. Each is a full CLI start.
+    pub fanout: usize,
 }
 
 impl Default for Limits {
@@ -63,6 +72,10 @@ impl Default for Limits {
             claude_timeout_s: 600,
             codex_timeout_s: 900,
             max_depth: 2,
+            summary_model: "haiku".into(),
+            summary_chunk_chars: 250_000,
+            summary_max_chunks: 8,
+            fanout: 3,
         }
     }
 }
@@ -110,6 +123,12 @@ impl Limits {
             claude_timeout_s: num("TROVADOR_CLAUDE_TIMEOUT_S", d.claude_timeout_s).max(1),
             codex_timeout_s: num("TROVADOR_CODEX_TIMEOUT_S", d.codex_timeout_s).max(1),
             max_depth: num("TROVADOR_MAX_DEPTH", d.max_depth),
+            summary_model: get("TROVADOR_SUMMARY_MODEL")
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or(d.summary_model),
+            summary_chunk_chars: num("TROVADOR_SUMMARY_CHUNK_CHARS", d.summary_chunk_chars).max(1),
+            summary_max_chunks: num("TROVADOR_SUMMARY_MAX_CHUNKS", d.summary_max_chunks).max(1),
+            fanout: num("TROVADOR_FANOUT", d.fanout).max(1),
         }
     }
 }

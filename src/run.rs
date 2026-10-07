@@ -25,6 +25,10 @@ pub struct AskOpts {
     pub backend: Option<Backend>,
     /// Continue this session (id or unambiguous prefix) instead of starting one.
     pub session: Option<String>,
+    /// Consult about this session instead: summarize it (cached) and start a new session,
+    /// on the other backend unless `backend` says otherwise, seeded with the summary and
+    /// the prompt as a question. Works on sessions too large to resume.
+    pub about: Option<String>,
     /// With `session`, resume its context into a new session instead (claude only).
     #[serde(default)]
     pub fork: bool,
@@ -96,14 +100,27 @@ pub struct AskResult {
     /// Whether this session can take another turn, when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continuation: Option<Continuation>,
+    /// Present for a consultation: the session it was about and what its summary cost.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consulted: Option<Consulted>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub open_with: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct Consulted {
+    pub backend: Backend,
+    pub session_id: String,
+    pub summary_cached: bool,
+    pub summary_cost_usd: f64,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
+    #[error(transparent)]
+    Summary(#[from] crate::summary::SummaryError),
     #[error(transparent)]
     Lookup(#[from] LookupError),
     #[error(
@@ -151,8 +168,68 @@ fn depth() -> usize {
         .unwrap_or(0)
 }
 
-/// Starts, continues, or forks a session and runs one turn.
+/// Starts, continues, forks, or consults, and runs one turn.
 pub async fn ask(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
+    match opts.about.as_deref().filter(|a| !a.is_empty()) {
+        Some(about) => consult(ctx, opts, about).await,
+        None => run_turn(ctx, opts).await,
+    }
+}
+
+async fn consult(ctx: &Ctx, opts: &AskOpts, about: &str) -> Result<AskResult, RunError> {
+    if opts.session.is_some() || opts.fork {
+        return Err(RunError::Invalid(
+            "about starts a new session; it cannot be combined with session or fork".into(),
+        ));
+    }
+    if opts.prompt.trim().is_empty() {
+        return Err(RunError::Invalid("prompt is empty".into()));
+    }
+    let source = archive::find_session(&ctx.paths, about, None)?;
+    let summary =
+        crate::summary::summarize(ctx, &source.session_id, Some(source.backend), false, None)
+            .await?;
+    let target = opts.backend.unwrap_or(match source.backend {
+        Backend::Claude => Backend::Codex,
+        Backend::Codex => Backend::Claude,
+    });
+    let seeded = format!(
+        "You are being consulted about a prior agent session run by {}{}. Summary of that session:\n\n{}\n\n---\nQuestion: {}",
+        source.backend,
+        summary
+            .project
+            .as_deref()
+            .map(|p| format!(" in project {p}"))
+            .unwrap_or_default(),
+        summary.summary,
+        opts.prompt
+    );
+    // The source's project, when it still exists, is the natural place to answer from.
+    let cwd = opts
+        .cwd
+        .clone()
+        .or_else(|| summary.project.clone().filter(|p| Path::new(p).is_dir()));
+    let mut result = run_turn(
+        ctx,
+        &AskOpts {
+            prompt: seeded,
+            backend: Some(target),
+            about: None,
+            cwd,
+            ..opts.clone()
+        },
+    )
+    .await?;
+    result.consulted = Some(Consulted {
+        backend: source.backend,
+        session_id: source.session_id,
+        summary_cached: summary.cached,
+        summary_cost_usd: summary.cost_usd,
+    });
+    Ok(result)
+}
+
+async fn run_turn(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
     if opts.prompt.trim().is_empty() {
         return Err(RunError::Invalid("prompt is empty".into()));
     }
@@ -349,6 +426,7 @@ pub async fn ask(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
         duration_ms,
         warnings,
         continuation,
+        consulted: None,
         resource,
         open_with,
     })
@@ -698,6 +776,58 @@ fn parse_permission_mode(s: &str) -> Result<claude_wrapper::PermissionMode, Stri
             ));
         }
     })
+}
+
+/// One Claude call whose session is not kept: no transcript is written, so it never shows
+/// up in the archive or as something to continue. Used for summaries.
+pub(crate) async fn oneshot(
+    ctx: &Ctx,
+    prompt: &str,
+    model: &str,
+    timeout: Duration,
+) -> Result<(String, f64), String> {
+    use claude_wrapper::{Claude, QueryCommand};
+
+    let depth = depth();
+    if depth >= ctx.limits.max_depth {
+        return Err(format!(
+            "spawn depth {depth} has reached TROVADOR_MAX_DEPTH={}",
+            ctx.limits.max_depth
+        ));
+    }
+    let mut builder = Claude::builder()
+        .timeout(timeout)
+        .process_group(true)
+        .env("TROVADOR_DEPTH", (depth + 1).to_string());
+    if let Some(bin) = &ctx.paths.claude_bin {
+        builder = builder.binary(bin);
+    }
+    let claude = builder.build().map_err(|e| e.to_string())?;
+    let cmd = QueryCommand::new(prompt.to_string())
+        .prompt_via_stdin(true)
+        .model(model)
+        .no_session_persistence()
+        .hermetic()
+        // Reading the transcript in the prompt is the whole job; no tools are needed.
+        .max_turns(1);
+    let started = Instant::now();
+    let result = cmd.execute_json(&claude).await;
+    let outcome = match &result {
+        Ok(r) if !r.is_error => "ok",
+        Ok(_) => "error",
+        Err(claude_wrapper::Error::Timeout { .. }) => "timeout",
+        Err(_) => "failed",
+    };
+    log_run(
+        ctx,
+        json!({"phase": "end", "backend": "claude", "verb": "summarize",
+        "outcome": outcome, "ms": started.elapsed().as_millis() as u64}),
+    );
+    match result {
+        Ok(r) if r.is_error => Err(r.result),
+        Ok(r) => Ok((r.result, r.cost_usd.unwrap_or(0.0))),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// One JSONL line per run start and end. Losing a line never affects the run.
