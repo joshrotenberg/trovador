@@ -1,0 +1,48 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "trovador",
+  "description": "Search and read every past Claude Code and Codex session on this machine",
+  "author": {
+    "name": "Josh Rotenberg"
+  },
+  "keywords": [
+    "sessions",
+    "search",
+    "claude",
+    "codex",
+    "history"
+  ],
+  "repository": "https://github.com/joshrotenberg/trovador",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Trovador",
+        "shortDescription": "Search past Claude and Codex sessions",
+        "longDescription": "Find, read, and summarize any earlier Claude Code or Codex session on this machine, and ask a new session about one.",
+        "developerName": "Josh Rotenberg",
+        "category": "Developer Tools",
+        "capabilities": [
+          "Read"
+        ],
+        "defaultPrompt": [
+          "Find where we decided this before",
+          "What was I working on yesterday?"
+        ]
+      },
+      "hooks": {
+        "hooks": {
+          "SessionStart": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "\"${PLUGIN_ROOT}/bin/trovador\" hook session-start --backend codex || true"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

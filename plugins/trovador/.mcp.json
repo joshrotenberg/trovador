@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "trovador": {
+      "type": "stdio",
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/trovador",
+      "args": [
+        "serve"
+      ]
+    }
+  }
+}

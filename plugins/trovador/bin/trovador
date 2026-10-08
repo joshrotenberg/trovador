@@ -1,0 +1,14 @@
+#!/bin/sh
+# Runs the trovador that cargo installed. The plugin carries no binary, so updating
+# trovador is `cargo install` and nothing in the plugin changes. The desktop apps do not
+# always see the shell's PATH, so cargo's bin directory is tried first.
+for candidate in "${TROVADOR_BIN:-}" "${CARGO_HOME:-$HOME/.cargo}/bin/trovador"; do
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    exec "$candidate" "$@"
+  fi
+done
+if command -v trovador >/dev/null 2>&1; then
+  exec trovador "$@"
+fi
+echo "bottega: trovador is not installed; run: cargo install --locked --git https://github.com/joshrotenberg/trovador" >&2
+exit 127

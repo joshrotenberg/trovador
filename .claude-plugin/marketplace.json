@@ -1,0 +1,14 @@
+{
+  "name": "bottega",
+  "description": "Josh Rotenberg's personal Claude Code and Codex plugins.",
+  "owner": {
+    "name": "Josh Rotenberg"
+  },
+  "plugins": [
+    {
+      "name": "trovador",
+      "description": "Search and read every past Claude Code and Codex session on this machine",
+      "source": "./plugins/trovador"
+    }
+  ]
+}
