@@ -544,6 +544,47 @@ fn claude_thinking_with_text_is_reasoning_and_signature_only_thinking_is_dropped
 }
 
 #[test]
+fn injected_codex_context_is_counted_but_never_shown_as_a_user_turn() {
+    let f = Fixture::new();
+    f.codex(
+        ID_A,
+        &[
+            codex_meta("/w", json!("vscode")),
+            // Context Codex sends as user-role messages of its own, before the first item.
+            codex_response("user", "<environment_context>cwd /w</environment_context>"),
+            codex_response("user", "<recommended_plugins>a, b</recommended_plugins>"),
+            codex_response("user", "what does this repo do"),
+            // The item copy carries AGENTS.md as a block ahead of the typed text.
+            codex_item(json!({"type": "UserMessage", "content": [
+                {"type": "text", "text": "# AGENTS.md instructions for /w\n<INSTRUCTIONS>...</INSTRUCTIONS>"},
+                {"type": "text", "text": "what does this repo do"}
+            ]})),
+            codex_agent_item("it indexes sessions"),
+        ],
+        0,
+    );
+    let t = sessions::transcript(&f.ctx(), ID_A, None, 0, None).unwrap();
+    let shown: Vec<_> = kinds(&t)
+        .into_iter()
+        .filter(|(k, _)| *k != RecordKind::Omitted)
+        .collect();
+    assert_eq!(
+        shown,
+        vec![
+            (RecordKind::User, "what does this repo do".into()),
+            (RecordKind::Assistant, "it indexes sessions".into()),
+        ]
+    );
+    let injected = t
+        .page
+        .records
+        .iter()
+        .find(|r| r.name.as_deref() == Some("injected_context"))
+        .expect("injected context is counted");
+    assert_eq!(injected.count, Some(2));
+}
+
+#[test]
 fn an_older_codex_session_uses_its_event_stream() {
     let f = Fixture::new();
     f.codex(
