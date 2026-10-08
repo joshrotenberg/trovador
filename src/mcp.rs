@@ -240,7 +240,9 @@ pub fn router(ctx: Ctx) -> McpRouter {
     router_with(ctx, ServeOpts::default())
 }
 
-pub fn router_with(ctx: Ctx, opts: ServeOpts) -> McpRouter {
+pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
+    // The library builds search excerpts after redacting, so it needs the same setting.
+    ctx.limits.redact = opts.redact;
     let ctx = Arc::new(ctx);
 
     let c = ctx.clone();

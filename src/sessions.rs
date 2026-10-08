@@ -379,7 +379,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
             .then(|| crate::consent::spawned_keys(&ctx.paths)),
     };
     let raw = idx
-        .search(opts, &vis, limit, per_session)
+        .search(opts, &vis, limit, per_session, ctx.limits.redact)
         .map_err(|e| match e {
             // A malformed FTS5 expression is the caller's to fix, not an index failure.
             IndexError::Sql(err) if opts.fts => Error::Query(err.to_string()),

@@ -58,7 +58,10 @@ fn rules() -> &'static [Rule] {
             ),
             rule(
                 "assignment",
-                r#"(?i)(\b[A-Z0-9_.-]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY)[A-Z0-9_.-]*\s*[=:]\s*["']?)([^\s"'`,;]{6,})"#,
+                // The name may be quoted, and the quotes escaped, as in JSON tool arguments
+                // and JSON inside a string; unquoted names alone let `"password": "..."`
+                // through (#23). The value stops at a backslash for the escaped form.
+                r#"(?i)(\b[A-Z0-9_.-]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY)[A-Z0-9_.-]*(?:\\?["'])?\s*[=:]\s*(?:\\?["'])?)([^\s"'`,;\\]{6,})"#,
                 1,
             ),
         ]
@@ -161,6 +164,38 @@ mod tests {
         ];
         for (input, want) in cases {
             assert_eq!(r(input), want, "{input}");
+        }
+    }
+
+    #[test]
+    fn quoted_and_escaped_json_fields_are_redacted() {
+        let cases = [
+            (
+                r#"{"password":"synthetic-passphrase"}"#,
+                r#"{"password":"[redacted:assignment]"}"#,
+            ),
+            (
+                r#"{"api_key": "synthetic-generic-key"}"#,
+                r#"{"api_key": "[redacted:assignment]"}"#,
+            ),
+            (
+                r#"'token': 'synthetic-access-token'"#,
+                r#"'token': '[redacted:assignment]'"#,
+            ),
+            (
+                r#"{\"token\":\"synthetic-access-token\",\"n\":1}"#,
+                r#"{\"token\":\"[redacted:assignment]\",\"n\":1}"#,
+            ),
+        ];
+        for (input, want) in cases {
+            assert_eq!(r(input), want, "{input}");
+        }
+        for fine in [
+            r#""max_tokens": 4000"#,
+            r#""input_tokens":12"#,
+            r#""token_count": "123456789""#,
+        ] {
+            assert_eq!(r(fine), fine);
         }
     }
 
