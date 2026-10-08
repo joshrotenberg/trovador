@@ -665,6 +665,13 @@ fn cli(ctx: &Ctx, args: &[&str]) -> Value {
     serde_json::from_slice(&out.stdout).unwrap()
 }
 
+/// What the doors serve: the library's answer through the same redaction.
+fn served(v: impl serde::Serialize) -> Value {
+    let mut v = serde_json::to_value(v).unwrap();
+    trovador::redact::redact_value(&mut v);
+    v
+}
+
 /// Drops what legitimately varies between two calls a moment apart: rows for sessions
 /// being written, and refresh timings.
 fn stable(mut v: Value, since: SystemTime) -> Value {
@@ -697,14 +704,13 @@ async fn the_cli_and_mcp_return_the_library_answer_on_real_data() {
     let mut client = tower_mcp::TestClient::from_router(trovador::mcp::router(ctx.clone()));
     client.initialize().await;
 
-    let lib = serde_json::to_value(sessions::list(
+    let lib = served(sessions::list(
         &ctx,
         &ListOpts {
             limit: Some(50),
             ..Default::default()
         },
-    ))
-    .unwrap();
+    ));
     let since = l.started;
     assert_eq!(
         stable(cli(&ctx, &["sessions", "list", "--limit", "50"]), since),
@@ -726,9 +732,7 @@ async fn the_cli_and_mcp_return_the_library_answer_on_real_data() {
         .filter(|e| !written_during_run(e, since))
         .take(5)
     {
-        let lib =
-            serde_json::to_value(sessions::show(&ctx, &e.session_id, Some(e.backend)).unwrap())
-                .unwrap();
+        let lib = served(sessions::show(&ctx, &e.session_id, Some(e.backend)).unwrap());
         let args = [
             "sessions",
             "show",
@@ -755,10 +759,7 @@ async fn the_cli_and_mcp_return_the_library_answer_on_real_data() {
         limit: Some(10),
         ..Default::default()
     };
-    let lib = stable(
-        serde_json::to_value(sessions::search(&ctx, &q).unwrap()).unwrap(),
-        since,
-    );
+    let lib = stable(served(sessions::search(&ctx, &q).unwrap()), since);
     assert_eq!(
         stable(cli(&ctx, &["search", "the", "--limit", "10"]), since),
         lib

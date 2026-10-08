@@ -9,6 +9,7 @@ pub mod index;
 pub mod limits;
 pub mod mcp;
 pub mod paths;
+pub mod redact;
 pub mod run;
 pub mod sessions;
 pub mod summary;

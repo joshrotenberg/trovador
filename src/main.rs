@@ -14,6 +14,10 @@ use trovador::{Backend, archive};
 #[derive(Parser)]
 #[command(name = "trovador", version)]
 struct Cli {
+    /// Show secrets in output instead of [redacted:<kind>]. For serve, this is the only way
+    /// to turn redaction off; no tool argument can.
+    #[arg(long, global = true)]
+    no_redact: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -23,7 +27,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Run the MCP server over stdio.
-    Serve,
+    Serve {
+        /// Offer only sessions and search: nothing that runs a model.
+        #[arg(long)]
+        read_only: bool,
+    },
     /// List, inspect, and read sessions.
     Sessions {
         #[command(subcommand)]
@@ -205,8 +213,18 @@ enum SessionsCmd {
     },
 }
 
+/// Whether output is redacted, set once from the command line before anything prints.
+static REDACT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
 fn print(value: &impl Serialize) -> ExitCode {
-    match serde_json::to_string_pretty(value) {
+    let mut v = match serde_json::to_value(value) {
+        Ok(v) => v,
+        Err(e) => return fail(e),
+    };
+    if *REDACT.get().unwrap_or(&true) {
+        trovador::redact::redact_value(&mut v);
+    }
+    match serde_json::to_string_pretty(&v) {
         Ok(s) => {
             println!("{s}");
             ExitCode::SUCCESS
@@ -216,7 +234,13 @@ fn print(value: &impl Serialize) -> ExitCode {
 }
 
 fn fail(e: impl std::fmt::Display) -> ExitCode {
-    eprintln!("trovador: {e}");
+    let msg = e.to_string();
+    let msg = if *REDACT.get().unwrap_or(&true) {
+        trovador::redact::redact_str(&msg).into_owned()
+    } else {
+        msg
+    };
+    eprintln!("trovador: {msg}");
     ExitCode::FAILURE
 }
 
@@ -231,9 +255,16 @@ fn main() -> ExitCode {
         .init();
 
     let cli = Cli::parse();
+    let _ = REDACT.set(!cli.no_redact);
     let ctx = Ctx::from_env();
     match cli.command {
-        Command::Serve => serve(ctx),
+        Command::Serve { read_only } => serve(
+            ctx,
+            trovador::mcp::ServeOpts {
+                read_only,
+                redact: !cli.no_redact,
+            },
+        ),
         Command::Sessions { action } => match action {
             SessionsCmd::List {
                 backend,
@@ -444,12 +475,12 @@ fn consent_cmd(ctx: &Ctx, action: ConsentCmd) -> ExitCode {
     }
 }
 
-fn serve(ctx: Ctx) -> ExitCode {
+fn serve(ctx: Ctx, opts: trovador::mcp::ServeOpts) -> ExitCode {
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
         Err(e) => return fail(e),
     };
-    let router = trovador::mcp::router(ctx);
+    let router = trovador::mcp::router_with(ctx, opts);
     match runtime.block_on(tower_mcp::StdioTransport::new(router).run()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(e),
