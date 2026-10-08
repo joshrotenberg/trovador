@@ -31,6 +31,18 @@ pub struct Truncated {
     pub continue_with: Option<String>,
 }
 
+/// The text that parts are cut from: redacted as a whole when redaction is on. Cutting
+/// first let a part start or end inside a secret, and a fragment such as `k-ant-api03-...`
+/// matches no rule, so the rest of the key came back in the clear (pre-release review).
+/// Offsets therefore count characters of the redacted text.
+pub fn source<'a>(text: &'a str, limits: &crate::limits::Limits) -> std::borrow::Cow<'a, str> {
+    if limits.redact {
+        crate::redact::redact_str(text)
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
 /// Up to `max` characters of `text` from character `offset`, and what was left out.
 pub fn part(
     text: &str,
@@ -126,7 +138,7 @@ pub fn read(ctx: &Ctx, run_id: &str, offset: usize) -> Result<RunOutput, OutputE
         },
     })?;
     let (text, truncated) = part(
-        &text,
+        &source(&text, &ctx.limits),
         offset,
         ctx.limits.response_max_chars,
         continue_run(run_id),
