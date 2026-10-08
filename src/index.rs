@@ -52,6 +52,51 @@ pub fn db_path(paths: &Paths) -> PathBuf {
     paths.home.join("index.db")
 }
 
+/// The schema and projection versions an existing file was built with.
+fn stored_versions(path: &std::path::Path) -> Option<(i64, i64)> {
+    let conn =
+        Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let get = |k: &str| {
+        conn.query_row("SELECT value FROM meta WHERE key = ?1", [k], |r| {
+            r.get::<_, i64>(0)
+        })
+        .ok()
+    };
+    Some((get("schema")?, get("projection").unwrap_or(0)))
+}
+
+/// Origins of sessions started by a program rather than a person: `claude -p`, `codex
+/// exec`, and the TypeScript SDK. 1,334 of 1,587 local Claude sessions were `sdk-cli`.
+pub const AUTOMATED_ORIGINS: &[&str] = &["sdk-cli", "exec", "sdk-ts"];
+
+/// What a search leaves out by default, beyond the caller's own filters.
+#[derive(Clone, Debug, Default)]
+pub struct Visibility {
+    /// Leave out sessions written at or after this time, in nanoseconds since the epoch.
+    pub active_since_ns: Option<i64>,
+    pub exclude_session: Option<String>,
+    /// Leave out automated sessions, except these `backend/id` keys.
+    pub automated_except: Option<Vec<String>>,
+}
+
+/// Matching sessions each default left out. They overlap: one session can be both
+/// recently active and automated.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+pub struct Hidden {
+    /// Written within the active window; `include_active` shows them.
+    pub active: usize,
+    /// Automated and not started by trovador; `include_automated` shows them.
+    pub automated: usize,
+    /// The session named by `exclude_session`.
+    pub excluded: usize,
+}
+
+impl Hidden {
+    pub fn any(&self) -> bool {
+        self.active + self.automated + self.excluded > 0
+    }
+}
+
 fn mtime_ns(t: SystemTime) -> i64 {
     t.duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as i64)
@@ -70,6 +115,16 @@ impl Index {
             source,
         })?;
         let path = db_path(paths);
+        // Everything in the index is derived, so a version change starts a fresh file.
+        // Reindexing row by row after a projection change left a 456 MB file and took
+        // 20.4 s, against 415 MB and 9.8 s fresh (2026-10-07).
+        if path.is_file() && stored_versions(&path) != Some((SCHEMA_VERSION, PROJECTION_VERSION)) {
+            for suffix in ["", "-wal", "-shm"] {
+                let mut p = path.clone().into_os_string();
+                p.push(suffix);
+                let _ = std::fs::remove_file(PathBuf::from(p));
+            }
+        }
         let conn = Connection::open(&path)?;
         let index = Self { conn, path };
         index.configure()?;
@@ -151,11 +206,16 @@ impl Index {
                  tokenize = 'unicode61 remove_diacritics 2'
              );",
         )?;
-        self.conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema', ?1)
-             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-            [SCHEMA_VERSION],
-        )?;
+        for (key, value) in [
+            ("schema", SCHEMA_VERSION),
+            ("projection", PROJECTION_VERSION),
+        ] {
+            self.conn.execute(
+                "INSERT INTO meta (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )?;
+        }
         Ok(())
     }
 
@@ -691,6 +751,15 @@ pub struct SearchOpts {
     /// Include sessions started by another session.
     #[serde(default)]
     pub include_subagents: bool,
+    /// Include sessions written in the last few minutes, which by default are left out
+    /// because the session doing the search is always among them.
+    #[serde(default)]
+    pub include_active: bool,
+    /// Include automated sessions (`claude -p`, `codex exec`) that trovador did not start.
+    #[serde(default)]
+    pub include_automated: bool,
+    /// Leave out this session id, typically the caller's own.
+    pub exclude_session: Option<String>,
     /// Sessions to return.
     pub limit: Option<usize>,
     /// Matching records to show per session.
@@ -722,6 +791,7 @@ pub struct RawSearch {
     /// The FTS5 expression actually run, or the regex.
     pub expression: String,
     pub sessions_matched: usize,
+    pub hidden: Hidden,
     pub hits: Vec<SessionHits>,
 }
 
@@ -758,7 +828,13 @@ fn like_escape(s: &str) -> String {
 }
 
 impl Index {
-    pub fn search(&self, opts: &SearchOpts, limit: usize, per_session: usize) -> Result<RawSearch> {
+    pub fn search(
+        &self,
+        opts: &SearchOpts,
+        vis: &Visibility,
+        limit: usize,
+        per_session: usize,
+    ) -> Result<RawSearch> {
         let expression = if opts.regex || opts.fts {
             opts.query.clone()
         } else {
@@ -768,6 +844,7 @@ impl Index {
             return Ok(RawSearch {
                 expression,
                 sessions_matched: 0,
+                hidden: Hidden::default(),
                 hits: Vec::new(),
             });
         }
@@ -788,6 +865,34 @@ impl Index {
         }
         if !opts.include_subagents {
             filters.push("s.subagent = 0".to_string());
+        }
+        // The defaults, each kept apart so what it hid can be counted.
+        let mut defaults: Vec<(&str, String, rusqlite::types::Value)> = Vec::new();
+        if let Some(t) = vis.active_since_ns {
+            defaults.push(("active", "s.mtime_ns < ?".into(), t.into()));
+        }
+        if let Some(id) = &vis.exclude_session {
+            defaults.push(("excluded", "s.session_id <> ?".into(), id.clone().into()));
+        }
+        if let Some(except) = &vis.automated_except {
+            let list = AUTOMATED_ORIGINS
+                .iter()
+                .map(|o| format!("'{o}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            defaults.push((
+                "automated",
+                format!(
+                    "(coalesce(s.origin, '') NOT IN ({list}) OR (s.backend || '/' || s.session_id) IN (SELECT value FROM json_each(?)))"
+                ),
+                serde_json::to_string(except).unwrap_or_else(|_| "[]".into()).into(),
+            ));
+        }
+        let base_args = args.clone();
+        let base_where = filters.join(" AND ");
+        for (_, pred, arg) in &defaults {
+            args.push(arg.clone());
+            filters.push(pred.replace('?', &format!("?{}", args.len())));
         }
         let where_s = filters.join(" AND ");
         let matcher = if opts.regex {
@@ -814,6 +919,24 @@ impl Index {
             rusqlite::params_from_iter(args.iter()),
             |r| r.get(0),
         )?;
+        let mut hidden = Hidden::default();
+        for (name, pred, arg) in &defaults {
+            let mut a = base_args.clone();
+            a.push(arg.clone());
+            let n: i64 = self.conn.query_row(
+                &format!(
+                    "{cte} SELECT count(DISTINCT m.sid) FROM {matched} WHERE {base_where} AND NOT {}",
+                    pred.replace('?', &format!("?{}", a.len()))
+                ),
+                rusqlite::params_from_iter(a.iter()),
+                |r| r.get(0),
+            )?;
+            match *name {
+                "active" => hidden.active = n as usize,
+                "automated" => hidden.automated = n as usize,
+                _ => hidden.excluded = n as usize,
+            }
+        }
 
         let mut top = self.conn.prepare(&format!(
             "{cte} SELECT s.id, s.backend, s.session_id, s.meta, count(*) AS n, min(m.score) AS best
@@ -883,6 +1006,7 @@ impl Index {
         Ok(RawSearch {
             expression,
             sessions_matched: sessions_matched as usize,
+            hidden,
             hits,
         })
     }

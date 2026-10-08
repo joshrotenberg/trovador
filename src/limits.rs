@@ -54,6 +54,10 @@ pub struct Limits {
     pub summary_max_chunks: usize,
     /// Provider runs started at once by one operation. Each is a full CLI start.
     pub fanout: usize,
+    /// Seconds within which a session counts as active and is left out of search by
+    /// default. The session doing the search is always active, and its own transcript
+    /// contains the words it searches for. Zero turns the default off.
+    pub active_window_s: usize,
 }
 
 impl Default for Limits {
@@ -76,6 +80,7 @@ impl Default for Limits {
             summary_chunk_chars: 250_000,
             summary_max_chunks: 8,
             fanout: 3,
+            active_window_s: 600,
         }
     }
 }
@@ -129,6 +134,7 @@ impl Limits {
             summary_chunk_chars: num("TROVADOR_SUMMARY_CHUNK_CHARS", d.summary_chunk_chars).max(1),
             summary_max_chunks: num("TROVADOR_SUMMARY_MAX_CHUNKS", d.summary_max_chunks).max(1),
             fanout: num("TROVADOR_FANOUT", d.fanout).max(1),
+            active_window_s: num("TROVADOR_ACTIVE_WINDOW_S", d.active_window_s),
         }
     }
 }

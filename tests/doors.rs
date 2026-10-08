@@ -25,7 +25,7 @@ fn fixture() -> Fixture {
     f.codex(
         ID_B,
         &[
-            codex_meta("/w", json!("exec")),
+            codex_meta("/w", json!("cli")),
             codex_user_item("codex question"),
             codex_agent_item("codex answer"),
         ],
@@ -41,6 +41,7 @@ fn cli(f: &Fixture, args: &[&str]) -> Value {
         .env("TROVADOR_CODEX_ARCHIVE", &f.paths.codex_archive)
         .env("TROVADOR_CODEX_ARCHIVED", &f.paths.codex_archived)
         .env("TROVADOR_HOME", &f.paths.home)
+        .env("TROVADOR_ACTIVE_WINDOW_S", "0")
         .env(
             "TROVADOR_CLAUDE_BIN",
             f.paths.claude_bin.clone().unwrap_or_default(),

@@ -8,7 +8,10 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::archive::{self, ArchiveEntry, Backend, LookupError, SessionMeta};
-use crate::index::{self, Index, IndexError, Match, RefreshOpts, RefreshReport, SearchOpts};
+use crate::index::{
+    self, AUTOMATED_ORIGINS, Hidden, Index, IndexError, Match, RefreshOpts, RefreshReport,
+    SearchOpts, Visibility,
+};
 use crate::limits::Limits;
 use crate::paths::Paths;
 use crate::transcript::{self, TranscriptPage};
@@ -96,6 +99,10 @@ pub struct ListOpts {
     /// spawned agents outnumber the sessions a person started.
     #[serde(default)]
     pub include_subagents: bool,
+    /// Include automated sessions (`claude -p`, `codex exec`) that trovador did not start.
+    /// An explicit `origin` includes them too.
+    #[serde(default)]
+    pub include_automated: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -108,7 +115,21 @@ pub struct ListResult {
     /// More matching sessions may exist beyond this list. With a project filter that is a
     /// possibility rather than a count: the list stops reading once it has enough.
     pub truncated: bool,
+    /// Automated sessions trovador did not start, left out among those examined.
+    pub hidden_automated: usize,
     pub sessions: Vec<SessionRow>,
+}
+
+/// Whether the automated default leaves this session out.
+fn automated_hidden(
+    meta: &SessionMeta,
+    key: &str,
+    spawned: &std::collections::HashSet<String>,
+) -> bool {
+    meta.origin
+        .as_deref()
+        .is_some_and(|o| AUTOMATED_ORIGINS.contains(&o))
+        && !spawned.contains(key)
 }
 
 /// Newest first. Metadata is read only for sessions that might be returned, and the scan
@@ -124,6 +145,15 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> ListResult {
     let cached = Index::open_existing(&ctx.paths)
         .map(|i| i.meta_snapshot())
         .unwrap_or_default();
+    let hide_automated = !opts.include_automated && opts.origin.is_none();
+    let spawned: std::collections::HashSet<String> = if hide_automated {
+        crate::consent::spawned_keys(&ctx.paths)
+            .into_iter()
+            .collect()
+    } else {
+        Default::default()
+    };
+    let mut hidden_automated = 0;
     let needle = opts.project.as_deref().filter(|p| !p.is_empty());
     let mut sessions = Vec::new();
     let mut examined = 0;
@@ -143,6 +173,12 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> ListResult {
         {
             continue;
         }
+        if hide_automated
+            && automated_hidden(&meta, &format!("{}/{}", e.backend, e.session_id), &spawned)
+        {
+            hidden_automated += 1;
+            continue;
+        }
         if let Some(n) = needle {
             let hit = [meta.cwd.as_deref(), meta.relocated_cwd.as_deref()]
                 .into_iter()
@@ -159,6 +195,7 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> ListResult {
         examined,
         returned: sessions.len(),
         truncated,
+        hidden_automated,
         sessions,
     }
 }
@@ -262,6 +299,8 @@ pub struct SearchResult {
     pub sessions_matched: usize,
     pub returned: usize,
     pub hits: Vec<SearchHit>,
+    /// Matching sessions the defaults left out, by reason.
+    pub hidden: Hidden,
     /// True only when every session this search covers was indexed and current when the
     /// query ran. A search that is not exhaustive proves nothing by finding nothing.
     pub exhaustive: bool,
@@ -297,11 +336,23 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         .per_session
         .unwrap_or(ctx.limits.per_session_default)
         .max(1);
-    let raw = idx.search(opts, limit, per_session).map_err(|e| match e {
-        // A malformed FTS5 expression is the caller's to fix, not an index failure.
-        IndexError::Sql(err) if opts.fts => Error::Query(err.to_string()),
-        other => other.into(),
-    })?;
+    let vis = Visibility {
+        active_since_ns: (!opts.include_active && ctx.limits.active_window_s > 0).then(|| {
+            let cutoff = std::time::SystemTime::now()
+                - Duration::from_secs(ctx.limits.active_window_s as u64);
+            crate::summary::mtime_ns(cutoff)
+        }),
+        exclude_session: opts.exclude_session.clone().filter(|s| !s.is_empty()),
+        automated_except: (!opts.include_automated && opts.origin.is_none())
+            .then(|| crate::consent::spawned_keys(&ctx.paths)),
+    };
+    let raw = idx
+        .search(opts, &vis, limit, per_session)
+        .map_err(|e| match e {
+            // A malformed FTS5 expression is the caller's to fix, not an index failure.
+            IndexError::Sql(err) if opts.fts => Error::Query(err.to_string()),
+            other => other.into(),
+        })?;
 
     let entries: HashMap<(Backend, String), ArchiveEntry> = archive::scan_all(&ctx.paths)
         .into_iter()
@@ -336,10 +387,31 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
             refresh.pending, ctx.limits.index_budget_ms, refresh.failed
         )
     });
-    let note = match (stale_note, excluded_note) {
-        (Some(a), Some(b)) => Some(format!("{a}; {b}")),
-        (a, b) => a.or(b),
-    };
+    let h = &raw.hidden;
+    let hidden_note = h.any().then(|| {
+        let mut parts = Vec::new();
+        if h.active > 0 {
+            parts.push(format!(
+                "{} written in the last {} s (include_active)",
+                h.active, ctx.limits.active_window_s
+            ));
+        }
+        if h.automated > 0 {
+            parts.push(format!("{} automated (include_automated)", h.automated));
+        }
+        if h.excluded > 0 {
+            parts.push("the excluded session".to_string());
+        }
+        format!(
+            "matching sessions left out by default: {}",
+            parts.join(", ")
+        )
+    });
+    let note = [stale_note, excluded_note, hidden_note]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let note = (!note.is_empty()).then(|| note.join("; "));
     Ok(SearchResult {
         query: opts.query.clone(),
         mode: if opts.regex {
@@ -353,7 +425,8 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         expression: raw.expression,
         sessions_matched: raw.sessions_matched,
         returned: hits.len(),
-        absence_is_proof: hits.is_empty().then_some(exhaustive),
+        absence_is_proof: hits.is_empty().then_some(exhaustive && !raw.hidden.any()),
+        hidden: raw.hidden.clone(),
         hits,
         exhaustive,
         note,
