@@ -142,11 +142,15 @@ pub struct Hidden {
     pub automated: usize,
     /// The session named by `exclude_session`.
     pub excluded: usize,
+    /// Matched in the index but in an archive root that could not be read, so not
+    /// returned. See `coverage.refresh.unavailable_roots`.
+    #[serde(default)]
+    pub unavailable: usize,
 }
 
 impl Hidden {
     pub fn any(&self) -> bool {
-        self.active + self.automated + self.excluded > 0
+        self.active + self.automated + self.excluded + self.unavailable > 0
     }
 }
 
@@ -363,6 +367,11 @@ pub struct RefreshReport {
     pub removed: usize,
     /// Files that could not be read.
     pub failed: usize,
+    /// Archive roots that could not be read although the index holds sessions from them.
+    /// Their rows are kept, since an unreadable root says nothing about whether its
+    /// sessions still exist, but nothing in them can be checked or returned (#27).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_roots: Vec<String>,
     pub ms: u64,
 }
 
@@ -521,13 +530,8 @@ impl Index {
         opts: &RefreshOpts,
     ) -> Result<RefreshReport> {
         let started = Instant::now();
-        // A session id can appear in two project directories after a move; the newest
-        // file is the live one, and scan_all is newest first.
-        let mut seen = std::collections::HashSet::new();
-        let entries: Vec<ArchiveEntry> = archive::scan_all(paths)
-            .into_iter()
-            .filter(|e| seen.insert(key(e.backend, &e.session_id)))
-            .collect();
+        // One file per session, the newest; scan_all chooses.
+        let entries: Vec<ArchiveEntry> = archive::scan_all(paths);
         let stored = self.stored_rows()?;
         let mut report = RefreshReport {
             sessions: entries.len(),
@@ -588,6 +592,15 @@ impl Index {
                 .find(|(root, _)| std::path::Path::new(file).starts_with(root))
                 .is_some_and(|(_, ok)| *ok)
         };
+        report.unavailable_roots = roots
+            .iter()
+            .filter(|(root, ok)| {
+                !*ok && stored
+                    .values()
+                    .any(|s| std::path::Path::new(&s.file).starts_with(root))
+            })
+            .map(|(root, _)| root.display().to_string())
+            .collect();
         let gone: Vec<i64> = stored
             .iter()
             .filter(|(k, _)| !live.contains(*k))
