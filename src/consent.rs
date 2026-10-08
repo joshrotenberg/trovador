@@ -200,7 +200,10 @@ fn load(paths: &Paths) -> Result<(State, Source), ConsentError> {
 
 /// Read, change, and write the state under an exclusive lock, atomically and private to
 /// the user. Invalid state is never overwritten: the person repairs or removes it.
-fn update(paths: &Paths, change: impl FnOnce(&mut State) -> bool) -> Result<State, ConsentError> {
+fn update(
+    paths: &Paths,
+    change: impl FnOnce(&mut State, Source) -> bool,
+) -> Result<State, ConsentError> {
     let io = |source| ConsentError::Io {
         path: path(paths).display().to_string(),
         source,
@@ -213,8 +216,8 @@ fn update(paths: &Paths, change: impl FnOnce(&mut State) -> bool) -> Result<Stat
         .open(lock_path(paths))
         .map_err(io)?;
     lock.lock().map_err(io)?;
-    let (mut state, _) = load(paths)?;
-    if change(&mut state) {
+    let (mut state, source) = load(paths)?;
+    if change(&mut state, source) {
         write_private(&path(paths), &state).map_err(io)?;
     }
     Ok(state)
@@ -245,7 +248,7 @@ fn same(b: Backend, id: &str) -> impl Fn(&Backend, &String) -> bool + '_ {
 /// the run finishes, so a run that times out can still be continued (spike#108).
 pub fn record_spawned(paths: &Paths, backend: Backend, id: &str) -> Result<(), ConsentError> {
     check_id(id)?;
-    update(paths, |s| {
+    update(paths, |s, _| {
         let is = same(backend, id);
         if s.spawned.iter().any(|r| is(&r.backend, &r.session_id)) {
             return false;
@@ -272,11 +275,12 @@ pub fn spawned_keys(paths: &Paths) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Always writes, even when the level is unchanged: choosing the default is still a choice,
+/// and an import adopts another tool's level only while no choice has been recorded (#29).
 pub fn set_level(paths: &Paths, level: Level) -> Result<Status, ConsentError> {
-    update(paths, |s| {
-        let changed = s.level != level;
+    update(paths, |s, _| {
         s.level = level;
-        changed
+        true
     })?;
     Ok(status(paths))
 }
@@ -288,7 +292,7 @@ pub fn set_decision(
     decision: Option<Decision>,
 ) -> Result<Check, ConsentError> {
     check_id(id)?;
-    update(paths, |s| {
+    update(paths, |s, _| {
         let is = same(backend, id);
         let before = s.decisions.len();
         s.decisions.retain(|r| !is(&r.backend, &r.session_id));
@@ -304,6 +308,84 @@ pub fn set_decision(
         s.decisions.len() != before
     })?;
     Ok(check(paths, backend, id))
+}
+
+/// Consent state brought in from elsewhere, such as spike's.
+#[derive(Clone, Debug, Default)]
+pub struct Incoming {
+    pub level: Option<Level>,
+    pub spawned: Vec<(Backend, String)>,
+    pub decisions: Vec<(Backend, String, Decision)>,
+}
+
+/// What [`merge`] did, or would do on a dry run.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Merged {
+    pub level_adopted: bool,
+    pub spawned_added: usize,
+    pub spawned_present: usize,
+    pub decisions_added: usize,
+    /// A decision for the same session already existed here and was kept.
+    pub decisions_kept: usize,
+}
+
+/// Adds incoming records to the state. The incoming level is adopted only when no level
+/// has been chosen here, and a decision already made here is never replaced. Every id is
+/// validated before anything changes, and everything is written in one update, so a bad
+/// record leaves the state as it was. A dry run reports the same counts without writing.
+pub fn merge(paths: &Paths, incoming: &Incoming, dry_run: bool) -> Result<Merged, ConsentError> {
+    for (_, id) in &incoming.spawned {
+        check_id(id)?;
+    }
+    for (_, id, _) in &incoming.decisions {
+        check_id(id)?;
+    }
+    let apply = |s: &mut State, source: Source| {
+        let mut m = Merged::default();
+        if let (Some(level), Source::Default) = (incoming.level, source) {
+            s.level = level;
+            m.level_adopted = true;
+        }
+        let at = now();
+        for (backend, id) in &incoming.spawned {
+            let is = same(*backend, id);
+            if s.spawned.iter().any(|r| is(&r.backend, &r.session_id)) {
+                m.spawned_present += 1;
+                continue;
+            }
+            s.spawned.push(Spawned {
+                backend: *backend,
+                session_id: id.clone(),
+                at: at.clone(),
+            });
+            m.spawned_added += 1;
+        }
+        for (backend, id, decision) in &incoming.decisions {
+            let is = same(*backend, id);
+            if s.decisions.iter().any(|r| is(&r.backend, &r.session_id)) {
+                m.decisions_kept += 1;
+                continue;
+            }
+            s.decisions.push(DecisionRecord {
+                backend: *backend,
+                session_id: id.clone(),
+                decision: *decision,
+                at: at.clone(),
+            });
+            m.decisions_added += 1;
+        }
+        m
+    };
+    if dry_run {
+        let (mut state, source) = load(paths)?;
+        return Ok(apply(&mut state, source));
+    }
+    let mut merged = Merged::default();
+    update(paths, |s, source| {
+        merged = apply(s, source);
+        merged.level_adopted || merged.spawned_added > 0 || merged.decisions_added > 0
+    })?;
+    Ok(merged)
 }
 
 pub fn status(paths: &Paths) -> Status {
