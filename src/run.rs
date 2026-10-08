@@ -600,11 +600,30 @@ async fn run_claude(
         }
     })
     .await;
+    // The process never started, so the id chosen for a new session names nothing: drop the
+    // spawned record made for it, or consent would allow continuing a session that does not
+    // exist. Reporting this as a run that failed also hid it behind an ordinary error result.
+    let never_started = |message: String| {
+        let Some(id) = &new_id else {
+            return Err(Failure::Spawn(message));
+        };
+        seen.lock().expect("seen").session_id = None;
+        Err(Failure::Spawn(
+            match consent::forget_spawned(&ctx.paths, Backend::Claude, id) {
+                Ok(()) => message,
+                Err(e) => format!("{message}; removing the spawned record for {id} failed: {e}"),
+            },
+        ))
+    };
     match result {
         Ok(_) => Ok(()),
         Err(claude_wrapper::Error::Timeout { .. }) => Err(Failure::Timeout),
-        Err(claude_wrapper::Error::NotFound) => {
-            Err(Failure::Spawn("claude binary not found".into()))
+        Err(claude_wrapper::Error::NotFound) => never_started("claude binary not found".into()),
+        // claude-wrapper names a failed spawn only in the message of its Io error.
+        Err(claude_wrapper::Error::Io { message, .. })
+            if message.starts_with("failed to spawn") =>
+        {
+            never_started(message)
         }
         Err(e) => {
             let msg = e.to_string();

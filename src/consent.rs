@@ -263,6 +263,18 @@ pub fn record_spawned(paths: &Paths, backend: Backend, id: &str) -> Result<(), C
     .map(|_| ())
 }
 
+/// Undoes [`record_spawned`] for a session whose process never started.
+pub fn forget_spawned(paths: &Paths, backend: Backend, id: &str) -> Result<(), ConsentError> {
+    check_id(id)?;
+    update(paths, |s, _| {
+        let is = same(backend, id);
+        let before = s.spawned.len();
+        s.spawned.retain(|r| !is(&r.backend, &r.session_id));
+        s.spawned.len() != before
+    })
+    .map(|_| ())
+}
+
 /// Every session trovador started, as `backend/id`. Empty when the state cannot be read.
 pub fn spawned_keys(paths: &Paths) -> Vec<String> {
     load(paths)
