@@ -171,6 +171,11 @@ enum Command {
     },
     /// Report paths, limits, the index, and what the archives contain.
     Doctor,
+    /// Handlers for Claude Code and Codex hooks, run by a plugin rather than by hand.
+    Hook {
+        #[command(subcommand)]
+        event: HookCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -203,6 +208,18 @@ enum ConsentCmd {
     },
     /// Set the level: deny, spawned, approved, or all.
     Policy { level: Level },
+}
+
+#[derive(Subcommand)]
+enum HookCmd {
+    /// Reads a SessionStart payload on stdin and prints context naming this session's id,
+    /// so search can leave out exactly this session. Prints nothing for any other input
+    /// and always exits 0, so it can never block a session from starting.
+    SessionStart {
+        /// The host: claude or codex. Inferred from the transcript path when omitted.
+        #[arg(long)]
+        backend: Option<Backend>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -499,6 +516,16 @@ fn main() -> ExitCode {
                 Ok(r) => print(&r),
                 Err(e) => fail(e),
             }
+        }
+        Command::Hook {
+            event: HookCmd::SessionStart { backend },
+        } => {
+            let mut input = String::new();
+            let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
+            if let Some(out) = trovador::hook::session_start(&input, backend) {
+                println!("{out}");
+            }
+            ExitCode::SUCCESS
         }
         Command::Doctor => {
             let runtime = match tokio::runtime::Runtime::new() {
