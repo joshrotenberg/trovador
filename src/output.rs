@@ -5,7 +5,6 @@
 //! the budget set to 1,000 (#32). Text over the budget is cut, the response says so, and
 //! the rest is read by offset: a summary from its cache, a reply from the copy saved here.
 
-use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -117,15 +116,14 @@ pub fn continue_run(run_id: &str) -> impl Fn(usize) -> String + '_ {
 /// way out.
 pub(crate) fn save(paths: &Paths, run_id: &str, text: &str) -> std::io::Result<()> {
     let path = file(paths, run_id).map_err(std::io::Error::other)?;
-    std::fs::create_dir_all(dir(paths))?;
-    let mut opts = OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts.open(path)?.write_all(text.as_bytes())
+    crate::paths::private_dir(&paths.home)?;
+    crate::paths::private_dir(&dir(paths))?;
+    crate::paths::private_file()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)?
+        .write_all(text.as_bytes())
 }
 
 pub fn read(ctx: &Ctx, run_id: &str, offset: usize) -> Result<RunOutput, OutputError> {

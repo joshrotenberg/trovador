@@ -167,7 +167,7 @@ fn key(backend: Backend, id: &str) -> (Backend, String) {
 impl Index {
     /// Opens the index, creating it and its directory if needed.
     pub fn open(paths: &Paths, limits: &Limits) -> Result<Self> {
-        std::fs::create_dir_all(&paths.home).map_err(|source| IndexError::Dir {
+        crate::paths::private_dir(&paths.home).map_err(|source| IndexError::Dir {
             path: paths.home.display().to_string(),
             source,
         })?;
@@ -181,6 +181,18 @@ impl Index {
                 p.push(suffix);
                 let _ = std::fs::remove_file(PathBuf::from(p));
             }
+        }
+        // SQLite gives the -wal and -shm files the database file's mode, so the file is
+        // created 0600 before SQLite sees it, and an older 0644 one is tightened.
+        let _ = crate::paths::private_file()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path);
+        for suffix in ["", "-wal", "-shm"] {
+            let mut p = path.clone().into_os_string();
+            p.push(suffix);
+            let _ = crate::paths::make_private(&PathBuf::from(p));
         }
         let conn = Connection::open(&path)?;
         let index = Self { conn, path };

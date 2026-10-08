@@ -93,12 +93,16 @@ pub fn cached(ctx: &Ctx, e: &ArchiveEntry) -> Option<Summary> {
 }
 
 pub(crate) fn store(ctx: &Ctx, s: &Summary) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir(ctx))?;
-    let path = cache_path(ctx, s.backend, &s.session_id);
-    // Another process may be summarizing the same session at the same moment.
-    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, serde_json::to_string_pretty(s).unwrap_or_default())?;
-    std::fs::rename(tmp, path)
+    crate::paths::private_dir(&ctx.paths.home)?;
+    crate::paths::private_dir(&dir(ctx))?;
+    // Another process may be summarizing the same session at the same moment; the write
+    // goes through a temp file named for this process.
+    crate::paths::write_private(
+        &cache_path(ctx, s.backend, &s.session_id),
+        serde_json::to_string_pretty(s)
+            .unwrap_or_default()
+            .as_bytes(),
+    )
 }
 
 /// The transcript as text, without omitted records, which carry nothing to summarize.
