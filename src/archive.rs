@@ -434,16 +434,19 @@ fn push_unique(list: &mut Vec<String>, item: Option<&str>) {
 fn parse_codex_head(text: &str) -> SessionMeta {
     let mut meta = SessionMeta::default();
     let (mut from_item, mut from_event, mut from_response) = (None, None, None);
+    let mut seen_meta = false;
     for r in records(text) {
         let p = r.get("payload").unwrap_or(&Value::Null);
         match (str_at(&r, "type"), str_at(p, "type")) {
-            (Some("session_meta"), _) => {
-                if meta.cwd.is_none() {
-                    meta.cwd = str_at(p, "cwd").map(str::to_string);
-                }
-                if meta.originator.is_none() {
-                    meta.originator = str_at(p, "originator").map(str::to_string);
-                }
+            // Only the first session_meta describes this file. In 510 of 3,746 local files
+            // further ones followed, always for other sessions (a spawned child, a fork's
+            // parent); reading them let a later record overwrite the origin, so the origin
+            // depended on how far the head read reached, and a parent that embedded a
+            // child's record was marked as a subagent.
+            (Some("session_meta"), _) if !seen_meta => {
+                seen_meta = true;
+                meta.cwd = str_at(p, "cwd").map(str::to_string);
+                meta.originator = str_at(p, "originator").map(str::to_string);
                 apply_codex_source(&mut meta, p);
             }
             (_, Some("item_completed")) if from_item.is_none() => {

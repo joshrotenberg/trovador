@@ -168,6 +168,31 @@ fn an_exact_id_wins_over_a_longer_id_it_prefixes() {
 }
 
 #[test]
+fn only_the_first_session_meta_describes_a_codex_file() {
+    // A parent session's file can embed a spawned child's session_meta, which carries a
+    // parent_thread_id and a subagent source. That must not make the parent a subagent.
+    let f = Fixture::new();
+    f.codex(
+        ID_A,
+        &[
+            json!({"type": "session_meta", "payload": {"id": ID_A, "cwd": "/parent", "source": "vscode"}}),
+            codex_user_item("plan the work"),
+            json!({"type": "session_meta", "payload": {"id": ID_B, "cwd": "/child",
+                "source": {"subagent": {"thread_spawn": {"agent_nickname": "Darwin"}}},
+                "parent_thread_id": ID_A}}),
+        ],
+        0,
+    );
+    let e = archive::find_session(&f.paths, ID_A, None).unwrap();
+    let meta = archive::read_meta(&e, &f.ctx().limits);
+    assert_eq!(meta.origin.as_deref(), Some("vscode"));
+    assert!(!meta.subagent);
+    assert_eq!(meta.parent_session_id, None);
+    assert_eq!(meta.cwd.as_deref(), Some("/parent"));
+    assert_eq!(meta.agent_name, None);
+}
+
+#[test]
 fn an_ambiguous_prefix_names_every_candidate() {
     let f = Fixture::new();
     f.claude("-w", ID_A, &[claude_user("/w", "a")], 0);
