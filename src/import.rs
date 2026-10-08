@@ -97,43 +97,30 @@ pub fn import(ctx: &Ctx, from: &Path, dry_run: bool) -> Result<ImportReport, Imp
         let raw = std::fs::read_to_string(&consent_file).map_err(|e| bad(e.to_string()))?;
         let spike: SpikeConsent = serde_json::from_str(&raw).map_err(|e| bad(e.to_string()))?;
         report.level = Some(spike.level);
-        let status = consent::status(&ctx.paths);
-        if status.source == consent::Source::Invalid {
-            return Err(consent::ConsentError::Invalid {
-                path: status.path,
-                reason: status.error.unwrap_or_default(),
-            }
-            .into());
-        }
-        if status.source == consent::Source::Default {
-            report.level_adopted = true;
-            if !dry_run {
-                consent::set_level(&ctx.paths, spike.level)?;
-            }
-        }
-        for r in &spike.spawned {
-            if consent::check(&ctx.paths, r.backend, &r.session_id).spawned {
-                report.spawned_present += 1;
-                continue;
-            }
-            report.spawned_added += 1;
-            if !dry_run {
-                consent::record_spawned(&ctx.paths, r.backend, &r.session_id)?;
-            }
-        }
-        for d in &spike.decisions {
-            if consent::check(&ctx.paths, d.backend, &d.session_id)
-                .decision
-                .is_some()
-            {
-                report.decisions_kept_trovador += 1;
-                continue;
-            }
-            report.decisions_added += 1;
-            if !dry_run {
-                consent::set_decision(&ctx.paths, d.backend, &d.session_id, Some(d.decision))?;
-            }
-        }
+        let incoming = consent::Incoming {
+            level: Some(spike.level),
+            spawned: spike
+                .spawned
+                .into_iter()
+                .map(|r| (r.backend, r.session_id))
+                .collect(),
+            decisions: spike
+                .decisions
+                .into_iter()
+                .map(|d| (d.backend, d.session_id, d.decision))
+                .collect(),
+        };
+        let merged = consent::merge(&ctx.paths, &incoming, dry_run).map_err(|e| match e {
+            consent::ConsentError::BadId => bad(format!(
+                "a spawned or decision record has an invalid session id ({e}); nothing was imported"
+            )),
+            other => other.into(),
+        })?;
+        report.level_adopted = merged.level_adopted;
+        report.spawned_added = merged.spawned_added;
+        report.spawned_present = merged.spawned_present;
+        report.decisions_added = merged.decisions_added;
+        report.decisions_kept_trovador = merged.decisions_kept;
     }
 
     if let Ok(files) = std::fs::read_dir(&summaries_dir) {
