@@ -11,6 +11,15 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use trovador::{Ctx, Limits, Paths};
 
+/// Defaults for tests. Fixture files are written moments before they are read, so the
+/// active-session default would hide every one; tests of that default turn it back on.
+pub fn limits() -> Limits {
+    Limits {
+        active_window_s: 0,
+        ..Limits::default()
+    }
+}
+
 pub struct Fixture {
     pub dir: TempDir,
     pub paths: Paths,
@@ -26,7 +35,7 @@ impl Fixture {
     pub fn ctx(&self) -> Ctx {
         Ctx {
             paths: self.paths.clone(),
-            limits: Limits::default(),
+            limits: limits(),
         }
     }
 

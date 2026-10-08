@@ -26,7 +26,9 @@ next_offset while has_more is true. The session:// resources return the same dat
 search finds text across every session: words and \"quoted phrases\" by default, fts=true \
 for FTS5 syntax, regex=true for a regular expression. Each hit gives match indexes to pass \
 as the transcript offset. If exhaustive is false, finding nothing proves nothing; the note \
-says what was not covered.
+says what was not covered. By default search leaves out sessions written in the last few \
+minutes, which always includes your own, and automated sessions trovador did not start; \
+hidden counts them, and include_active and include_automated bring them back.
 
 summarize returns a summary of a session, from the cache when the session has not \
 changed; a miss costs tokens. session://{backend}/{id}/summary returns only a cached one.
@@ -74,6 +76,10 @@ struct SessionsInput {
     /// For list: include sessions started by another session (hidden by default).
     #[serde(default)]
     include_subagents: bool,
+    /// For list: include claude -p and codex exec sessions trovador did not start
+    /// (hidden by default).
+    #[serde(default)]
+    include_automated: bool,
     /// For list: sessions to return. For transcript: records per page.
     limit: Option<usize>,
     /// For transcript: the record index to start from.
@@ -100,6 +106,7 @@ fn sessions_call(ctx: &Ctx, input: SessionsInput) -> tower_mcp::Result<CallToolR
                 limit: input.limit,
                 origin: input.origin.clone(),
                 include_subagents: input.include_subagents,
+                include_automated: input.include_automated,
             };
             return json_result(&sessions::list(ctx, &opts));
         }

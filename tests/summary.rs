@@ -84,7 +84,7 @@ fn a_long_session_is_summarized_in_parts_then_merged() {
     let f = Fixture::new().with_fakes();
     let ctx = f.ctx_with(Limits {
         summary_chunk_chars: 2_000,
-        ..Default::default()
+        ..limits()
     });
     session_with(&f, ID_A, 5);
     let s = summarize(&ctx, ID_A, false);
@@ -106,7 +106,7 @@ fn past_the_chunk_limit_the_start_and_end_are_kept_and_the_gap_is_named() {
     let ctx = f.ctx_with(Limits {
         summary_chunk_chars: 1_000,
         summary_max_chunks: 4,
-        ..Default::default()
+        ..limits()
     });
     session_with(&f, ID_A, 12);
     let s = summarize(&ctx, ID_A, false);
