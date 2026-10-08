@@ -21,7 +21,7 @@ use crate::limits::Limits;
 use crate::paths::Paths;
 use crate::transcript::{CodexMode, PROJECTION_VERSION, Projection, ProjectionState, RecordKind};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// Origins whose text is not indexed. A Codex `guardian` session is an approval reviewer
 /// whose input is a copy of its parent session's history: on 2026-10-07 that was 67 MB of
@@ -142,6 +142,8 @@ impl Index {
                  mode_final INTEGER NOT NULL,
                  run_category TEXT,
                  run_count INTEGER,
+                 last_kind TEXT,
+                 last_hash INTEGER,
                  UNIQUE (backend, session_id)
              );
              CREATE VIRTUAL TABLE records USING fts5(
@@ -343,7 +345,7 @@ impl Index {
         let mut stmt = self.conn.prepare(
             "SELECT id, backend, session_id, file, size, mtime_ns, text_indexed,
                     projection_version, offset, next_index, codex_mode, mode_final,
-                    run_category, run_count
+                    run_category, run_count, last_kind, last_hash
              FROM sessions",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -370,6 +372,13 @@ impl Index {
                         mode: CodexMode::from_i64(r.get(10)?),
                         mode_final: r.get::<_, i64>(11)? != 0,
                         run,
+                        last_turn: match (
+                            r.get::<_, Option<String>>(14)?,
+                            r.get::<_, Option<i64>>(15)?,
+                        ) {
+                            (Some(k), Some(h)) => kind_from_str(&k).map(|k| (k, h as u64)),
+                            _ => None,
+                        },
                     },
                 },
             ))
@@ -562,8 +571,8 @@ impl Index {
         let id: i64 = tx.query_row(
             "INSERT INTO sessions (backend, session_id, file, size, mtime_ns, meta, paths, origin,
                  subagent, text_indexed, projection_version, offset, next_index, codex_mode,
-                 mode_final, run_category, run_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                 mode_final, run_category, run_count, last_kind, last_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
              ON CONFLICT (backend, session_id) DO UPDATE SET
                  file = excluded.file, size = excluded.size, mtime_ns = excluded.mtime_ns,
                  meta = excluded.meta, paths = excluded.paths, origin = excluded.origin,
@@ -571,7 +580,8 @@ impl Index {
                  projection_version = excluded.projection_version, offset = excluded.offset,
                  next_index = excluded.next_index, codex_mode = excluded.codex_mode,
                  mode_final = excluded.mode_final, run_category = excluded.run_category,
-                 run_count = excluded.run_count
+                 run_count = excluded.run_count, last_kind = excluded.last_kind,
+                 last_hash = excluded.last_hash
              RETURNING id",
             params![
                 k.0.as_str(),
@@ -591,6 +601,8 @@ impl Index {
                 s.mode_final as i64,
                 s.run.as_ref().map(|(c, _)| c.clone()),
                 s.run.as_ref().map(|(_, n)| *n as i64),
+                s.last_turn.map(|(k, _)| kind_str(k)),
+                s.last_turn.map(|(_, h)| h as i64),
             ],
             |r| r.get(0),
         )?;
@@ -609,6 +621,14 @@ impl Index {
         }
         tx.commit()?;
         Ok(true)
+    }
+}
+
+fn kind_from_str(s: &str) -> Option<RecordKind> {
+    match s {
+        "user" => Some(RecordKind::User),
+        "assistant" => Some(RecordKind::Assistant),
+        _ => None,
     }
 }
 

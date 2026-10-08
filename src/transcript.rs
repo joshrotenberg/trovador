@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 /// Bumped whenever the projection changes what it emits, which invalidates every index row.
-pub const PROJECTION_VERSION: i64 = 1;
+pub const PROJECTION_VERSION: i64 = 2;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -431,6 +431,24 @@ pub struct ProjectionState {
     /// An omitted run still open at `offset`. A full read would merge records appended
     /// after it into the same run, so it is carried rather than flushed.
     pub run: Option<(String, usize)>,
+    /// The last user or assistant record emitted, as its kind and a hash of its text, so a
+    /// copy of it arriving at a Codex stream switch can be recognised after a resume too.
+    pub last_turn: Option<(RecordKind, u64)>,
+}
+
+/// FNV-1a, 64-bit. Stable across Rust versions and platforms, unlike the std hasher,
+/// because the value is stored in the index and compared on a later run.
+pub fn text_hash(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
+
+fn is_turn(k: RecordKind) -> bool {
+    matches!(k, RecordKind::User | RecordKind::Assistant)
 }
 
 /// Streams a session's projected records, with omitted runs collapsed and indexes assigned.
@@ -535,11 +553,28 @@ impl Projection {
                 Backend::Codex => {
                     // A stream seen later than the pre-scan reached still takes over from
                     // that point on.
+                    let before = self.state.mode;
                     if let Some(m) = codex_mode_signal(&r) {
                         self.state.mode = self.state.mode.max(m);
                     }
-                    project_codex(&r, self.state.mode, &self.limits, &mut drafts)
+                    project_codex(&r, self.state.mode, &self.limits, &mut drafts);
+                    // Codex writes a turn to the lower stream and then to the higher one.
+                    // When the pre-scan stopped before the higher stream appeared (a 477 KB
+                    // pasted prompt carried it past its window), the turn that triggers the
+                    // switch is a copy of the one just emitted.
+                    if self.state.mode > before
+                        && let Some(last) = self.state.last_turn
+                        && let Some(i) = drafts.iter().position(|d| {
+                            is_turn(d.kind)
+                                && (d.kind, text_hash(d.text.as_deref().unwrap_or(""))) == last
+                        })
+                    {
+                        drafts.remove(i);
+                    }
                 }
+            }
+            if let Some(d) = drafts.iter().rev().find(|d| is_turn(d.kind)) {
+                self.state.last_turn = Some((d.kind, text_hash(d.text.as_deref().unwrap_or(""))));
             }
             self.pending.extend(drafts);
         }

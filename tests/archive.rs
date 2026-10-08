@@ -302,6 +302,62 @@ fn a_current_codex_turn_is_projected_once_not_once_per_stream() {
 }
 
 #[test]
+fn a_first_turn_larger_than_the_pre_scan_window_is_projected_once() {
+    // Seen on a real machine: a 477 KB pasted prompt written to the response stream carried
+    // the pre-scan past its 512 KB window, so the item stream was only found at the copy.
+    let f = Fixture::new();
+    let huge = "p".repeat(600_000);
+    f.codex(
+        ID_A,
+        &[
+            codex_meta("/w", json!("vscode")),
+            codex_response("user", &huge),
+            codex_user_item(&huge),
+            codex_response("assistant", "ok"),
+            codex_agent_item("ok"),
+            codex_user_item("next question"),
+        ],
+        0,
+    );
+    let t = sessions::transcript(&f.ctx(), ID_A, None, 0, None).unwrap();
+    let turns: Vec<_> = kinds(&t)
+        .into_iter()
+        .filter(|(k, _)| *k != RecordKind::Omitted)
+        .map(|(k, text)| (k, text.len().min(20)))
+        .collect();
+    assert_eq!(
+        turns,
+        vec![
+            (RecordKind::User, 20),
+            (RecordKind::Assistant, 2),
+            (RecordKind::User, 13)
+        ]
+    );
+}
+
+#[test]
+fn a_prompt_a_person_really_sent_twice_is_projected_twice() {
+    let f = Fixture::new();
+    f.codex(
+        ID_A,
+        &[
+            codex_meta("/w", json!("cli")),
+            codex_user_item("run the tests again"),
+            codex_agent_item("done"),
+            codex_user_item("run the tests again"),
+            codex_user_item("run the tests again"),
+        ],
+        0,
+    );
+    let t = sessions::transcript(&f.ctx(), ID_A, None, 0, None).unwrap();
+    let users = kinds(&t)
+        .into_iter()
+        .filter(|(k, _)| *k == RecordKind::User)
+        .count();
+    assert_eq!(users, 3);
+}
+
+#[test]
 fn an_older_codex_session_uses_its_event_stream() {
     let f = Fixture::new();
     f.codex(
