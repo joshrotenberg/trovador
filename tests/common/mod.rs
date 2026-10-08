@@ -99,7 +99,8 @@ pub const CODEX_NEW_ID: &str = "c0dec0de-0000-4000-8000-00000000000c";
 const FAKE_CLAUDE: &str = r#"#!/bin/bash
 if [ "$1" = "--version" ]; then echo "9.9.9 (fake claude)"; exit 0; fi
 # Speaks claude -p in stream-json or json. A prompt whose first line contains "slow" sleeps
-# past any test timeout; "fail" ends with an error result. --no-session-persistence writes
+# past any test timeout, and "nap-long" and "nap-short" for 1 s and 0.1 s; "fail" ends with
+# an error result. --no-session-persistence writes
 # no transcript. Full prompts are appended to the .prompts log.
 # One write per invocation, so concurrent runs cannot interleave their lines.
 rec="$(printf '%s\n' "---" "cwd=$PWD" "depth=$TROVADOR_DEPTH"; printf 'arg=%s\n' "$@")"
@@ -148,7 +149,7 @@ if [ "$fmt" = "json" ]; then
   exit 0
 fi
 printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$id"
-case "$first" in *slow*) sleep 30;; esac
+case "$first" in *slow*) sleep 30;; *nap-long*) sleep 1;; *nap-short*) sleep 0.1;; esac
 case "$first" in *fail*)
   printf '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"it failed","session_id":"%s"}\n' "$id"
   exit 1;;
