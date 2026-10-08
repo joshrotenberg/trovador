@@ -164,7 +164,7 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
     let limit = opts.limit.unwrap_or(ctx.limits.list_default).max(1);
     // Metadata from the index where the file has not changed since it was indexed. The
     // index is only read here, never created: listing must not leave state behind.
-    let cached = Index::open_existing(&ctx.paths)
+    let cached = Index::open_existing(&ctx.paths, &ctx.limits)
         .map(|i| i.meta_snapshot())
         .unwrap_or_default();
     let hide_automated = !opts.include_automated && opts.origin.is_none();
@@ -352,7 +352,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
     if opts.regex {
         regex::Regex::new(&opts.query).map_err(|e| Error::Query(e.to_string()))?;
     }
-    let mut idx = Index::open(&ctx.paths)?;
+    let mut idx = Index::open(&ctx.paths, &ctx.limits)?;
     let refresh = idx.refresh(
         &ctx.paths,
         &ctx.limits,
@@ -490,10 +490,10 @@ pub fn reindex(ctx: &Ctx, rebuild: bool) -> Result<RefreshReport, Error> {
             }
         }
     }
-    let mut idx = Index::open(&ctx.paths)?;
+    let mut idx = Index::open(&ctx.paths, &ctx.limits)?;
     Ok(idx.refresh(&ctx.paths, &ctx.limits, &RefreshOpts::default())?)
 }
 
 pub fn index_status(ctx: &Ctx) -> Option<index::IndexStatus> {
-    Index::open_existing(&ctx.paths).and_then(|i| i.status().ok())
+    Index::open_existing(&ctx.paths, &ctx.limits).and_then(|i| i.status().ok())
 }

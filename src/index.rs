@@ -53,7 +53,17 @@ pub fn db_path(paths: &Paths) -> PathBuf {
 }
 
 /// The schema and projection versions an existing file was built with.
-fn stored_versions(path: &std::path::Path) -> Option<(i64, i64)> {
+/// What a file's rows were built with: schema, projection, and whether reasoning was
+/// indexed. A file built any other way is replaced rather than reused.
+fn built_with(limits: &Limits) -> (i64, i64, i64) {
+    (
+        SCHEMA_VERSION,
+        PROJECTION_VERSION,
+        limits.index_reasoning as i64,
+    )
+}
+
+fn stored_versions(path: &std::path::Path) -> Option<(i64, i64, i64)> {
     let conn =
         Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     let get = |k: &str| {
@@ -62,7 +72,11 @@ fn stored_versions(path: &std::path::Path) -> Option<(i64, i64)> {
         })
         .ok()
     };
-    Some((get("schema")?, get("projection").unwrap_or(0)))
+    Some((
+        get("schema")?,
+        get("projection").unwrap_or(0),
+        get("reasoning").unwrap_or(1),
+    ))
 }
 
 /// Origins of sessions started by a program rather than a person: `claude -p`, `codex
@@ -113,7 +127,7 @@ fn key(backend: Backend, id: &str) -> (Backend, String) {
 
 impl Index {
     /// Opens the index, creating it and its directory if needed.
-    pub fn open(paths: &Paths) -> Result<Self> {
+    pub fn open(paths: &Paths, limits: &Limits) -> Result<Self> {
         std::fs::create_dir_all(&paths.home).map_err(|source| IndexError::Dir {
             path: paths.home.display().to_string(),
             source,
@@ -122,7 +136,7 @@ impl Index {
         // Everything in the index is derived, so a version change starts a fresh file.
         // Reindexing row by row after a projection change left a 456 MB file and took
         // 20.4 s, against 415 MB and 9.8 s fresh (2026-10-07).
-        if path.is_file() && stored_versions(&path) != Some((SCHEMA_VERSION, PROJECTION_VERSION)) {
+        if path.is_file() && stored_versions(&path) != Some(built_with(limits)) {
             for suffix in ["", "-wal", "-shm"] {
                 let mut p = path.clone().into_os_string();
                 p.push(suffix);
@@ -132,16 +146,16 @@ impl Index {
         let conn = Connection::open(&path)?;
         let index = Self { conn, path };
         index.configure()?;
-        index.migrate()?;
+        index.migrate(limits)?;
         Ok(index)
     }
 
     /// Opens the index only if it already exists. Reading a list must not create state.
-    pub fn open_existing(paths: &Paths) -> Option<Self> {
+    pub fn open_existing(paths: &Paths, limits: &Limits) -> Option<Self> {
         let path = db_path(paths);
         // An index from another version is about to be replaced; its rows describe a
         // projection this build would not produce, so it is treated as absent.
-        if !path.is_file() || stored_versions(&path) != Some((SCHEMA_VERSION, PROJECTION_VERSION)) {
+        if !path.is_file() || stored_versions(&path) != Some(built_with(limits)) {
             return None;
         }
         let conn = Connection::open(&path).ok()?;
@@ -160,7 +174,7 @@ impl Index {
         Ok(())
     }
 
-    fn migrate(&self) -> Result<()> {
+    fn migrate(&self, limits: &Limits) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);",
         )?;
@@ -206,9 +220,11 @@ impl Index {
                  tokenize = 'unicode61 remove_diacritics 2'
              );",
         )?;
+        let (schema, projection, reasoning) = built_with(limits);
         for (key, value) in [
-            ("schema", SCHEMA_VERSION),
-            ("projection", PROJECTION_VERSION),
+            ("schema", schema),
+            ("projection", projection),
+            ("reasoning", reasoning),
         ] {
             self.conn.execute(
                 "INSERT INTO meta (key, value) VALUES (?1, ?2)
@@ -378,6 +394,9 @@ fn project(job: Job, limits: &Limits) -> Option<Done> {
     let state = if text {
         let mut proj = Projection::for_index(&job.entry, limits, resume).ok()?;
         for r in proj.by_ref() {
+            if r.kind == RecordKind::Reasoning && !limits.index_reasoning {
+                continue;
+            }
             if let Some(t) = r.text {
                 records.push((r.index, r.kind, r.name, t));
             }

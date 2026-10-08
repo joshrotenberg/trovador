@@ -592,6 +592,50 @@ fn project_codex_item(item: &Value, limits: &Limits, out: &mut Vec<Draft>) {
     }
 }
 
+/// A Codex `compacted` record, read without building it into a JSON tree.
+///
+/// Each one carries a copy of the history it replaced: 562 such lines made up 3.3 GB of the
+/// 10 GB local Codex archive, up to 15.7 MB each. Only `payload.message` is projected, and
+/// it was empty in all of them, but parsing them whole set the peak memory of a full index
+/// build (637 MB for Codex alone, against 77 MB for Claude). The type sits in the first
+/// few hundred bytes, so the rest is skipped without allocating it.
+fn compacted_without_parsing(line: &[u8], limits: &Limits) -> Option<Draft> {
+    let head = &line[..line.len().min(512)];
+    if !head.windows(18).any(|w| w == br#""type":"compacted""#) {
+        return None;
+    }
+    #[derive(serde::Deserialize)]
+    struct Compacted {
+        #[serde(rename = "type")]
+        kind: String,
+        #[serde(default)]
+        payload: Option<CompactedPayload>,
+    }
+    #[derive(serde::Deserialize)]
+    struct CompactedPayload {
+        #[serde(default)]
+        message: Option<String>,
+    }
+    let c: Compacted = serde_json::from_slice(line).ok()?;
+    if c.kind != "compacted" {
+        return None;
+    }
+    Some(
+        match c
+            .payload
+            .and_then(|p| p.message)
+            .filter(|m| !m.trim().is_empty())
+        {
+            Some(m) => Draft::named(
+                RecordKind::System,
+                "compacted",
+                cap(&m, limits.record_chars),
+            ),
+            None => Draft::omitted("compacted"),
+        },
+    )
+}
+
 /// A web search's queries: the list when there is one, else the single query.
 fn search_queries(action: &Value, outer: &Value) -> String {
     action
@@ -735,11 +779,20 @@ impl Projection {
                 break;
             }
             self.state.offset += n as u64;
-            let text = String::from_utf8_lossy(&self.line);
-            if text.trim().is_empty() {
+            if self.line.iter().all(|b| b.is_ascii_whitespace()) {
                 continue;
             }
-            let Ok(r) = serde_json::from_str::<Value>(&text) else {
+            if self.backend == Backend::Codex
+                && let Some(d) = compacted_without_parsing(&self.line, &self.limits)
+            {
+                self.pending.push_back(d);
+                continue;
+            }
+            // Parse the bytes directly; copy through a lossy conversion only for the rare
+            // line that is not valid UTF-8.
+            let parsed = serde_json::from_slice::<Value>(&self.line)
+                .or_else(|_| serde_json::from_str::<Value>(&String::from_utf8_lossy(&self.line)));
+            let Ok(r) = parsed else {
                 continue;
             };
             let mut drafts = Vec::new();

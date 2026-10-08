@@ -58,6 +58,10 @@ pub struct Limits {
     /// default. The session doing the search is always active, and its own transcript
     /// contains the words it searches for. Zero turns the default off.
     pub active_window_s: usize,
+    /// Index reasoning records (Claude thinking text, Codex reasoning summaries) for
+    /// search. They raised the index from 287 MB to 415 MB on the development machine.
+    /// Transcripts show them either way.
+    pub index_reasoning: bool,
 }
 
 impl Default for Limits {
@@ -81,6 +85,7 @@ impl Default for Limits {
             summary_max_chunks: 8,
             fanout: 3,
             active_window_s: 600,
+            index_reasoning: true,
         }
     }
 }
@@ -135,6 +140,9 @@ impl Limits {
             summary_max_chunks: num("TROVADOR_SUMMARY_MAX_CHUNKS", d.summary_max_chunks).max(1),
             fanout: num("TROVADOR_FANOUT", d.fanout).max(1),
             active_window_s: num("TROVADOR_ACTIVE_WINDOW_S", d.active_window_s),
+            index_reasoning: get("TROVADOR_INDEX_REASONING")
+                .map(|v| !matches!(v.trim(), "0" | "false" | "no" | "off"))
+                .unwrap_or(d.index_reasoning),
         }
     }
 }
