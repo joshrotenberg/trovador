@@ -34,6 +34,8 @@ struct Live {
     started: SystemTime,
     /// Archive files with their size and mtime, taken before anything else ran.
     before: HashMap<PathBuf, (u64, SystemTime)>,
+    /// A hash of the first 4 KB of every file idle for 10 minutes before the run.
+    prefixes: HashMap<PathBuf, u64>,
     build: RefreshReport,
     /// Every session with its metadata, from the list with subagents.
     all: Vec<(ArchiveEntry, SessionMeta)>,
@@ -45,6 +47,12 @@ fn live() -> &'static Live {
     LIVE.get_or_init(|| {
         let started = SystemTime::now();
         let before = snapshot_archives(&Paths::from_env());
+        let idle_before = started - Duration::from_secs(600);
+        let prefixes = before
+            .iter()
+            .filter(|(_, (_, m))| *m <= idle_before)
+            .filter_map(|(p, _)| prefix_hash(p).map(|h| (p.clone(), h)))
+            .collect();
         let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("live-home");
         let _ = std::fs::remove_dir_all(&home);
         let paths = Paths {
@@ -103,6 +111,7 @@ fn live() -> &'static Live {
             seed,
             started,
             before,
+            prefixes,
             build,
             all,
             sample,
@@ -214,6 +223,22 @@ fn snapshot_archives(paths: &Paths) -> HashMap<PathBuf, (u64, SystemTime)> {
     out
 }
 
+/// Identifies a file's existing content, so an append by a running client can be told
+/// apart from any other change.
+fn prefix_hash(p: &Path) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    use std::io::Read;
+    let mut buf = Vec::with_capacity(4096);
+    std::fs::File::open(p)
+        .ok()?
+        .take(4096)
+        .read_to_end(&mut buf)
+        .ok()?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    buf.hash(&mut h);
+    Some(h.finish())
+}
+
 /// Independent of `archive::scan_*`: what a session file is, written out again.
 fn walk_sessions(paths: &Paths) -> HashSet<(Backend, String)> {
     let mut out = HashSet::new();
@@ -279,6 +304,10 @@ fn every_session_file_is_listed_exactly_once_newest_first() {
     assert!(extra.is_empty(), "listed but not a session file: {extra:?}");
 
     for w in l.all.windows(2) {
+        // A client appending to a session moves it between the list and the scan above.
+        if written_during_run(&w[0].0, l.started) || written_during_run(&w[1].0, l.started) {
+            continue;
+        }
         assert!(
             w[0].0.mtime >= w[1].0.mtime,
             "not newest first: {} before {}",
@@ -672,6 +701,13 @@ fn cli(ctx: &Ctx, args: &[&str]) -> Value {
     serde_json::from_slice(&out.stdout).unwrap()
 }
 
+/// What the doors serve: the library's answer through the same redaction.
+fn served(v: impl serde::Serialize) -> Value {
+    let mut v = serde_json::to_value(v).unwrap();
+    trovador::redact::redact_value(&mut v);
+    v
+}
+
 /// Drops what legitimately varies between two calls a moment apart: rows for sessions
 /// being written, and refresh timings.
 fn stable(mut v: Value, since: SystemTime) -> Value {
@@ -704,14 +740,13 @@ async fn the_cli_and_mcp_return_the_library_answer_on_real_data() {
     let mut client = tower_mcp::TestClient::from_router(trovador::mcp::router(ctx.clone()));
     client.initialize().await;
 
-    let lib = serde_json::to_value(sessions::list(
+    let lib = served(sessions::list(
         &ctx,
         &ListOpts {
             limit: Some(50),
             ..Default::default()
         },
-    ))
-    .unwrap();
+    ));
     let since = l.started;
     assert_eq!(
         stable(cli(&ctx, &["sessions", "list", "--limit", "50"]), since),
@@ -733,9 +768,7 @@ async fn the_cli_and_mcp_return_the_library_answer_on_real_data() {
         .filter(|e| !written_during_run(e, since))
         .take(5)
     {
-        let lib =
-            serde_json::to_value(sessions::show(&ctx, &e.session_id, Some(e.backend)).unwrap())
-                .unwrap();
+        let lib = served(sessions::show(&ctx, &e.session_id, Some(e.backend)).unwrap());
         let args = [
             "sessions",
             "show",
@@ -762,10 +795,7 @@ async fn the_cli_and_mcp_return_the_library_answer_on_real_data() {
         limit: Some(10),
         ..Default::default()
     };
-    let lib = stable(
-        serde_json::to_value(sessions::search(&ctx, &q).unwrap()).unwrap(),
-        since,
-    );
+    let lib = stable(served(sessions::search(&ctx, &q).unwrap()), since);
     assert_eq!(
         stable(cli(&ctx, &["search", "the", "--limit", "10"]), since),
         lib
@@ -792,22 +822,32 @@ fn archive_files_idle_before_the_run_are_untouched() {
         let _ = projection(e, &l.ctx.limits);
         let _ = sessions::show(&l.ctx, &e.session_id, Some(e.backend));
     }
-    let idle_before = l.started - Duration::from_secs(600);
+    // A client can resume an old session during the run and append to it; that is not
+    // trovador. Anything else, a file shrinking or its existing bytes changing, would be.
     let after = snapshot_archives(&l.ctx.paths);
     let mut changed = Vec::new();
-    for (path, (size, mtime)) in &l.before {
-        if *mtime > idle_before {
+    let mut appended = 0;
+    for (path, prefix) in &l.prefixes {
+        let (size, mtime) = l.before[path];
+        let Some((s, m)) = after.get(path) else {
+            continue;
+        };
+        if (*s, *m) == (size, mtime) {
             continue;
         }
-        if let Some((s, m)) = after.get(path)
-            && (s != size || m != mtime)
-        {
+        if *s >= size && prefix_hash(path) == Some(*prefix) {
+            appended += 1;
+        } else {
             changed.push(path.display().to_string());
         }
     }
+    eprintln!(
+        "live: {} idle files checked, {appended} appended to by a running client",
+        l.prefixes.len()
+    );
     assert!(
         changed.is_empty(),
-        "idle archive files changed: {changed:?}"
+        "idle archive files rewritten: {changed:?}"
     );
 }
 
