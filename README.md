@@ -95,7 +95,9 @@ trovador import --dry-run                     # what would come over from spike
 trovador consent status                       # who may be continued
 trovador consent approve 27d1f434             # allow one session trovador did not start
 trovador consent policy approved              # ...and honour approvals
-trovador doctor                              # paths, limits, archive counts
+trovador gc                                  # what cached summaries and run-log lines could go
+trovador gc --apply                          # remove them (consent is never touched)
+trovador doctor                              # providers, archives, index, consent
 trovador serve                               # MCP over stdio
 ```
 
@@ -242,7 +244,9 @@ own state goes under `~/.trovador`: `index.db`, `consent.json`, `runs.jsonl`, `s
 `TROVADOR_CLAUDE_ARCHIVE`, `TROVADOR_CODEX_ARCHIVE`, `TROVADOR_CODEX_ARCHIVED`,
 `TROVADOR_HOME`, and choose the provider binaries with `TROVADOR_CLAUDE_BIN` and
 `TROVADOR_CODEX_BIN`. Limits are listed by `trovador doctor` and
-overridable with `TROVADOR_*` variables (see `src/limits.rs`).
+overridable with `TROVADOR_*` variables (see `src/limits.rs`). `TROVADOR_INDEX_REASONING=0`
+leaves reasoning records out of the index (416 MB to 290 MB on the development machine);
+transcripts still show them.
 
 ## Testing on a new machine
 

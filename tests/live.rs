@@ -452,7 +452,7 @@ fn sampled_transcripts_are_contiguous_capped_and_not_duplicated() {
 #[ignore = "reads this machine's real archives"]
 fn indexed_records_equal_the_transcript_for_sampled_sessions() {
     let l = live();
-    let idx = Index::open(&l.ctx.paths).unwrap();
+    let idx = Index::open(&l.ctx.paths, &l.ctx.limits).unwrap();
     let mut compared = 0;
     for e in &l.sample {
         if written_during_run(e, l.started) {
@@ -467,6 +467,7 @@ fn indexed_records_equal_the_transcript_for_sampled_sessions() {
         let expected: Vec<(usize, String, String)> = projection(e, &l.ctx.limits)
             .into_iter()
             .filter(|r| r.kind != RecordKind::Omitted && r.text.is_some())
+            .filter(|r| l.ctx.limits.index_reasoning || r.kind != RecordKind::Reasoning)
             .map(|r| {
                 let kind = serde_json::to_value(r.kind)
                     .unwrap()
@@ -518,7 +519,7 @@ fn phrase_from(text: &str, rng: &mut Rng) -> Option<(String, String)> {
 #[ignore = "reads this machine's real archives"]
 fn a_phrase_from_any_indexed_record_finds_its_session() {
     let l = live();
-    let idx = Index::open(&l.ctx.paths).unwrap();
+    let idx = Index::open(&l.ctx.paths, &l.ctx.limits).unwrap();
     let mut rng = Rng(l.seed ^ 0xfeed);
     let mut probes = 0;
     for e in &l.sample {
@@ -586,7 +587,7 @@ fn a_phrase_from_any_indexed_record_finds_its_session() {
 #[ignore = "reads this machine's real archives"]
 fn a_second_refresh_changes_only_what_was_written_since() {
     let l = live();
-    let mut idx = Index::open(&l.ctx.paths).unwrap();
+    let mut idx = Index::open(&l.ctx.paths, &l.ctx.limits).unwrap();
     let r = idx
         .refresh(&l.ctx.paths, &l.ctx.limits, &RefreshOpts::default())
         .unwrap();
@@ -622,8 +623,8 @@ fn a_rebuild_elsewhere_gives_the_same_records_per_session() {
     };
     sessions::reindex(&ctx2, true).unwrap();
     let (a, b) = (
-        Index::open(&l.ctx.paths).unwrap(),
-        Index::open(&ctx2.paths).unwrap(),
+        Index::open(&l.ctx.paths, &l.ctx.limits).unwrap(),
+        Index::open(&ctx2.paths, &ctx2.limits).unwrap(),
     );
     for e in &l.sample {
         if written_during_run(e, l.started) {
@@ -718,6 +719,8 @@ fn stable(mut v: Value, since: SystemTime) -> Value {
         }
     }
     if let Some(obj) = v.as_object_mut() {
+        // Counts of what the defaults hid move as sessions cross the active window
+        // between two calls a moment apart, and the note quotes those counts.
         for k in [
             "coverage",
             "total_sessions",
@@ -725,6 +728,10 @@ fn stable(mut v: Value, since: SystemTime) -> Value {
             "returned",
             "truncated",
             "sessions_matched",
+            "hidden",
+            "hidden_automated",
+            "note",
+            "absence_is_proof",
         ] {
             obj.remove(k);
         }

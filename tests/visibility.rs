@@ -186,7 +186,7 @@ fn a_projection_version_change_starts_a_fresh_index_file() {
         conn.execute("CREATE TABLE left_by_old_version (x INTEGER)", [])
             .unwrap();
     }
-    let idx = Index::open(&ctx.paths).unwrap();
+    let idx = Index::open(&ctx.paths, &ctx.limits).unwrap();
     assert_eq!(idx.status().unwrap().sessions, 0, "the old rows are gone");
     drop(idx);
     let conn = rusqlite::Connection::open(&db).unwrap();

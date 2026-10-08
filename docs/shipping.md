@@ -45,9 +45,9 @@ after #15 is in the person's hands: making the repository public, adding the
 | A long `ask` returns a task handle at once and reports progress, through MCP's task extension, which tower-mcp supports | A 10-minute Codex turn otherwise holds one tool call open for 10 minutes | 3 |
 | `since` and `until` on `list` and `search` | "What did I do last week" without a model call | 1, 7 |
 | `resume_blocked_by` names the call that works: `ask` with `about` and the same backend | The way to continue past a full context is not discoverable | 5 |
-| `trovador gc` for `summaries/` and `runs.jsonl` | Both grow without bound | |
-| Peak memory during a full build bounded by bytes queued for the writer, not file count | 586 MB peak measured | |
-| A way to leave reasoning out of the index | It raised the index from 287 MB to 415 MB | |
+| `trovador gc` for `summaries/` and `runs.jsonl` (done, #17) | Both grow without bound | |
+| A way to leave reasoning out of the index (done, #17: `TROVADOR_INDEX_REASONING=0`, 416 MB to 290 MB) | It raised the index from 287 MB to 415 MB | |
+| ~~Peak memory during a full build bounded by bytes queued for the writer~~ Dropped in #17 | Measured: one worker peaks no lower than eight (645 MB against 610 MB), Claude alone peaks at 77 MB, and three runs of the same build range from 539 to 651 MB. The writer queue is not the cause, and no single change moved the peak beyond that run-to-run spread. The build is a one-off of about 10 s | |
 
 ## Later
 

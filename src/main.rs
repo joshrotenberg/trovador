@@ -144,6 +144,16 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Remove cached summaries and run-log lines that will never be used again. A dry run
+    /// unless --apply. Consent is never touched.
+    Gc {
+        /// Also remove summaries made, and run-log lines written, longer ago than this.
+        #[arg(long, default_value = "90d")]
+        older_than: String,
+        /// Remove; without this, only report.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Which existing sessions trovador may continue. Only this command changes it.
     Consent {
         #[command(subcommand)]
@@ -410,6 +420,15 @@ fn main() -> ExitCode {
             }
         }
         Command::Consent { action } => consent_cmd(&ctx, action),
+        Command::Gc { older_than, apply } => match humantime::parse_duration(&older_than) {
+            Ok(d) => match trovador::gc::gc(&ctx, d, apply) {
+                Ok(r) => print(&r),
+                Err(e) => fail(e),
+            },
+            Err(_) => fail(format!(
+                "--older-than \"{older_than}\" is not a duration such as 90d or 12w"
+            )),
+        },
         Command::Summarize {
             id,
             backend,

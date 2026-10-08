@@ -5,6 +5,7 @@
 pub mod archive;
 pub mod consent;
 pub mod doctor;
+pub mod gc;
 pub mod import;
 pub mod index;
 pub mod limits;

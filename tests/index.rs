@@ -17,7 +17,7 @@ fn append(path: &std::path::Path, records: &[Value]) {
 }
 
 fn refresh(ctx: &Ctx) -> trovador::index::RefreshReport {
-    let mut idx = Index::open(&ctx.paths).unwrap();
+    let mut idx = Index::open(&ctx.paths, &ctx.limits).unwrap();
     idx.refresh(&ctx.paths, &ctx.limits, &RefreshOpts::default())
         .unwrap()
 }
@@ -26,7 +26,7 @@ fn refresh(ctx: &Ctx) -> trovador::index::RefreshReport {
 /// transcript read produces, with the same indexes, or a search hit's index would open the
 /// transcript at the wrong record.
 fn assert_index_matches_transcript(ctx: &Ctx, backend: Backend, id: &str) {
-    let idx = Index::open(&ctx.paths).unwrap();
+    let idx = Index::open(&ctx.paths, &ctx.limits).unwrap();
     let indexed = idx.session_records(backend, id).unwrap();
     let page = sessions::transcript(ctx, id, Some(backend), 0, Some(200))
         .unwrap()
@@ -91,7 +91,7 @@ fn an_append_continues_the_open_omitted_run_and_keeps_indexes_aligned() {
     let r2 = refresh(&ctx);
     assert_eq!((r2.appended, r2.reindexed), (1, 0));
     assert_index_matches_transcript(&ctx, Backend::Claude, ID_A);
-    let records = Index::open(&ctx.paths)
+    let records = Index::open(&ctx.paths, &ctx.limits)
         .unwrap()
         .session_records(Backend::Claude, ID_A)
         .unwrap();
@@ -128,7 +128,7 @@ fn a_young_codex_file_that_later_shows_its_item_stream_is_reindexed_not_appended
     let r = refresh(&ctx);
     assert_eq!((r.appended, r.reindexed), (0, 1));
     assert_index_matches_transcript(&ctx, Backend::Codex, ID_A);
-    let idx = Index::open(&ctx.paths).unwrap();
+    let idx = Index::open(&ctx.paths, &ctx.limits).unwrap();
     let users = idx
         .session_records(Backend::Codex, ID_A)
         .unwrap()
@@ -168,7 +168,7 @@ fn indexing_split_between_a_turn_and_its_copy_in_the_other_stream_matches_a_full
     let r = refresh(&ctx);
     assert_eq!((r.appended, r.reindexed), (1, 0));
     assert_index_matches_transcript(&ctx, Backend::Codex, ID_A);
-    let users = Index::open(&ctx.paths)
+    let users = Index::open(&ctx.paths, &ctx.limits)
         .unwrap()
         .session_records(Backend::Codex, ID_A)
         .unwrap()
@@ -251,7 +251,7 @@ fn a_vanished_session_is_dropped_but_an_unreadable_root_drops_nothing() {
     let _ = a;
     std::fs::remove_dir_all(&f.paths.claude_archive).unwrap();
     assert_eq!(refresh(&ctx).removed, 0);
-    let idx = Index::open(&ctx.paths).unwrap();
+    let idx = Index::open(&ctx.paths, &ctx.limits).unwrap();
     assert_eq!(idx.status().unwrap().sessions, 2);
 }
 
@@ -495,4 +495,48 @@ fn a_rebuild_reindexes_everything_from_an_empty_file() {
     let rebuilt = sessions::reindex(&ctx, true).unwrap();
     assert_eq!((rebuilt.reindexed, rebuilt.unchanged), (3, 0));
     assert_eq!(search(&ctx, "idempotency_key").sessions_matched, 2);
+}
+
+#[test]
+fn reasoning_can_be_left_out_of_the_index_and_changing_that_rebuilds_it() {
+    let f = Fixture::new();
+    f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "why is it slow"),
+            json!({"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "suspect the quadratic merge", "signature": "s"},
+                {"type": "text", "text": "Found it."}
+            ]}}),
+        ],
+        0,
+    );
+    let on = f.ctx();
+    let off = f.ctx_with(Limits {
+        index_reasoning: false,
+        ..limits()
+    });
+    assert_eq!(search(&on, "quadratic merge").sessions_matched, 1);
+
+    // The same home with the setting flipped: the file is replaced, not mixed.
+    let r = search(&off, "quadratic merge");
+    assert_eq!(r.sessions_matched, 0);
+    assert_eq!(r.coverage.refresh.reindexed, 1);
+    let kinds: Vec<String> = Index::open(&off.paths, &off.limits)
+        .unwrap()
+        .session_records(Backend::Claude, ID_A)
+        .unwrap()
+        .into_iter()
+        .map(|(_, k, _)| k)
+        .collect();
+    assert_eq!(kinds, vec!["user", "assistant"]);
+    // Transcripts still show it.
+    let t = sessions::transcript(&off, ID_A, None, 0, None).unwrap();
+    assert!(
+        t.page
+            .records
+            .iter()
+            .any(|r| r.kind == RecordKind::Reasoning)
+    );
 }
