@@ -23,7 +23,8 @@ offset to read from.
 - **Automated sessions crowd the results.** 1,334 of 1,587 local Claude sessions are
   `claude -p` runs, mostly started by tools. For `idempotency_key`, 20 of 43 hit sessions
   were `sdk-cli` or `exec` (*measured*). The `origin` filter exists, but it is opt-in.
-- **No time filter.** "Last week" can only be done by reading dates off the results.
+- **No time filter.** "Last week" could only be done by reading dates off the results.
+  `since` and `until` were added in #16.
 
 ## 2. An agent recalls earlier work
 
@@ -80,11 +81,8 @@ runs the other backend on it.
 **Steps.** `ask` with `about: <session>`, the same `backend`, and a prompt that says to
 continue the work.
 
-**Today.** Works mechanically. Nothing presents it as the way to do this: `resume_blocked_by`
-says "summarize or consult instead" but does not give the call.
-
-**Missing.** The blocked reason should name the call, for example `ask with about=<id>
-backend=<same>`.
+**Today.** Works. Since #16, `resume_blocked_by` names the call: `ask` with `about` set to
+the session and the same backend.
 
 ## 6. Pick up a run that was killed
 
@@ -97,12 +95,11 @@ transcript existed, which now reports that there is nothing to continue.
 
 > "What did I do yesterday, across both agents?"
 
-**Today.** Not supported. `sessions list` has no date filter. Summarizing every recent
-session works, but costs one model call per uncached session. spike's `digest` did this
-and was used twice.
+**Today.** Partly. `sessions list --since 1d` (#16) lists what was worked on, with titles
+and snippets, at no model cost. Summarizing each of those costs one model call per
+uncached session. spike's `digest` did this and was used twice.
 
-**Missing.** `since` and `until` on `list` and `search` cover most of it, and need no
-model. A digest that summarizes only what changed can come later.
+**Missing.** A digest that summarizes only what changed can come later.
 
 ## 8. Find the session behind a PR or a file
 

@@ -153,7 +153,7 @@ fn automated_sessions_are_left_out_unless_trovador_started_them() {
         "an explicit origin includes them"
     );
 
-    let listed = sessions::list(&ctx, &ListOpts::default());
+    let listed = sessions::list(&ctx, &ListOpts::default()).unwrap();
     let mut listed_ids: Vec<_> = listed
         .sessions
         .iter()
@@ -168,7 +168,8 @@ fn automated_sessions_are_left_out_unless_trovador_started_them() {
             include_automated: true,
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     assert_eq!(listed_all.returned, 3);
 }
 

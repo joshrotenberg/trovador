@@ -475,10 +475,10 @@ fn order_recent_puts_the_newest_session_first() {
 fn listing_reads_the_index_when_present_but_never_creates_it() {
     let f = corpus();
     let ctx = f.ctx();
-    let before = sessions::list(&ctx, &Default::default());
+    let before = sessions::list(&ctx, &Default::default()).unwrap();
     assert!(!trovador::index::db_path(&f.paths).exists());
     sessions::reindex(&ctx, false).unwrap();
-    let after = sessions::list(&ctx, &Default::default());
+    let after = sessions::list(&ctx, &Default::default()).unwrap();
     assert_eq!(
         serde_json::to_value(&before).unwrap(),
         serde_json::to_value(&after).unwrap()

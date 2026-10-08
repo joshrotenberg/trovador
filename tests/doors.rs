@@ -73,7 +73,8 @@ async fn mcp(f: &Fixture, args: Value) -> Value {
 #[tokio::test]
 async fn list_is_identical_from_the_library_the_cli_and_the_mcp_tool() {
     let f = fixture();
-    let lib = serde_json::to_value(sessions::list(&f.ctx(), &ListOpts::default())).unwrap();
+    let lib =
+        serde_json::to_value(sessions::list(&f.ctx(), &ListOpts::default()).unwrap()).unwrap();
     assert_eq!(lib["returned"], 2);
     assert_eq!(cli(&f, &["sessions", "list"]), lib);
     assert_eq!(mcp(&f, json!({"action": "list"})).await, lib);

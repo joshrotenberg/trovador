@@ -110,6 +110,11 @@ struct SessionsInput {
     /// (hidden by default).
     #[serde(default)]
     include_automated: bool,
+    /// For list: only sessions last written at or after this, as an RFC 3339 time, a date,
+    /// or a duration back from now such as 2d.
+    since: Option<String>,
+    /// For list: only sessions last written before this, in the same forms.
+    until: Option<String>,
     /// For list: sessions to return. For transcript: records per page.
     limit: Option<usize>,
     /// For transcript: the record index to start from.
@@ -161,8 +166,13 @@ fn sessions_call(
                 origin: input.origin.clone(),
                 include_subagents: input.include_subagents,
                 include_automated: input.include_automated,
+                since: input.since.clone(),
+                until: input.until.clone(),
             };
-            return json_result(&sessions::list(ctx, &list), opts);
+            return match sessions::list(ctx, &list) {
+                Ok(r) => json_result(&r, opts),
+                Err(e) => error_result(e, opts),
+            };
         }
         SessionsAction::Show => need_id().and_then(|id| {
             sessions::show(ctx, id, input.backend)

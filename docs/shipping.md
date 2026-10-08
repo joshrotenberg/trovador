@@ -43,8 +43,8 @@ after #15 is in the person's hands: making the repository public, adding the
 | Item | Why | Use case |
 |---|---|---|
 | A long `ask` returns a task handle at once and reports progress, through MCP's task extension, which tower-mcp supports | A 10-minute Codex turn otherwise holds one tool call open for 10 minutes | 3 |
-| `since` and `until` on `list` and `search` | "What did I do last week" without a model call | 1, 7 |
-| `resume_blocked_by` names the call that works: `ask` with `about` and the same backend | The way to continue past a full context is not discoverable | 5 |
+| `since` and `until` on `list` and `search` (done, #16) | "What did I do last week" without a model call | 1, 7 |
+| `resume_blocked_by` names the call that works: `ask` with `about` and the same backend (done, #16) | The way to continue past a full context is not discoverable | 5 |
 | `trovador gc` for `summaries/` and `runs.jsonl` | Both grow without bound | |
 | Peak memory during a full build bounded by bytes queued for the writer, not file count | 586 MB peak measured | |
 | A way to leave reasoning out of the index | It raised the index from 287 MB to 415 MB | |
