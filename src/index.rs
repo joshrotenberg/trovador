@@ -135,19 +135,15 @@ impl Index {
     /// Opens the index only if it already exists. Reading a list must not create state.
     pub fn open_existing(paths: &Paths) -> Option<Self> {
         let path = db_path(paths);
-        if !path.is_file() {
+        // An index from another version is about to be replaced; its rows describe a
+        // projection this build would not produce, so it is treated as absent.
+        if !path.is_file() || stored_versions(&path) != Some((SCHEMA_VERSION, PROJECTION_VERSION)) {
             return None;
         }
         let conn = Connection::open(&path).ok()?;
         let index = Self { conn, path };
         index.configure().ok()?;
-        let version: Option<i64> = index
-            .conn
-            .query_row("SELECT value FROM meta WHERE key = 'schema'", [], |r| {
-                r.get(0)
-            })
-            .ok();
-        (version == Some(SCHEMA_VERSION)).then_some(index)
+        Some(index)
     }
 
     fn configure(&self) -> Result<()> {

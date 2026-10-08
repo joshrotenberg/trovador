@@ -97,6 +97,7 @@ pub const FORK_ID: &str = "f0f0f0f0-0000-4000-8000-00000000000f";
 pub const CODEX_NEW_ID: &str = "c0dec0de-0000-4000-8000-00000000000c";
 
 const FAKE_CLAUDE: &str = r#"#!/bin/bash
+if [ "$1" = "--version" ]; then echo "9.9.9 (fake claude)"; exit 0; fi
 # Speaks claude -p in stream-json or json. A prompt whose first line contains "slow" sleeps
 # past any test timeout; "fail" ends with an error result. --no-session-persistence writes
 # no transcript. Full prompts are appended to the .prompts log.
@@ -157,6 +158,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","ses
 "#;
 
 const FAKE_CODEX: &str = r#"#!/bin/bash
+if [ "$1" = "--version" ]; then echo "codex-cli 0.0.0-fake"; exit 0; fi
 # Speaks codex exec --json, for exec and exec resume.
 # One write per invocation, so concurrent runs cannot interleave their lines.
 rec="$(printf '%s\n' "---" "cwd=$PWD" "depth=$TROVADOR_DEPTH"; printf 'arg=%s\n' "$@")"
