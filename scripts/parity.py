@@ -39,7 +39,7 @@ def run(cmd, timeout=900):
 
 def inventory(spike, trov):
     s, s_t = run([spike, "list", "--limit", "1000000", "--json"])
-    t, t_t = run([trov, "sessions", "list", "--include-subagents", "--limit", "1000000"])
+    t, t_t = run([trov, "sessions", "list", "--include-subagents", "--include-automated", "--limit", "1000000"])
     s_ids = {(r["backend"], r["session_id"]) for r in s["sessions"]}
     t_rows = {(r["backend"], r["session_id"]): r for r in t["sessions"]}
     t_ids = set(t_rows)
@@ -118,8 +118,10 @@ def search(spike, trov, t_rows):
     results = []
     for q in REAL_QUERIES:
         s, s_t = run([spike, "search", q, "--limit", "100000", "--json"], timeout=1800)
-        t_terms, t_t = run([trov, "search", q, "--include-subagents", "--limit", "100000", "--per-session", "1"])
-        t_lit, t_lt = run([trov, "search", re.escape(q), "--regex", "--include-subagents", "--limit", "100000", "--per-session", "1"])
+        # spike has neither default, so both are turned off for a like-for-like comparison.
+        every = ["--include-subagents", "--include-active", "--include-automated"]
+        t_terms, t_t = run([trov, "search", q, *every, "--limit", "100000", "--per-session", "1"])
+        t_lit, t_lt = run([trov, "search", re.escape(q), "--regex", *every, "--limit", "100000", "--per-session", "1"])
         s_ids = {(h["backend"], h["session_id"]) for h in s["hits"]}
         lit_ids = {(h["backend"], h["session_id"]) for h in t_lit["hits"]}
         term_ids = {(h["backend"], h["session_id"]) for h in t_terms["hits"]}

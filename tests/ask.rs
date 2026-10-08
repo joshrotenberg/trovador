@@ -425,7 +425,7 @@ fn the_depth_limit_refuses_a_run() {
     let f = Fixture::new().with_fakes();
     let ctx = f.ctx_with(Limits {
         max_depth: 0,
-        ..Default::default()
+        ..limits()
     });
     assert!(matches!(
         ask(&ctx, prompt("x")),

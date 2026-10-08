@@ -57,6 +57,15 @@ enum Command {
         origin: Option<String>,
         #[arg(long)]
         include_subagents: bool,
+        /// Include sessions written in the last few minutes (TROVADOR_ACTIVE_WINDOW_S).
+        #[arg(long)]
+        include_active: bool,
+        /// Include claude -p and codex exec sessions trovador did not start.
+        #[arg(long)]
+        include_automated: bool,
+        /// Leave out this session id.
+        #[arg(long)]
+        exclude_session: Option<String>,
         #[arg(long)]
         limit: Option<usize>,
         /// Matching records shown per session.
@@ -193,6 +202,9 @@ enum SessionsCmd {
         /// Include sessions started by another session.
         #[arg(long)]
         include_subagents: bool,
+        /// Include claude -p and codex exec sessions trovador did not start.
+        #[arg(long)]
+        include_automated: bool,
     },
     /// One session's metadata, resumability, and resume command.
     Show {
@@ -272,6 +284,7 @@ fn main() -> ExitCode {
                 limit,
                 origin,
                 include_subagents,
+                include_automated,
             } => print(&sessions::list(
                 &ctx,
                 &ListOpts {
@@ -280,6 +293,7 @@ fn main() -> ExitCode {
                     limit,
                     origin,
                     include_subagents,
+                    include_automated,
                 },
             )),
             SessionsCmd::Show { id, backend } => match sessions::show(&ctx, &id, backend) {
@@ -304,6 +318,9 @@ fn main() -> ExitCode {
             project,
             origin,
             include_subagents,
+            include_active,
+            include_automated,
+            exclude_session,
             limit,
             per_session,
             recent,
@@ -316,6 +333,9 @@ fn main() -> ExitCode {
                 project,
                 origin,
                 include_subagents,
+                include_active,
+                include_automated,
+                exclude_session,
                 limit,
                 per_session,
                 order: if recent {

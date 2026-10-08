@@ -260,6 +260,18 @@ pub fn record_spawned(paths: &Paths, backend: Backend, id: &str) -> Result<(), C
     .map(|_| ())
 }
 
+/// Every session trovador started, as `backend/id`. Empty when the state cannot be read.
+pub fn spawned_keys(paths: &Paths) -> Vec<String> {
+    load(paths)
+        .map(|(s, _)| {
+            s.spawned
+                .iter()
+                .map(|r| format!("{}/{}", r.backend, r.session_id))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn set_level(paths: &Paths, level: Level) -> Result<Status, ConsentError> {
     update(paths, |s| {
         let changed = s.level != level;

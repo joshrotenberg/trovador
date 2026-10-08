@@ -618,7 +618,7 @@ fn a_page_stops_at_the_response_size_cap_and_says_so() {
     f.claude("-w", ID_A, &records, 0);
     let limits = trovador::Limits {
         response_max_chars: 10_000,
-        ..Default::default()
+        ..limits()
     };
     let p = sessions::transcript(&f.ctx_with(limits), ID_A, None, 0, None)
         .unwrap()

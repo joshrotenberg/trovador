@@ -292,7 +292,7 @@ fn a_search_that_ran_out_of_budget_is_not_proof_of_absence() {
     f.claude("-w", ID_A, &[claude_user("/w", "needle")], 0);
     let ctx = f.ctx_with(Limits {
         index_budget_ms: 0,
-        ..Default::default()
+        ..limits()
     });
     let r = search(&ctx, "needle");
     assert_eq!(r.coverage.refresh.pending, 1);
@@ -326,7 +326,7 @@ fn corpus() -> Fixture {
     f.codex(
         ID_B,
         &[
-            codex_meta("/code/beta", json!("exec")),
+            codex_meta("/code/beta", json!("vscode")),
             codex_user_item("the idempotency key is missing"),
             codex_agent_item("added idempotency_key to the request"),
         ],
@@ -439,7 +439,7 @@ fn filters_narrow_by_backend_project_and_origin() {
     );
     assert_eq!(
         with(SearchOpts {
-            origin: Some("exec".into()),
+            origin: Some("vscode".into()),
             ..base()
         }),
         1
