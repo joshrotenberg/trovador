@@ -14,6 +14,20 @@ expected soon after. **Later** waits for a use that needs it.
 Decided 2026-10-07: both search defaults apply to both doors; automated sessions are
 excluded by default except those trovador started.
 
+Status: every item below is merged except release mechanics, which is #15. What remains
+after #15 is in the person's hands: making the repository public, adding the
+`COMMITTER_TOKEN` and `CARGO_REGISTRY_TOKEN` secrets, and setting `RELEASE_ENABLED`.
+
+| Item | Done in |
+|---|---|
+| Search leaves out the calling session | #12 |
+| Automated sessions out of default results | #12 |
+| Transcripts marked untrusted | #13 |
+| Secrets redacted by default | #13 |
+| `serve --read-only` | #13 |
+| `doctor` checks providers | #14 |
+| Release mechanics | #15 |
+
 | Item | Why | Use case |
 |---|---|---|
 | Search leaves out the calling session: an `exclude_session` parameter, and by default sessions written in the last 10 minutes, with `include_active` to opt back in. The same default for the CLI and MCP | An agent searching for earlier work finds its own conversation first; this happened when searching from the development session | 2 |
