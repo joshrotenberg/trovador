@@ -189,10 +189,11 @@ pub async fn ask(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
 }
 
 /// Cuts a reply longer than `response_max_chars` and saves the whole of it under the run
-/// id, so the rest can be read by offset.
+/// id, so the rest can be read by offset. The saved copy is the raw reply; every read
+/// redacts it whole before cutting, as this first part is.
 fn bound(ctx: &Ctx, mut r: AskResult) -> AskResult {
     let (first, truncated) = crate::output::part(
-        &r.result,
+        &crate::output::source(&r.result, &ctx.limits),
         0,
         ctx.limits.response_max_chars,
         crate::output::continue_run(&r.run_id),
