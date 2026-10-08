@@ -81,6 +81,7 @@ trovador sessions list --include-subagents   # also sessions started by other se
 trovador sessions list --since 1d            # last written in the past day (also 36h, 1w, 2026-10-01)
 trovador sessions show 27d1f434              # id or unambiguous prefix
 trovador sessions transcript 27d1f434 --offset 200 --limit 50
+trovador sessions output 0b5c...e1 --offset 100000 # the rest of a truncated ask reply
 trovador search idempotency_key              # words and "quoted phrases", all required
 trovador search "consent" --since 1w         # only sessions written in the last week
 trovador search 'consent NOT spawned' --fts  # FTS5 syntax
@@ -97,14 +98,14 @@ trovador import --dry-run                     # what would come over from spike
 trovador consent status                       # who may be continued
 trovador consent approve 27d1f434             # allow one session trovador did not start
 trovador consent policy approved              # ...and honour approvals
-trovador gc                                  # what cached summaries and run-log lines could go
+trovador gc                                  # what cached summaries, saved replies, and run-log lines could go
 trovador gc --apply                          # remove them (consent is never touched)
 trovador doctor                              # providers, archives, index, consent
 trovador serve                               # MCP over stdio
 ```
 
 Every command prints one JSON document. The MCP `sessions` tool takes the same inputs as an
-`action` of `list`, `show`, or `transcript`, and the `search` tool takes the same inputs as
+`action` of `list`, `show`, `transcript`, or `output`, and the `search` tool takes the same inputs as
 `trovador search`; both return the same JSON as the CLI. Resources
 `session://{backend}/{id}` and `session://{backend}/{id}/transcript` return `show` and the
 first transcript page.
@@ -191,7 +192,13 @@ another turn.
   to both backends. `bypassPermissions` and Codex's `danger-full-access` are refused.
 - **Depth.** Every session trovador starts can reach trovador again. `TROVADOR_DEPTH` is
   passed down and a run at `TROVADOR_MAX_DEPTH` (2) is refused.
-- **Log.** Every run's start and end is a line in `~/.trovador/runs.jsonl`, and both carry the `run_id` that the `ask` result returns.
+- **Log.** Every run's start and end is a line in `~/.trovador/runs.jsonl`, and both carry
+  the `run_id` that the `ask` result returns.
+- **Long replies.** A reply longer than `TROVADOR_RESPONSE_MAX_CHARS` (100,000) is cut to
+  that many characters and `result_truncated` says so. The whole reply is saved in
+  `~/.trovador/outputs/<run_id>.txt` (mode 0600), and the rest is read with
+  `trovador sessions output <run_id> --offset N` or the `sessions` tool with
+  `action: output`.
 
 ## Summaries and consulting
 
@@ -204,6 +211,9 @@ Summary runs use `--no-session-persistence`, so they leave no transcript in the 
 are never offered for continuation. The result is cached in `~/.trovador/summaries/` against
 the source file's size and mtime; a cache hit costs nothing and says `cached: true`. The
 `session://{backend}/{id}/summary` resource returns only a cached summary and never makes one.
+A summary longer than `TROVADOR_RESPONSE_MAX_CHARS` is returned in parts, each marked
+`truncated`; `offset` (`--offset` in the CLI) reads the next part from the cache. Consult
+always uses the whole summary.
 
 `ask` with `about: <session>` consults instead of continuing: it summarizes that session and
 starts a new session, on the other backend unless `backend` says otherwise, seeded with the
@@ -241,7 +251,8 @@ report a check (`sessions show` includes one) but has no tool that changes it.
 
 trovador reads `~/.claude/projects`, `~/.codex/sessions`, and `~/.codex/archived_sessions`
 and never writes to any of them itself; the providers write there when `ask` runs them. Its
-own state goes under `~/.trovador`: `index.db`, `consent.json`, `runs.jsonl`, `summaries/`.
+own state goes under `~/.trovador`: `index.db`, `consent.json`, `runs.jsonl`, `summaries/`,
+`outputs/`.
 `sessions list` reads the index when it exists but never creates it. Override the paths with
 `TROVADOR_CLAUDE_ARCHIVE`, `TROVADOR_CODEX_ARCHIVE`, `TROVADOR_CODEX_ARCHIVED`,
 `TROVADOR_HOME`, and choose the provider binaries with `TROVADOR_CLAUDE_BIN` and

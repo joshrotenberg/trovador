@@ -84,8 +84,12 @@ pub struct AskResult {
     pub session_id: Option<String>,
     /// started, continued, or forked.
     pub verb: String,
-    /// The provider's final message.
+    /// The provider's final message, or its first `response_max_chars` characters.
     pub result: String,
+    /// Set when `result` is only the start of the reply. The whole reply is saved and read
+    /// back by `run_id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_truncated: Option<crate::output::Truncated>,
     pub is_error: bool,
     pub timed_out: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -177,10 +181,34 @@ fn depth() -> usize {
 
 /// Starts, continues, forks, or consults, and runs one turn.
 pub async fn ask(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
-    match opts.about.as_deref().filter(|a| !a.is_empty()) {
+    let r = match opts.about.as_deref().filter(|a| !a.is_empty()) {
         Some(about) => consult(ctx, opts, about).await,
         None => run_turn(ctx, opts).await,
+    }?;
+    Ok(bound(ctx, r))
+}
+
+/// Cuts a reply longer than `response_max_chars` and saves the whole of it under the run
+/// id, so the rest can be read by offset.
+fn bound(ctx: &Ctx, mut r: AskResult) -> AskResult {
+    let (first, truncated) = crate::output::part(
+        &r.result,
+        0,
+        ctx.limits.response_max_chars,
+        crate::output::continue_run(&r.run_id),
+    );
+    let Some(mut truncated) = truncated else {
+        return r;
+    };
+    if let Err(e) = crate::output::save(&ctx.paths, &r.run_id, &r.result) {
+        truncated.continue_with = None;
+        r.warnings.push(format!(
+            "the whole reply could not be saved, so the rest is lost: {e}"
+        ));
     }
+    r.result = first;
+    r.result_truncated = Some(truncated);
+    r
 }
 
 /// Every check that needs nothing but the request, run before anything can start, spend,
@@ -445,6 +473,7 @@ async fn run_turn(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
         session_id,
         verb: verb.into(),
         result: seen.result.or(seen.last_text).unwrap_or_default(),
+        result_truncated: None,
         is_error,
         timed_out,
         error,

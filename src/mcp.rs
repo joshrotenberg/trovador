@@ -81,6 +81,9 @@ struct SummarizeInput {
     force: bool,
     /// Model for the summary; haiku by default.
     model: Option<String>,
+    /// The character to start from, for the next part of a summary longer than the
+    /// response budget (follow truncated.next_offset).
+    offset: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
@@ -89,11 +92,13 @@ enum SessionsAction {
     List,
     Show,
     Transcript,
+    Output,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SessionsInput {
     /// list: find sessions. show: one session's metadata. transcript: one page of records.
+    /// output: the rest of an ask reply that was longer than the response budget.
     action: SessionsAction,
     /// For show and transcript: a session id or an unambiguous prefix.
     session_id: Option<String>,
@@ -117,8 +122,11 @@ struct SessionsInput {
     until: Option<String>,
     /// For list: sessions to return. For transcript: records per page.
     limit: Option<usize>,
-    /// For transcript: the record index to start from.
+    /// For transcript: the record index to start from. For output: the character to start
+    /// from.
     offset: Option<usize>,
+    /// For output: the run_id of the ask whose reply was truncated.
+    run_id: Option<String>,
 }
 
 /// Serializes a response the way the CLI does, so both doors return the same JSON.
@@ -190,6 +198,15 @@ fn sessions_call(
             .map(|t| json_result(&t, opts))
             .map_err(|e| e.to_string())
         }),
+        SessionsAction::Output => input
+            .run_id
+            .as_deref()
+            .ok_or_else(|| "run_id is required for output".to_string())
+            .and_then(|id| {
+                crate::output::read(ctx, id, input.offset.unwrap_or(0))
+                    .map(|o| json_result(&o, opts))
+                    .map_err(|e| e.to_string())
+            }),
     };
     // A lookup miss is the caller's to fix, so it comes back as a tool error they can read
     // rather than a protocol error.
@@ -251,8 +268,9 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
         .description(format!(
             "List, inspect, and read local Claude Code and Codex sessions. action=list finds \
              sessions newest first; action=show gives one session's metadata and resume \
-             command; action=transcript pages through its records (follow next_offset). \
-             Reads only; costs no model tokens.{UNTRUSTED}"
+             command; action=transcript pages through its records (follow next_offset); \
+             action=output reads the rest of an ask reply that was truncated, by run_id and \
+             offset. Reads only; costs no model tokens.{UNTRUSTED}"
         ))
         .read_only_safe()
         .handler(move |input: SessionsInput| {
@@ -332,7 +350,10 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
                 )
                 .await
                 {
-                    Ok(s) => json_result(&s, opts),
+                    Ok(s) => json_result(
+                        &crate::summary::part(s, input.offset.unwrap_or(0), &ctx.limits),
+                        opts,
+                    ),
                     Err(e) => error_result(e, opts),
                 }
             }
@@ -348,13 +369,14 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
             let ctx = c.clone();
             async move {
                 let (backend, id) = template_args(&vars)?;
+                let limits = ctx.limits.clone();
                 let found = blocking(move || {
                     crate::archive::find_session(&ctx.paths, &id, backend)
                         .map(|e| crate::summary::cached(&ctx, &e))
                 })
                 .await?;
                 match found {
-                    Ok(Some(s)) => resource_json(uri, &s, opts),
+                    Ok(Some(s)) => resource_json(uri, &crate::summary::part(s, 0, &limits), opts),
                     Ok(None) => Err(tower_mcp::Error::invalid_params(
                         "no current summary; the summarize tool makes one",
                     )),

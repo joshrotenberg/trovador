@@ -12,6 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, ArchiveEntry, Backend, LookupError};
+use crate::output::{self, Truncated};
 use crate::sessions::Ctx;
 use crate::transcript::{self, Projection, RecordKind};
 
@@ -43,6 +44,10 @@ pub struct Summary {
     pub source_size: u64,
     pub source_mtime_ns: i64,
     pub prompt_version: u32,
+    /// Set when `summary` is one part of a summary longer than `response_max_chars`. The
+    /// cache always holds the whole text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<Truncated>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -139,6 +144,23 @@ fn pick(n: usize, max: usize) -> Vec<usize> {
     let head = max.div_ceil(2);
     let tail = max - head;
     (0..head).chain(n - tail..n).collect()
+}
+
+/// One part of a summary, at most `response_max_chars` of it from character `offset`. What
+/// both doors return; consult uses the whole summary from [`summarize`].
+pub fn part(s: Summary, offset: usize, limits: &crate::limits::Limits) -> Summary {
+    let id = s.session_id.clone();
+    let backend = s.backend;
+    let (summary, truncated) = output::part(&s.summary, offset, limits.response_max_chars, |n| {
+        format!(
+            "summarize session_id={id} backend={backend} offset={n}; CLI: trovador summarize {id} --backend {backend} --offset {n}. Served from the cache at no cost while the session is unchanged"
+        )
+    });
+    Summary {
+        summary,
+        truncated,
+        ..s
+    }
 }
 
 pub async fn summarize(
@@ -247,6 +269,7 @@ pub async fn summarize(
         source_size: e.size_bytes,
         source_mtime_ns: mtime_ns(e.mtime),
         prompt_version: PROMPT_VERSION,
+        truncated: None,
     };
     // A summary that cannot be cached is still returned; it just costs again next time.
     let _ = store(ctx, &s);

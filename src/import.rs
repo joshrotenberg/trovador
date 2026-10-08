@@ -219,6 +219,7 @@ fn import_summary(ctx: &Ctx, path: &Path, dry_run: bool) -> Option<Outcome> {
             source_size: e.size_bytes,
             source_mtime_ns: summary::mtime_ns(e.mtime),
             prompt_version: summary::PROMPT_VERSION,
+            truncated: None,
         };
         summary::store(ctx, &imported).ok()?;
     }

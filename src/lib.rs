@@ -10,6 +10,7 @@ pub mod import;
 pub mod index;
 pub mod limits;
 pub mod mcp;
+pub mod output;
 pub mod paths;
 pub mod redact;
 pub mod run;
