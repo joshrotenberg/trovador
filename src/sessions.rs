@@ -103,6 +103,27 @@ pub struct ListOpts {
     /// An explicit `origin` includes them too.
     #[serde(default)]
     pub include_automated: bool,
+    /// Only sessions last written at or after this: an RFC 3339 time, a date, or a
+    /// duration back from now such as `2d`.
+    pub since: Option<String>,
+    /// Only sessions last written before this, in the same forms as `since`.
+    pub until: Option<String>,
+}
+
+/// `since` and `until` as times, or the error to return for a value that does not parse.
+pub(crate) fn window(
+    since: Option<&str>,
+    until: Option<&str>,
+) -> Result<(Option<std::time::SystemTime>, Option<std::time::SystemTime>), Error> {
+    let now = std::time::SystemTime::now();
+    let parse = |v: Option<&str>, name: &str| {
+        v.filter(|s| !s.trim().is_empty())
+            .map(|s| {
+                crate::timespec::parse(s, now).map_err(|e| Error::Query(format!("{name}: {e}")))
+            })
+            .transpose()
+    };
+    Ok((parse(since, "since")?, parse(until, "until")?))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -134,7 +155,8 @@ fn automated_hidden(
 
 /// Newest first. Metadata is read only for sessions that might be returned, and the scan
 /// stops once the list is full (spike#90: the list loop once read every head regardless).
-pub fn list(ctx: &Ctx, opts: &ListOpts) -> ListResult {
+pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
+    let (since, until) = window(opts.since.as_deref(), opts.until.as_deref())?;
     let all: Vec<ArchiveEntry> = archive::scan_all(&ctx.paths)
         .into_iter()
         .filter(|e| opts.backend.is_none_or(|b| e.backend == b))
@@ -163,6 +185,13 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> ListResult {
             truncated = true;
             break;
         }
+        // Newest first, so everything after this is older still.
+        if since.is_some_and(|s| e.mtime < s) {
+            break;
+        }
+        if until.is_some_and(|u| e.mtime >= u) {
+            continue;
+        }
         examined += 1;
         let meta = cached_meta(&cached, e).unwrap_or_else(|| archive::read_meta(e, &ctx.limits));
         if meta.subagent && !opts.include_subagents {
@@ -190,14 +219,14 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> ListResult {
         }
         sessions.push(row(e, meta, &ctx.limits));
     }
-    ListResult {
+    Ok(ListResult {
         total_sessions: all.len(),
         examined,
         returned: sessions.len(),
         truncated,
         hidden_automated,
         sessions,
-    }
+    })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -336,7 +365,10 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         .per_session
         .unwrap_or(ctx.limits.per_session_default)
         .max(1);
+    let (since, until) = window(opts.since.as_deref(), opts.until.as_deref())?;
     let vis = Visibility {
+        since_ns: since.map(crate::timespec::ns),
+        until_ns: until.map(crate::timespec::ns),
         active_since_ns: (!opts.include_active && ctx.limits.active_window_s > 0).then(|| {
             let cutoff = std::time::SystemTime::now()
                 - Duration::from_secs(ctx.limits.active_window_s as u64);

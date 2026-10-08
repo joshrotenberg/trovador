@@ -78,9 +78,11 @@ trovador sessions list                       # newest first, top-level sessions 
 trovador sessions list --project trovador    # project path contains this text
 trovador sessions list --origin cli          # how it was started
 trovador sessions list --include-subagents   # also sessions started by other sessions
+trovador sessions list --since 1d            # last written in the past day (also 36h, 1w, 2026-10-01)
 trovador sessions show 27d1f434              # id or unambiguous prefix
 trovador sessions transcript 27d1f434 --offset 200 --limit 50
 trovador search idempotency_key              # words and "quoted phrases", all required
+trovador search "consent" --since 1w         # only sessions written in the last week
 trovador search 'consent NOT spawned' --fts  # FTS5 syntax
 trovador search 'retry_after:\s*\d+' --regex # regular expression, newest first
 trovador index                               # bring the index fully up to date

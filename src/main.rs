@@ -66,6 +66,12 @@ enum Command {
         /// Leave out this session id.
         #[arg(long)]
         exclude_session: Option<String>,
+        /// Only sessions last written at or after this: 2026-10-01, an RFC 3339 time, or 2d.
+        #[arg(long)]
+        since: Option<String>,
+        /// Only sessions last written before this, in the same forms.
+        #[arg(long)]
+        until: Option<String>,
         #[arg(long)]
         limit: Option<usize>,
         /// Matching records shown per session.
@@ -215,6 +221,12 @@ enum SessionsCmd {
         /// Include claude -p and codex exec sessions trovador did not start.
         #[arg(long)]
         include_automated: bool,
+        /// Only sessions last written at or after this: 2026-10-01, an RFC 3339 time, or 2d.
+        #[arg(long)]
+        since: Option<String>,
+        /// Only sessions last written before this, in the same forms.
+        #[arg(long)]
+        until: Option<String>,
     },
     /// One session's metadata, resumability, and resume command.
     Show {
@@ -295,7 +307,9 @@ fn main() -> ExitCode {
                 origin,
                 include_subagents,
                 include_automated,
-            } => print(&sessions::list(
+                since,
+                until,
+            } => match sessions::list(
                 &ctx,
                 &ListOpts {
                     backend,
@@ -304,8 +318,13 @@ fn main() -> ExitCode {
                     origin,
                     include_subagents,
                     include_automated,
+                    since,
+                    until,
                 },
-            )),
+            ) {
+                Ok(r) => print(&r),
+                Err(e) => fail(e),
+            },
             SessionsCmd::Show { id, backend } => match sessions::show(&ctx, &id, backend) {
                 Ok(d) => print(&d),
                 Err(e) => fail(e),
@@ -331,6 +350,8 @@ fn main() -> ExitCode {
             include_active,
             include_automated,
             exclude_session,
+            since,
+            until,
             limit,
             per_session,
             recent,
@@ -346,6 +367,8 @@ fn main() -> ExitCode {
                 include_active,
                 include_automated,
                 exclude_session,
+                since,
+                until,
                 limit,
                 per_session,
                 order: if recent {

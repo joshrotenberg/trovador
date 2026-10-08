@@ -225,7 +225,7 @@ fn list_is_newest_first_and_hides_subagents_unless_asked() {
     let ids = |r: &sessions::ListResult| -> Vec<String> {
         r.sessions.iter().map(|s| s.session_id.clone()).collect()
     };
-    let default = sessions::list(&f.ctx(), &ListOpts::default());
+    let default = sessions::list(&f.ctx(), &ListOpts::default()).unwrap();
     assert_eq!(ids(&default), vec![ID_C, ID_A]);
     assert_eq!(default.total_sessions, 3);
 
@@ -235,7 +235,8 @@ fn list_is_newest_first_and_hides_subagents_unless_asked() {
             include_subagents: true,
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     assert_eq!(ids(&all), vec![ID_B, ID_C, ID_A]);
 
     let cli_only = sessions::list(
@@ -244,7 +245,8 @@ fn list_is_newest_first_and_hides_subagents_unless_asked() {
             origin: Some("cli".into()),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     assert_eq!(ids(&cli_only), vec![ID_C, ID_A]);
 }
 
@@ -267,7 +269,8 @@ fn a_project_filter_matches_where_the_session_lives_now() {
             project: Some("trovador".into()),
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     assert_eq!(r.returned, 1);
     assert_eq!(r.sessions[0].session_id, ID_A);
 }
@@ -278,11 +281,7 @@ fn a_session_over_the_resume_ceiling_says_why_it_cannot_resume() {
     f.claude("-w", ID_A, &[claude_user("/w", &"z".repeat(950_000))], 0);
     let d = sessions::show(&f.ctx(), ID_A, None).unwrap();
     assert!(!d.row.resumable);
-    assert!(
-        d.resume_blocked_by
-            .unwrap()
-            .contains("summarize or consult")
-    );
+    assert!(d.resume_blocked_by.unwrap().contains("ask with about"));
 }
 
 // --- transcripts -----------------------------------------------------------
@@ -674,7 +673,7 @@ fn an_archived_codex_thread_is_still_listed_and_marked() {
         &[codex_meta("/w", json!("cli")), codex_user_item("old work")],
         20,
     );
-    let r = sessions::list(&f.ctx(), &ListOpts::default());
+    let r = sessions::list(&f.ctx(), &ListOpts::default()).unwrap();
     assert_eq!(r.total_sessions, 2);
     let archived: Vec<_> = r.sessions.iter().filter(|s| s.archived).collect();
     assert_eq!(archived.len(), 1);
@@ -698,6 +697,7 @@ fn claude_subagent_transcripts_are_not_listed_as_sessions() {
             include_subagents: true,
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     assert_eq!(r.total_sessions, 1);
 }
