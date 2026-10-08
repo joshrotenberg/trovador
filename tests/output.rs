@@ -227,3 +227,63 @@ async fn gc_removes_saved_replies_past_its_cutoff() {
         Err(OutputError::NotFound(_))
     ));
 }
+
+const KEY: &str = "sk-ant-api03-AAAAAAAAAAbbbbbbbbbbCCCCCCCCCCdddddddddd";
+
+/// No part, from any offset, may carry a recognisable piece of KEY.
+fn assert_no_fragment(part: &str, at: usize) {
+    for piece in ["AAAA", "bbbb", "CCCC", "dddd", "api03", "ant-"] {
+        assert!(!part.contains(piece), "offset {at}: {part:?} holds {piece}");
+    }
+}
+
+#[tokio::test]
+async fn no_offset_returns_part_of_a_secret() {
+    // Pre-release review: parts were cut before redaction, so an offset one character into
+    // a key, or a key straddling a part boundary, returned the rest of it in the clear.
+    let f = Fixture::new().with_fakes();
+    let ctx = small(&f);
+    let r = run::ask(
+        &ctx,
+        &AskOpts {
+            prompt: format!("use {KEY} now"),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_no_fragment(&r.result, 0);
+    let total = r.result_truncated.as_ref().unwrap().total_chars;
+    for offset in 0..total {
+        let part = output::read(&ctx, &r.run_id, offset).unwrap();
+        assert_no_fragment(&part.text, offset);
+    }
+
+    f.claude("-w", ID_A, &[claude_user("/w", "x")], 10);
+    let mut s = summary::summarize(&ctx, ID_A, None, false, None)
+        .await
+        .unwrap();
+    s.summary = format!("the key was {KEY} and it was rotated");
+    let total = summary::part(s.clone(), 0, &ctx.limits)
+        .truncated
+        .unwrap()
+        .total_chars;
+    for offset in 0..total {
+        assert_no_fragment(
+            &summary::part(s.clone(), offset, &ctx.limits).summary,
+            offset,
+        );
+    }
+
+    // --no-redact still returns the key whole, in order.
+    let mut raw = ctx.clone();
+    raw.limits.redact = false;
+    let mut text = String::new();
+    let mut next = Some(0);
+    while let Some(offset) = next {
+        let part = output::read(&raw, &r.run_id, offset).unwrap();
+        text.push_str(&part.text);
+        next = part.truncated.and_then(|t| t.next_offset);
+    }
+    assert!(text.contains(KEY), "{text}");
+}

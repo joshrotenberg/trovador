@@ -155,7 +155,8 @@ fn pick(n: usize, max: usize) -> Vec<usize> {
 pub fn part(s: Summary, offset: usize, limits: &crate::limits::Limits) -> Summary {
     let id = s.session_id.clone();
     let backend = s.backend;
-    let (summary, truncated) = output::part(&s.summary, offset, limits.response_max_chars, |n| {
+    let text = output::source(&s.summary, limits);
+    let (summary, truncated) = output::part(&text, offset, limits.response_max_chars, |n| {
         format!(
             "summarize session_id={id} backend={backend} offset={n}; CLI: trovador summarize {id} --backend {backend} --offset {n}. Served from the cache at no cost while the session is unchanged"
         )
