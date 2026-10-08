@@ -4,7 +4,7 @@
 //! serialized whole and written with a single call while holding `runs.lock`. gc takes
 //! the same lock while it rewrites the file, so no record lands in a file being replaced.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -18,8 +18,8 @@ pub fn path(paths: &Paths) -> PathBuf {
 
 /// An exclusive lock on the log, held until the returned file is dropped.
 pub fn lock(paths: &Paths) -> std::io::Result<File> {
-    std::fs::create_dir_all(&paths.home)?;
-    let f = OpenOptions::new()
+    crate::paths::private_dir(&paths.home)?;
+    let f = crate::paths::private_file()
         .create(true)
         .truncate(false)
         .write(true)
@@ -45,7 +45,7 @@ pub fn append(paths: &Paths, mut record: Value) {
     let Ok(_lock) = lock(paths) else {
         return;
     };
-    if let Ok(mut f) = OpenOptions::new()
+    if let Ok(mut f) = crate::paths::private_file()
         .create(true)
         .append(true)
         .open(path(paths))

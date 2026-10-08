@@ -228,3 +228,69 @@ async fn generic_secrets_in_json_tool_arguments_are_redacted() {
         .await;
     assert!(!m.to_string().contains("synthetic-access-token"));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn everything_trovador_writes_is_private_to_the_user() {
+    // Pre-release review: index.db and summaries hold transcript text, secrets included,
+    // copied from files Claude writes 0600, and were left 0644 in a 0755 directory.
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+
+    let f = fixture().with_fakes();
+    let home = f.paths.home.clone();
+    // An install from before the fix: a 0755 home and a 0644 index.
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(home.join("index.db"), b"").unwrap();
+    std::fs::set_permissions(
+        home.join("index.db"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+
+    let mut limits = limits();
+    limits.response_max_chars = 8;
+    let ctx = f.ctx_with(limits);
+    trovador::sessions::search(
+        &ctx,
+        &trovador::index::SearchOpts {
+            query: "deploy".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    trovador::summary::summarize(&ctx, ID_A, None, false, None)
+        .await
+        .unwrap();
+    let r = trovador::run::ask(
+        &ctx,
+        &trovador::run::AskOpts {
+            prompt: "a reply longer than eight characters".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(r.result_truncated.is_some());
+    trovador::gc::gc(&ctx, std::time::Duration::from_secs(86_400 * 365), true).unwrap();
+
+    assert_eq!(mode(&home), 0o700, "home");
+    for dir in ["summaries", "outputs"] {
+        assert_eq!(mode(&home.join(dir)), 0o700, "{dir}");
+    }
+    let mut files = 0;
+    let mut stack = vec![home.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(d).unwrap().flatten() {
+            if e.path().is_dir() {
+                stack.push(e.path());
+            } else {
+                files += 1;
+                assert_eq!(mode(&e.path()), 0o600, "{}", e.path().display());
+            }
+        }
+    }
+    // index.db, consent.json, runs.jsonl, runs.lock, a summary, a saved reply, at least.
+    assert!(files >= 6, "{files} files");
+}

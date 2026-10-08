@@ -208,8 +208,8 @@ fn update(
         path: path(paths).display().to_string(),
         source,
     };
-    fs::create_dir_all(&paths.home).map_err(io)?;
-    let lock = OpenOptions::new()
+    crate::paths::private_dir(&paths.home).map_err(io)?;
+    let lock = crate::paths::private_file()
         .create(true)
         .truncate(false)
         .write(true)

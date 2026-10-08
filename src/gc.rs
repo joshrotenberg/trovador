@@ -149,7 +149,5 @@ pub fn gc(ctx: &Ctx, older_than: Duration, apply: bool) -> std::io::Result<GcRep
 
 /// Replaces a file atomically. The caller holds the log's lock.
 fn rewrite(path: &Path, contents: &str) -> std::io::Result<()> {
-    let tmp = path.with_extension(format!("jsonl.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, contents)?;
-    std::fs::rename(tmp, path)
+    crate::paths::write_private(path, contents.as_bytes())
 }
