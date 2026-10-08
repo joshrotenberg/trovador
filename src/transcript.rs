@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 /// Bumped whenever the projection changes what it emits, which invalidates every index row.
-pub const PROJECTION_VERSION: i64 = 2;
+pub const PROJECTION_VERSION: i64 = 3;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,9 @@ pub enum RecordKind {
     ToolResult,
     Attachment,
     System,
+    /// What the model said about its own reasoning: Claude thinking text, Codex reasoning
+    /// summaries. Only present when the provider kept readable text.
+    Reasoning,
     Omitted,
 }
 
@@ -139,6 +142,12 @@ fn project_claude(r: &Value, limits: &Limits, out: &mut Vec<Draft>) {
                         str_at(b, "name").unwrap_or("tool"),
                         cap(&b.get("input").unwrap_or(&Value::Null).to_string(), tc),
                     )),
+                    // About three quarters of thinking blocks carry only a signature.
+                    Some("thinking") => {
+                        if let Some(t) = str_at(b, "thinking").filter(|t| !t.trim().is_empty()) {
+                            out.push(Draft::new(RecordKind::Reasoning, cap(t, rc)));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -294,6 +303,76 @@ pub(crate) fn project_codex(r: &Value, mode: CodexMode, limits: &Limits, out: &m
                 out.push(Draft::new(RecordKind::ToolResult, cap(&output, tc)));
             }
         }
+        // Reasoning, as summary headings. The full reasoning is encrypted; about four in
+        // five records have no summary at all and project to nothing.
+        (Some("response_item"), Some("reasoning")) => {
+            if mode != CodexMode::Items {
+                let text = p
+                    .get("summary")
+                    .and_then(Value::as_array)
+                    .map(|s| {
+                        s.iter()
+                            .filter_map(|x| x.get("text").and_then(Value::as_str))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                if !text.trim().is_empty() {
+                    out.push(Draft::new(RecordKind::Reasoning, cap(&text, rc)));
+                    return;
+                }
+            }
+            out.push(Draft::omitted("reasoning"));
+        }
+        // The item stream carries the same search as a WebSearch item, with results.
+        (Some("response_item"), Some("web_search_call")) => {
+            if mode != CodexMode::Items {
+                out.push(Draft::named(
+                    RecordKind::ToolCall,
+                    "web_search",
+                    cap(
+                        &search_queries(p.get("action").unwrap_or(&Value::Null), p),
+                        tc,
+                    ),
+                ));
+            } else {
+                out.push(Draft::omitted("web_search_call"));
+            }
+        }
+        // Tool discovery has no item form, so it is projected in every stream mode.
+        (Some("response_item"), Some("tool_search_call")) => out.push(Draft::named(
+            RecordKind::ToolCall,
+            "tool_search",
+            cap(
+                p.pointer("/arguments/query")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+                tc,
+            ),
+        )),
+        (Some("response_item"), Some("tool_search_output")) => {
+            let found = p
+                .get("tools")
+                .and_then(Value::as_array)
+                .map(|ts| {
+                    ts.iter()
+                        .filter_map(|t| t.get("name").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            out.push(Draft::named(
+                RecordKind::ToolResult,
+                "tool_search",
+                cap(&found, tc),
+            ));
+        }
+        // A compaction replaces earlier history with a copy of it; only a written summary
+        // is new. None of 3,234 local records had one, but a non-empty one is kept.
+        (Some("compacted"), None) => match str_at(p, "message").filter(|m| !m.trim().is_empty()) {
+            Some(m) => out.push(Draft::named(RecordKind::System, "compacted", cap(m, rc))),
+            None => out.push(Draft::omitted("compacted")),
+        },
         // Messages between Codex agents in a multi-agent run.
         (Some("response_item"), Some("agent_message")) => {
             let from = str_at(p, "author").unwrap_or("agent");
@@ -409,9 +488,125 @@ fn project_codex_item(item: &Value, limits: &Limits, out: &mut Vec<Draft>) {
             ),
         )),
         Some("ContextCompaction") => out.push(Draft::new(RecordKind::System, "context compacted")),
+        Some("Reasoning") => {
+            let text = item
+                .get("summary_text")
+                .and_then(Value::as_array)
+                .map(|s| {
+                    s.iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+            if text.trim().is_empty() {
+                out.push(Draft::omitted("Reasoning"));
+            } else {
+                out.push(Draft::new(RecordKind::Reasoning, cap(&text, rc)));
+            }
+        }
+        Some("WebSearch") => {
+            out.push(Draft::named(
+                RecordKind::ToolCall,
+                "web_search",
+                cap(
+                    &search_queries(item.get("action").unwrap_or(&Value::Null), item),
+                    tc,
+                ),
+            ));
+            let results = item
+                .get("results")
+                .and_then(Value::as_array)
+                .map(|rs| {
+                    rs.iter()
+                        .map(|r| {
+                            format!(
+                                "{} {}",
+                                str_at(r, "title").unwrap_or(""),
+                                str_at(r, "url").unwrap_or("")
+                            )
+                            .trim()
+                            .to_string()
+                        })
+                        .filter(|l| !l.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+            if !results.is_empty() {
+                out.push(Draft::named(
+                    RecordKind::ToolResult,
+                    "web_search",
+                    cap(&results, tc),
+                ));
+            }
+        }
+        Some("FunctionCallOutput") => {
+            let name = match (str_at(item, "namespace"), str_at(item, "name")) {
+                (Some(ns), Some(n)) => format!("{ns}/{n}"),
+                (None, Some(n)) => n.to_string(),
+                _ => "function".to_string(),
+            };
+            let output = match item.get("output") {
+                Some(Value::String(s)) => s.clone(),
+                Some(other) => other.to_string(),
+                None => String::new(),
+            };
+            out.push(Draft::named(RecordKind::ToolResult, name, cap(&output, tc)));
+        }
+        Some("ImageView") => out.push(Draft::named(
+            RecordKind::ToolCall,
+            "view_image",
+            cap(str_at(item, "path").unwrap_or(""), tc),
+        )),
+        // Every one seen was the parent waiting on its subagents with none named; one that
+        // names agents says who it was waiting for.
+        Some("CollabAgentToolCall") => {
+            let agents: Vec<String> = item
+                .get("receiver_agents")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .map(|x| match x {
+                            Value::String(s) => s.clone(),
+                            other => str_at(other, "agent_path")
+                                .or_else(|| str_at(other, "name"))
+                                .map(str::to_string)
+                                .unwrap_or_else(|| other.to_string()),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if agents.is_empty() {
+                out.push(Draft::omitted("CollabAgentToolCall"));
+            } else {
+                out.push(Draft::named(
+                    RecordKind::System,
+                    str_at(item, "tool").unwrap_or("collab"),
+                    cap(&agents.join(", "), tc),
+                ));
+            }
+        }
         Some(other) => out.push(Draft::omitted(other)),
         None => out.push(Draft::omitted("item")),
     }
+}
+
+/// A web search's queries: the list when there is one, else the single query.
+fn search_queries(action: &Value, outer: &Value) -> String {
+    action
+        .get("queries")
+        .and_then(Value::as_array)
+        .map(|q| {
+            q.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|s| !s.is_empty())
+        .or_else(|| str_at(action, "query").map(str::to_string))
+        .or_else(|| str_at(outer, "query").map(str::to_string))
+        .unwrap_or_default()
 }
 
 // --- reading ---------------------------------------------------------------
@@ -751,5 +946,6 @@ pub fn render(r: &Record) -> String {
             Some(n) => format!("SYSTEM ({n}): {text}"),
             None => format!("SYSTEM: {text}"),
         },
+        RecordKind::Reasoning => format!("REASONING: {text}"),
     }
 }

@@ -358,6 +358,168 @@ fn a_prompt_a_person_really_sent_twice_is_projected_twice() {
 }
 
 #[test]
+fn codex_reasoning_search_and_tool_items_are_projected_from_their_real_shapes() {
+    let f = Fixture::new();
+    f.codex(
+        ID_A,
+        &[
+            codex_meta("/w", json!("vscode")),
+            codex_user_item("look into the MCP spec"),
+            // Most reasoning items carry no summary; those stay omitted.
+            codex_item(json!({"type": "Reasoning", "id": "rs_1", "summary_text": [], "raw_content": []})),
+            codex_item(json!({"type": "Reasoning", "id": "rs_2",
+                "summary_text": ["**Planning repository exploration**"], "raw_content": []})),
+            // The response-item twin of the reasoning above, which the item stream supersedes.
+            json!({"type": "response_item", "payload": {"type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "**Planning repository exploration**"}],
+                "encrypted_content": "gAAAA"}}),
+            codex_item(json!({"type": "WebSearch", "id": "ws_1", "query": "mcp changelog",
+                "action": {"type": "search", "queries": ["mcp changelog", "mcp tasks"]},
+                "results": [{"type": "text_result", "title": "Changelog", "url": "https://example.com/c",
+                             "snippet": "s", "domain": "example.com", "ref_id": "turn0search0"}]})),
+            codex_item(json!({"type": "FunctionCallOutput", "id": "fo_1", "name": "read_file",
+                "namespace": "workspace", "output": "fn main() {}"})),
+            codex_item(json!({"type": "ImageView", "id": "iv_1", "path": "/tmp/shot.png"})),
+            codex_item(json!({"type": "CollabAgentToolCall", "id": "c_1", "tool": "wait", "status": "completed",
+                "sender_thread_id": ID_B, "receiver_thread_ids": [], "receiver_agents": [], "agents_states": {}})),
+            json!({"type": "response_item", "payload": {"type": "tool_search_call", "call_id": "c",
+                "status": "completed", "execution": "client", "arguments": {"query": "github issues"}}}),
+            json!({"type": "response_item", "payload": {"type": "tool_search_output", "call_id": "c",
+                "status": "completed", "execution": "client",
+                "tools": [{"type": "namespace", "name": "mcp__github", "tools": []}]}}),
+            json!({"type": "compacted", "payload": {"message": "", "replacement_history": [],
+                "window_number": 1}}),
+        ],
+        0,
+    );
+    let t = sessions::transcript(&f.ctx(), ID_A, None, 0, None).unwrap();
+    let shown: Vec<(RecordKind, Option<String>, String)> = t
+        .page
+        .records
+        .iter()
+        .filter(|r| r.kind != RecordKind::Omitted)
+        .map(|r| (r.kind, r.name.clone(), r.text.clone().unwrap_or_default()))
+        .collect();
+    let named = |n: &str| Some(n.to_string());
+    assert_eq!(
+        shown,
+        vec![
+            (RecordKind::User, None, "look into the MCP spec".into()),
+            (
+                RecordKind::Reasoning,
+                None,
+                "**Planning repository exploration**".into()
+            ),
+            (
+                RecordKind::ToolCall,
+                named("web_search"),
+                "mcp changelog\nmcp tasks".into()
+            ),
+            (
+                RecordKind::ToolResult,
+                named("web_search"),
+                "Changelog https://example.com/c".into()
+            ),
+            (
+                RecordKind::ToolResult,
+                named("workspace/read_file"),
+                "fn main() {}".into()
+            ),
+            (
+                RecordKind::ToolCall,
+                named("view_image"),
+                "/tmp/shot.png".into()
+            ),
+            (
+                RecordKind::ToolCall,
+                named("tool_search"),
+                "github issues".into()
+            ),
+            (
+                RecordKind::ToolResult,
+                named("tool_search"),
+                "mcp__github".into()
+            ),
+        ]
+    );
+    let omitted: Vec<_> = t
+        .page
+        .records
+        .iter()
+        .filter(|r| r.kind == RecordKind::Omitted)
+        .filter_map(|r| r.name.clone())
+        .collect();
+    for cat in ["Reasoning", "reasoning", "CollabAgentToolCall", "compacted"] {
+        assert!(
+            omitted.iter().any(|c| c == cat),
+            "{cat} should be counted as omitted: {omitted:?}"
+        );
+    }
+}
+
+#[test]
+fn an_older_codex_file_projects_reasoning_and_search_from_response_items() {
+    let f = Fixture::new();
+    f.codex(
+        ID_A,
+        &[
+            codex_meta("/w", json!("cli")),
+            codex_response("user", "find it"),
+            json!({"type": "response_item", "payload": {"type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Searching the docs"}]}}),
+            json!({"type": "response_item", "payload": {"type": "web_search_call", "status": "completed",
+                "action": {"type": "search", "query": "codex mcp config"}}}),
+        ],
+        0,
+    );
+    let t = sessions::transcript(&f.ctx(), ID_A, None, 0, None).unwrap();
+    assert_eq!(
+        kinds(&t)
+            .into_iter()
+            .filter(|(k, _)| *k != RecordKind::Omitted)
+            .collect::<Vec<_>>(),
+        vec![
+            (RecordKind::User, "find it".into()),
+            (RecordKind::Reasoning, "Searching the docs".into()),
+            (RecordKind::ToolCall, "codex mcp config".into()),
+        ]
+    );
+}
+
+#[test]
+fn claude_thinking_with_text_is_reasoning_and_signature_only_thinking_is_dropped() {
+    let f = Fixture::new();
+    f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "why is it slow"),
+            json!({"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "", "signature": "abc"},
+                {"type": "thinking", "thinking": "The index is rebuilt on every call.", "signature": "def"},
+                {"type": "text", "text": "It rebuilds the index each time."}
+            ]}}),
+        ],
+        0,
+    );
+    let t = sessions::transcript(&f.ctx(), ID_A, None, 0, None).unwrap();
+    assert_eq!(
+        kinds(&t),
+        vec![
+            (RecordKind::User, "why is it slow".into()),
+            (
+                RecordKind::Reasoning,
+                "The index is rebuilt on every call.".into()
+            ),
+            (
+                RecordKind::Assistant,
+                "It rebuilds the index each time.".into()
+            ),
+        ]
+    );
+}
+
+#[test]
 fn an_older_codex_session_uses_its_event_stream() {
     let f = Fixture::new();
     f.codex(
