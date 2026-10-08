@@ -390,6 +390,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         .into_iter()
         .map(|e| ((e.backend, e.session_id.clone()), e))
         .collect();
+    let found = raw.hits.len();
     let hits: Vec<SearchHit> = raw
         .hits
         .into_iter()
@@ -403,8 +404,13 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         })
         .collect();
 
+    let mut hidden = raw.hidden.clone();
+    // Matches whose file the scan could not see: in an unreadable root, or removed since
+    // the index was last refreshed.
+    hidden.unavailable = found - hits.len();
     let text_excluded = idx.text_excluded()?;
-    let exhaustive = refresh.pending == 0 && refresh.failed == 0;
+    let exhaustive =
+        refresh.pending == 0 && refresh.failed == 0 && refresh.unavailable_roots.is_empty();
     let excluded_note = (opts.include_subagents && !text_excluded.is_empty()).then(|| {
         let mut parts: Vec<String> = text_excluded
             .iter()
@@ -413,14 +419,21 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         parts.sort();
         format!("text of {} sessions is not indexed", parts.join(", "))
     });
-    let stale_note = (!exhaustive).then(|| {
+    let stale_note = (refresh.pending > 0 || refresh.failed > 0).then(|| {
         format!(
             "{} session files were not indexed within the {} ms budget and {} could not be read; run `trovador index` to finish",
             refresh.pending, ctx.limits.index_budget_ms, refresh.failed
         )
     });
-    let h = &raw.hidden;
-    let hidden_note = h.any().then(|| {
+    let unavailable_note = (!refresh.unavailable_roots.is_empty()).then(|| {
+        format!(
+            "archive roots could not be read: {}; their sessions were not checked, and {} matching sessions in them could not be returned",
+            refresh.unavailable_roots.join(", "),
+            hidden.unavailable
+        )
+    });
+    let h = &hidden;
+    let hidden_note = (h.active + h.automated + h.excluded > 0).then(|| {
         let mut parts = Vec::new();
         if h.active > 0 {
             parts.push(format!(
@@ -439,7 +452,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
             parts.join(", ")
         )
     });
-    let note = [stale_note, excluded_note, hidden_note]
+    let note = [stale_note, unavailable_note, excluded_note, hidden_note]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
@@ -457,8 +470,8 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         expression: raw.expression,
         sessions_matched: raw.sessions_matched,
         returned: hits.len(),
-        absence_is_proof: hits.is_empty().then_some(exhaustive && !raw.hidden.any()),
-        hidden: raw.hidden.clone(),
+        absence_is_proof: hits.is_empty().then_some(exhaustive && !hidden.any()),
+        hidden,
         hits,
         exhaustive,
         note,

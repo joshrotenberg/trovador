@@ -150,12 +150,19 @@ fn entry(backend: Backend, id: &str, path: &Path, archived: bool) -> Option<Arch
     })
 }
 
-/// Every session in both archives, newest first.
+/// Every session in both archives, newest first, one file per session.
+///
+/// A Claude session moved between projects can leave its old file behind. The newest file
+/// is the live one. Choosing it here, once, means listing, lookup, search, and the index
+/// all describe the same file; when only the index chose, a list showed the session twice,
+/// every prefix was ambiguous, and search returned a row mixing the two files (#28).
 pub fn scan_all(paths: &Paths) -> Vec<ArchiveEntry> {
     let mut all = scan_claude(&paths.claude_archive);
     all.extend(scan_codex(&paths.codex_archive, false));
     all.extend(scan_codex(&paths.codex_archived, true));
     all.sort_by(|a, b| b.mtime.cmp(&a.mtime).then(a.session_id.cmp(&b.session_id)));
+    let mut seen = std::collections::HashSet::new();
+    all.retain(|e| seen.insert((e.backend, e.session_id.clone())));
     all
 }
 
