@@ -100,7 +100,9 @@ pub(crate) fn store(ctx: &Ctx, s: &Summary) -> std::io::Result<()> {
 fn render(e: &ArchiveEntry, ctx: &Ctx) -> std::io::Result<String> {
     let mut out = String::new();
     for r in Projection::open(e, &ctx.limits)? {
-        if r.kind == RecordKind::Omitted {
+        // Reasoning headings say little about what happened and would raise every
+        // summary's cost.
+        if matches!(r.kind, RecordKind::Omitted | RecordKind::Reasoning) {
             continue;
         }
         out.push_str(&transcript::render(&r));

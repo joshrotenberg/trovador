@@ -299,6 +299,7 @@ fn kind_str(k: RecordKind) -> &'static str {
         RecordKind::ToolResult => "tool_result",
         RecordKind::Attachment => "attachment",
         RecordKind::System => "system",
+        RecordKind::Reasoning => "reasoning",
         RecordKind::Omitted => "omitted",
     }
 }
