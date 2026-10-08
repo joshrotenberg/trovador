@@ -352,3 +352,71 @@ fn import_from_a_directory_that_is_not_spike_is_refused() {
     let r = trovador::import::import(&f.ctx(), f.dir.path(), false);
     assert!(r.is_err());
 }
+
+#[test]
+fn a_consult_that_cannot_run_is_refused_before_any_summary_is_made() {
+    // #19: these used to spend a summary call and cache it, then fail.
+    let f = Fixture::new().with_fakes();
+    let ctx = f.ctx();
+    session_with(&f, ID_A, 2);
+    let missing = f.dir.path().join("no-such-dir").display().to_string();
+    let base = || AskOpts {
+        prompt: "what was decided?".into(),
+        about: Some(ID_A.into()),
+        ..Default::default()
+    };
+    for bad in [
+        AskOpts {
+            sandbox: Some("danger-full-access".into()),
+            ..base()
+        },
+        AskOpts {
+            permission_mode: Some("bypassPermissions".into()),
+            ..base()
+        },
+        AskOpts {
+            effort: Some("extreme".into()),
+            ..base()
+        },
+        AskOpts {
+            cwd: Some(missing.clone()),
+            ..base()
+        },
+        AskOpts {
+            session: Some(ID_A.into()),
+            ..base()
+        },
+        AskOpts {
+            prompt: "  ".into(),
+            ..base()
+        },
+    ] {
+        assert!(matches!(ask(&ctx, bad), Err(RunError::Invalid(_))));
+    }
+    assert!(f.calls("claude").is_empty(), "no provider was started");
+    assert!(f.calls("codex").is_empty());
+    assert!(
+        std::fs::read_dir(summary::dir(&ctx))
+            .map(|d| d.count())
+            .unwrap_or(0)
+            == 0,
+        "no summary was cached"
+    );
+}
+
+#[tokio::test]
+async fn the_same_refusal_comes_back_over_mcp_without_a_provider_call() {
+    let f = Fixture::new().with_fakes();
+    session_with(&f, ID_A, 2);
+    let mut client = tower_mcp::TestClient::from_router(trovador::mcp::router(f.ctx()));
+    client.initialize().await;
+    let r = client
+        .call_tool(
+            "ask",
+            json!({"prompt": "hello", "about": ID_A, "sandbox": "danger-full-access"}),
+        )
+        .await;
+    assert!(r.is_error);
+    assert!(r.all_text().contains("danger-full-access"));
+    assert!(f.calls("claude").is_empty());
+}

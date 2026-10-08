@@ -176,15 +176,47 @@ pub async fn ask(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
     }
 }
 
-async fn consult(ctx: &Ctx, opts: &AskOpts, about: &str) -> Result<AskResult, RunError> {
-    if opts.session.is_some() || opts.fork {
+/// Every check that needs nothing but the request, run before anything can start, spend,
+/// or be recorded. A consult runs it before its summary call, which otherwise spent tokens
+/// and wrote a cache entry for a request that was then refused (#19).
+fn preflight(ctx: &Ctx, opts: &AskOpts) -> Result<usize, RunError> {
+    if opts.prompt.trim().is_empty() {
+        return Err(RunError::Invalid("prompt is empty".into()));
+    }
+    if opts.about.as_deref().is_some_and(|a| !a.is_empty()) && (opts.session.is_some() || opts.fork)
+    {
         return Err(RunError::Invalid(
             "about starts a new session; it cannot be combined with session or fork".into(),
         ));
     }
-    if opts.prompt.trim().is_empty() {
-        return Err(RunError::Invalid("prompt is empty".into()));
+    if let Some(e) = &opts.effort {
+        parse_effort(e).map_err(RunError::Invalid)?;
     }
+    if let Some(p) = &opts.permission_mode {
+        parse_permission_mode(p).map_err(RunError::Invalid)?;
+    }
+    if let Some(s) = &opts.sandbox {
+        parse_sandbox(s).map_err(RunError::Invalid)?;
+    }
+    if let Some(dir) = &opts.cwd
+        && !Path::new(dir).is_dir()
+    {
+        return Err(RunError::Invalid(format!(
+            "cwd {dir} is missing or not a directory"
+        )));
+    }
+    let depth = depth();
+    if depth >= ctx.limits.max_depth {
+        return Err(RunError::Depth {
+            depth,
+            max: ctx.limits.max_depth,
+        });
+    }
+    Ok(depth)
+}
+
+async fn consult(ctx: &Ctx, opts: &AskOpts, about: &str) -> Result<AskResult, RunError> {
+    preflight(ctx, opts)?;
     let source = archive::find_session(&ctx.paths, about, None)?;
     let summary =
         crate::summary::summarize(ctx, &source.session_id, Some(source.backend), false, None)
@@ -230,26 +262,7 @@ async fn consult(ctx: &Ctx, opts: &AskOpts, about: &str) -> Result<AskResult, Ru
 }
 
 async fn run_turn(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
-    if opts.prompt.trim().is_empty() {
-        return Err(RunError::Invalid("prompt is empty".into()));
-    }
-    // Every option is checked before anything is recorded or started.
-    if let Some(e) = &opts.effort {
-        parse_effort(e).map_err(RunError::Invalid)?;
-    }
-    if let Some(p) = &opts.permission_mode {
-        parse_permission_mode(p).map_err(RunError::Invalid)?;
-    }
-    if let Some(s) = &opts.sandbox {
-        parse_sandbox(s).map_err(RunError::Invalid)?;
-    }
-    let depth = depth();
-    if depth >= ctx.limits.max_depth {
-        return Err(RunError::Depth {
-            depth,
-            max: ctx.limits.max_depth,
-        });
-    }
+    let depth = preflight(ctx, opts)?;
 
     // Resolve the target once. Consent is keyed by the canonical id, and only that id is
     // given to the provider, so a prefix or alias cannot get around an explicit denial.

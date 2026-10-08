@@ -119,6 +119,11 @@ fn chunk(text: &str, size: usize) -> Vec<&str> {
         while !rest.is_char_boundary(end) {
             end -= 1;
         }
+        // A size smaller than the next character's UTF-8 width backed off to 0 and never
+        // advanced (#20). Such a chunk holds that one character instead.
+        if end == 0 {
+            end = rest.chars().next().map_or(rest.len(), char::len_utf8);
+        }
         chunks.push(&rest[..end]);
         rest = &rest[end..];
     }
@@ -258,6 +263,22 @@ mod tests {
         assert_eq!(pick(20, 8), vec![0, 1, 2, 3, 16, 17, 18, 19]);
         assert_eq!(pick(20, 5), vec![0, 1, 2, 18, 19]);
         assert_eq!(pick(20, 1), vec![0]);
+    }
+
+    #[test]
+    fn chunks_always_advance_even_when_smaller_than_a_character() {
+        for text in ["abc", "a\u{1F642}z", "\u{1F642}\u{1F642}", "\u{e9}t\u{e9}"] {
+            for size in 1..=5 {
+                let c = chunk(text, size);
+                assert_eq!(c.concat(), text, "{text:?} at {size}");
+                assert!(c.iter().all(|p| !p.is_empty()), "{text:?} at {size}");
+                // Within size whenever a whole character fits.
+                assert!(
+                    c.iter().all(|p| p.len() <= size || p.chars().count() == 1),
+                    "{text:?} at {size}: {c:?}"
+                );
+            }
+        }
     }
 
     #[test]
