@@ -156,3 +156,75 @@ async fn the_server_tells_clients_that_session_text_is_data_not_instructions() {
         }
     }
 }
+
+#[tokio::test]
+async fn a_search_matching_inside_a_key_returns_it_redacted_through_both_doors() {
+    // #22: the excerpt bracketed the match before redaction, which split the key.
+    let f = fixture();
+    let mut c = client(&f, ServeOpts::default()).await;
+    for args in [vec!["search", "api03"], vec!["search", "abc", "--regex"]] {
+        let from_cli = cli(&f, &args);
+        assert_eq!(from_cli["sessions_matched"], 1, "{args:?}");
+        let text = from_cli.to_string();
+        assert!(!text.contains("abcdefghijklmnop"), "{args:?}: {text}");
+        assert!(text.contains("[redacted:anthropic]"), "{args:?}");
+        let mcp_args = if args.len() == 3 {
+            json!({"query": args[1], "regex": true})
+        } else {
+            json!({"query": args[1]})
+        };
+        let from_mcp = c.call_tool_json("search", mcp_args).await;
+        assert!(
+            !from_mcp.to_string().contains("abcdefghijklmnop"),
+            "{args:?}"
+        );
+    }
+    let raw = cli(&f, &["--no-redact", "search", "api03"]);
+    assert!(raw.to_string().contains("sk-ant-[api03]-abcdefghij"));
+}
+
+#[tokio::test]
+async fn generic_secrets_in_json_tool_arguments_are_redacted() {
+    // #23: quoted JSON names passed through the assignment rule.
+    let f = Fixture::new();
+    f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "DB_PASSWORD=synthetic-passphrase"),
+            claude_tool_use(
+                "login",
+                json!({"password": "synthetic-passphrase", "api_key": "synthetic-generic-key",
+                       "token": "synthetic-access-token", "max_tokens": 4000}),
+            ),
+        ],
+        10,
+    );
+    let t = cli(&f, &["sessions", "transcript", ID_A]);
+    let text = t.to_string();
+    for secret in [
+        "synthetic-passphrase",
+        "synthetic-generic-key",
+        "synthetic-access-token",
+    ] {
+        assert!(!text.contains(secret), "{secret} leaked: {text}");
+    }
+    assert!(text.contains("4000"), "a numeric limit is not a secret");
+    // The search still finds it (the index is not redacted); its excerpts must not show it.
+    let s = cli(&f, &["search", "synthetic-passphrase"]);
+    assert_eq!(s["sessions_matched"], 1);
+    assert!(
+        !s["hits"][0]["matches"]
+            .to_string()
+            .contains("synthetic-passphrase"),
+        "{s}"
+    );
+    let mut c = client(&f, ServeOpts::default()).await;
+    let m = c
+        .call_tool_json(
+            "sessions",
+            json!({"action": "transcript", "session_id": ID_A}),
+        )
+        .await;
+    assert!(!m.to_string().contains("synthetic-access-token"));
+}
