@@ -11,9 +11,13 @@ expected soon after. **Later** waits for a use that needs it.
 
 ## Must
 
+Decided 2026-10-07: both search defaults apply to both doors; automated sessions are
+excluded by default except those trovador started.
+
 | Item | Why | Use case |
 |---|---|---|
-| Search leaves out the calling session: an `exclude_session` parameter, and by default sessions written in the last 10 minutes, with `include_active` to opt back in | An agent searching for earlier work finds its own conversation first; this happened when searching from the development session | 2 |
+| Search leaves out the calling session: an `exclude_session` parameter, and by default sessions written in the last 10 minutes, with `include_active` to opt back in. The same default for the CLI and MCP | An agent searching for earlier work finds its own conversation first; this happened when searching from the development session | 2 |
+| Automated sessions (`sdk-cli`, `exec`, `sdk-ts`) out of default `list` and `search` results unless `include_automated`, except sessions trovador started, which are always included | 20 of 43 sessions matching one real query were automated; trovador's own fan-out workers are automated but are what a coordinator searches for | 1, 3 |
 | Transcripts and excerpts marked as untrusted data, in the server instructions and the tool descriptions | Earlier sessions can contain instructions an agent would otherwise follow | 2 |
 | Secrets redacted in MCP output by default: API keys, bearer tokens, private keys, and `KEY=value` lines for names that look secret. The opt-out is a `serve` flag, never a tool argument | Transcripts contain pasted credentials, and MCP hands them to whatever client is connected | 2 |
 | `trovador serve --read-only`, which offers no `ask` and no `summarize` | Anyone who wants search should not have to give a connected client the ability to spend money and run agents | all |
@@ -25,7 +29,6 @@ expected soon after. **Later** waits for a use that needs it.
 | Item | Why | Use case |
 |---|---|---|
 | A long `ask` returns a task handle at once and reports progress, through MCP's task extension, which tower-mcp supports | A 10-minute Codex turn otherwise holds one tool call open for 10 minutes | 3 |
-| Automated sessions out of default results: `sdk-cli`, `exec`, and `sdk-ts` excluded unless `include_automated`, except sessions trovador started | 20 of 43 sessions matching one real query were automated | 1 |
 | `since` and `until` on `list` and `search` | "What did I do last week" without a model call | 1, 7 |
 | `resume_blocked_by` names the call that works: `ask` with `about` and the same backend | The way to continue past a full context is not discoverable | 5 |
 | `trovador gc` for `summaries/` and `runs.jsonl` | Both grow without bound | |
