@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 /// Bumped whenever the projection changes what it emits, which invalidates every index row.
-pub const PROJECTION_VERSION: i64 = 3;
+pub const PROJECTION_VERSION: i64 = 4;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -255,7 +255,11 @@ pub(crate) fn project_codex(r: &Value, mode: CodexMode, limits: &Limits, out: &m
             if mode == CodexMode::Events
                 && let Some(m) = str_at(p, "message")
             {
-                out.push(Draft::new(RecordKind::User, cap(m, rc)));
+                if is_injected(m) {
+                    out.push(Draft::omitted("injected_context"));
+                } else {
+                    out.push(Draft::new(RecordKind::User, cap(m, rc)));
+                }
             }
         }
         (Some("event_msg"), Some("agent_message")) => {
@@ -269,12 +273,27 @@ pub(crate) fn project_codex(r: &Value, mode: CodexMode, limits: &Limits, out: &m
             if mode != CodexMode::Responses {
                 return;
             }
-            let text = block_text(p.get("content").unwrap_or(&Value::Null));
+            let content = p.get("content").unwrap_or(&Value::Null);
+            if str_at(p, "role") == Some("user") {
+                // Codex sends injected context (environment, AGENTS.md, plugin lists) as
+                // user-role messages of their own. Without the pre-scan they reached
+                // transcripts as user turns (over 1,200 on the development machine); they
+                // are context, so they are counted but not shown.
+                let typed = typed_text(content);
+                if typed.trim().is_empty() {
+                    if !block_text(content).trim().is_empty() {
+                        out.push(Draft::omitted("injected_context"));
+                    }
+                } else {
+                    out.push(Draft::new(RecordKind::User, cap(&typed, rc)));
+                }
+                return;
+            }
+            let text = block_text(content);
             if text.trim().is_empty() {
                 return;
             }
             match str_at(p, "role") {
-                Some("user") => out.push(Draft::new(RecordKind::User, cap(&text, rc))),
                 Some("assistant") => out.push(Draft::new(RecordKind::Assistant, cap(&text, rc))),
                 Some(role) => out.push(Draft::omitted(role)),
                 None => out.push(Draft::omitted("message")),
@@ -393,10 +412,15 @@ fn project_codex_item(item: &Value, limits: &Limits, out: &mut Vec<Draft>) {
     let (rc, tc) = (limits.record_chars, limits.tool_chars);
     let content = || block_text(item.get("content").unwrap_or(&Value::Null));
     match str_at(item, "type") {
+        // The same rule as the response stream, so both copies of a turn project to the
+        // same text and the one at a stream switch is recognised as a copy.
         Some("UserMessage") => {
-            let t = content();
-            if !t.trim().is_empty() {
-                out.push(Draft::new(RecordKind::User, cap(&t, rc)));
+            let content = item.get("content").unwrap_or(&Value::Null);
+            let typed = typed_text(content);
+            if !typed.trim().is_empty() {
+                out.push(Draft::new(RecordKind::User, cap(&typed, rc)));
+            } else if !block_text(content).trim().is_empty() {
+                out.push(Draft::omitted("injected_context"));
             }
         }
         Some("AgentMessage") => {
@@ -636,6 +660,27 @@ fn compacted_without_parsing(line: &[u8], limits: &Limits) -> Option<Draft> {
     )
 }
 
+/// Whether a block of a user-role message is context a client injected rather than text a
+/// person typed: a leading tag such as `<environment_context>`, or the project's AGENTS.md.
+fn is_injected(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with('<') || t.starts_with("# AGENTS.md instructions")
+}
+
+/// The blocks of a message a person typed, joined.
+fn typed_text(content: &Value) -> String {
+    match content {
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .filter(|t| !t.trim().is_empty() && !is_injected(t))
+            .collect::<Vec<_>>()
+            .join(" "),
+        Value::String(s) if !is_injected(s) => s.clone(),
+        _ => String::new(),
+    }
+}
+
 /// A web search's queries: the list when there is one, else the single query.
 fn search_queries(action: &Value, outer: &Value) -> String {
     action
@@ -663,10 +708,6 @@ pub struct ProjectionState {
     pub offset: u64,
     pub next_index: usize,
     pub mode: CodexMode,
-    /// Whether `mode` is what a fresh read of the grown file would also start with. It is
-    /// not when the file was still shorter than the pre-scan window and showed no item
-    /// stream yet; such a file must be read again from the start once it grows.
-    pub mode_final: bool,
     /// An omitted run still open at `offset`. A full read would merge records appended
     /// after it into the same run, so it is carried rather than flushed.
     pub run: Option<(String, usize)>,
@@ -733,17 +774,12 @@ impl Projection {
                 file.seek(SeekFrom::Start(s.offset))?;
                 s
             }
-            None => {
-                let (mode, mode_final) = match e.backend {
-                    Backend::Codex => initial_codex_mode(e, limits),
-                    Backend::Claude => (CodexMode::Responses, true),
-                };
-                ProjectionState {
-                    mode,
-                    mode_final,
-                    ..Default::default()
-                }
-            }
+            // Every file starts in the oldest stream and moves forward only as newer
+            // stream records appear, in order. A pre-scan that started in the newest stream
+            // it could find dropped the older-format turns of a session continued by a newer
+            // client (#31); the copy written at each switch is dropped by comparing it with
+            // the last emitted turn instead.
+            None => ProjectionState::default(),
         };
         Ok(Self {
             reader: BufReader::new(file),
@@ -874,39 +910,6 @@ impl Iterator for Projection {
             return Some(self.assign(d, None));
         }
     }
-}
-
-/// Decides the starting stream from the head of the file, so the first user turn, which
-/// Codex writes as a `response_item` just before its first UI event, is not projected twice.
-/// The decision is final once the item stream is seen or the whole window has been read.
-fn initial_codex_mode(e: &ArchiveEntry, limits: &Limits) -> (CodexMode, bool) {
-    let Ok(f) = File::open(&e.file) else {
-        return (CodexMode::Responses, false);
-    };
-    let budget = limits.head_steps.get(1).copied().unwrap_or(512 * 1024) as u64;
-    let mut mode = CodexMode::Responses;
-    let mut read = 0u64;
-    let mut reader = BufReader::new(f);
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        match reader.read_until(b'\n', &mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => read += n as u64,
-        }
-        if let Ok(r) = serde_json::from_slice::<Value>(&line)
-            && let Some(m) = codex_mode_signal(&r)
-        {
-            mode = mode.max(m);
-            if mode == CodexMode::Items {
-                return (mode, true);
-            }
-        }
-        if read >= budget {
-            return (mode, true);
-        }
-    }
-    (mode, false)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

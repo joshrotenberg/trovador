@@ -102,10 +102,9 @@ fn an_append_continues_the_open_omitted_run_and_keeps_indexes_aligned() {
 }
 
 #[test]
-fn a_young_codex_file_that_later_shows_its_item_stream_is_reindexed_not_appended() {
-    // Under the pre-scan window with no item event yet, the first pass projects the
-    // response_item user turn. Once item events appear, a fresh read would not, so the
-    // second pass must start over rather than continue.
+fn a_codex_file_that_later_shows_its_item_stream_is_continued_without_a_duplicate() {
+    // The first pass sees only the response stream. The item stream appears after it,
+    // starting with a copy of the turn already indexed, which the switch drops.
     let f = Fixture::new();
     let ctx = f.ctx();
     let path = f.codex(
@@ -126,7 +125,7 @@ fn a_young_codex_file_that_later_shows_its_item_stream_is_reindexed_not_appended
         ],
     );
     let r = refresh(&ctx);
-    assert_eq!((r.appended, r.reindexed), (0, 1));
+    assert_eq!((r.appended, r.reindexed), (1, 0));
     assert_index_matches_transcript(&ctx, Backend::Codex, ID_A);
     let idx = Index::open(&ctx.paths, &ctx.limits).unwrap();
     let users = idx
@@ -539,4 +538,120 @@ fn reasoning_can_be_left_out_of_the_index_and_changing_that_rebuilds_it() {
             .iter()
             .any(|r| r.kind == RecordKind::Reasoning)
     );
+}
+
+// --- #25, #26, #31 -------------------------------------------------------------
+
+#[test]
+fn a_rewrite_of_the_same_size_or_larger_is_reindexed_not_continued() {
+    // #25: growing, or keeping the size, did not prove the indexed bytes were unchanged.
+    for replacement in ["bravo bravo bravo", "bravo bravo bravo and then some more"] {
+        let f = Fixture::new();
+        let ctx = f.ctx();
+        f.claude("-w", ID_A, &[claude_user("/w", "alpha alpha alpha")], 100);
+        refresh(&ctx);
+        f.claude("-w", ID_A, &[claude_user("/w", replacement)], 50);
+        let r = search(&ctx, "bravo");
+        assert_eq!(
+            (r.coverage.refresh.appended, r.coverage.refresh.reindexed),
+            (0, 1),
+            "{replacement}"
+        );
+        assert_eq!(r.sessions_matched, 1);
+        assert_eq!(search(&ctx, "alpha").sessions_matched, 0, "{replacement}");
+        assert_index_matches_transcript(&ctx, Backend::Claude, ID_A);
+    }
+}
+
+#[test]
+fn a_plain_append_is_still_continued() {
+    let f = Fixture::new();
+    let ctx = f.ctx();
+    let path = f.claude("-w", ID_A, &[claude_user("/w", "first")], 100);
+    refresh(&ctx);
+    append(&path, &[claude_assistant("second")]);
+    let r = refresh(&ctx);
+    assert_eq!((r.appended, r.reindexed), (1, 0));
+}
+
+#[test]
+fn changing_a_record_cap_rebuilds_the_index() {
+    // #26: rows built with one cap were served after it changed.
+    let f = Fixture::new();
+    f.claude(
+        "-w",
+        ID_A,
+        &[claude_user(
+            "/w",
+            "opening words then the tailword at the end",
+        )],
+        100,
+    );
+    let full = f.ctx();
+    let short = f.ctx_with(Limits {
+        record_chars: 10,
+        ..limits()
+    });
+    assert_eq!(search(&full, "tailword").sessions_matched, 1);
+    let r = search(&short, "tailword");
+    assert_eq!(
+        r.coverage.refresh.reindexed, 1,
+        "a fresh file for the new cap"
+    );
+    assert_eq!(r.sessions_matched, 0);
+    let back = search(&full, "tailword");
+    assert_eq!(back.coverage.refresh.reindexed, 1);
+    assert_eq!(back.sessions_matched, 1);
+}
+
+#[test]
+fn older_format_codex_turns_survive_a_newer_client_continuing_the_session() {
+    // #31: the pre-scan started in the newest stream it found and dropped the older turns.
+    let f = Fixture::new();
+    let ctx = f.ctx();
+    let path = f.codex(
+        ID_A,
+        &[
+            codex_meta("/w", json!("cli")),
+            codex_response("user", "historicalzephyr question"),
+            codex_event("user_message", "historicalzephyr question"),
+            codex_response("assistant", "historical answer"),
+            codex_event("agent_message", "historical answer"),
+        ],
+        100,
+    );
+    assert_eq!(search(&ctx, "historicalzephyr").sessions_matched, 1);
+    append(
+        &path,
+        &[
+            codex_response("user", "current question"),
+            codex_user_item("current question"),
+            codex_response("assistant", "current answer"),
+            codex_agent_item("current answer"),
+        ],
+    );
+    let turns = |ctx: &trovador::sessions::Ctx| -> Vec<(RecordKind, String)> {
+        sessions::transcript(ctx, ID_A, None, 0, None)
+            .unwrap()
+            .page
+            .records
+            .into_iter()
+            .filter(|r| matches!(r.kind, RecordKind::User | RecordKind::Assistant))
+            .map(|r| (r.kind, r.text.unwrap()))
+            .collect()
+    };
+    let want = vec![
+        (RecordKind::User, "historicalzephyr question".to_string()),
+        (RecordKind::Assistant, "historical answer".to_string()),
+        (RecordKind::User, "current question".to_string()),
+        (RecordKind::Assistant, "current answer".to_string()),
+    ];
+    assert_eq!(turns(&ctx), want);
+    let r = search(&ctx, "historicalzephyr");
+    assert_eq!(r.coverage.refresh.appended, 1);
+    assert_eq!(r.sessions_matched, 1);
+    assert_index_matches_transcript(&ctx, Backend::Codex, ID_A);
+    sessions::reindex(&ctx, true).unwrap();
+    assert_index_matches_transcript(&ctx, Backend::Codex, ID_A);
+    assert_eq!(search(&ctx, "historicalzephyr").sessions_matched, 1);
 }

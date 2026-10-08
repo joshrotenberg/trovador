@@ -21,7 +21,7 @@ use crate::limits::Limits;
 use crate::paths::Paths;
 use crate::transcript::{CodexMode, PROJECTION_VERSION, Projection, ProjectionState, RecordKind};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// Origins whose text is not indexed. A Codex `guardian` session is an approval reviewer
 /// whose input is a copy of its parent session's history: on 2026-10-07 that was 67 MB of
@@ -52,17 +52,52 @@ pub fn db_path(paths: &Paths) -> PathBuf {
     paths.home.join("index.db")
 }
 
-/// The schema and projection versions an existing file was built with.
-/// What a file's rows were built with: schema, projection, and whether reasoning was
-/// indexed. A file built any other way is replaced rather than reused.
+/// What a file's rows were built with: schema, projection, and every setting that shapes
+/// a row or its stored metadata. A file built any other way is replaced rather than reused;
+/// rows built with one record cap were otherwise served after it changed (#26).
 fn built_with(limits: &Limits) -> (i64, i64, i64) {
+    let settings = format!(
+        "record_chars={} tool_chars={} head_steps={:?} reasoning={}",
+        limits.record_chars, limits.tool_chars, limits.head_steps, limits.index_reasoning
+    );
     (
         SCHEMA_VERSION,
         PROJECTION_VERSION,
-        limits.index_reasoning as i64,
+        bytes_hash(settings.as_bytes()) as i64,
     )
 }
 
+/// FNV-1a over bytes: stable across builds, which matters because it is stored.
+fn bytes_hash(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
+
+const REGION: u64 = 4096;
+
+/// Hashes of the first 4 KB of a file and of the 4 KB before `offset`. An append leaves
+/// both alone; a rewrite of the indexed part, even one that keeps or grows the size,
+/// changes at least one of them (#25).
+fn region_hashes(path: &std::path::Path, offset: u64) -> Option<(i64, i64)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut read = |from: u64, len: u64| -> Option<i64> {
+        f.seek(SeekFrom::Start(from)).ok()?;
+        let mut buf = Vec::with_capacity(len as usize);
+        (&mut f).take(len).read_to_end(&mut buf).ok()?;
+        Some(bytes_hash(&buf) as i64)
+    };
+    let head = read(0, REGION.min(offset))?;
+    let tail_from = offset.saturating_sub(REGION);
+    let tail = read(tail_from, offset - tail_from)?;
+    Some((head, tail))
+}
+
+/// The build key an existing file was made with.
 fn stored_versions(path: &std::path::Path) -> Option<(i64, i64, i64)> {
     let conn =
         Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
@@ -75,7 +110,7 @@ fn stored_versions(path: &std::path::Path) -> Option<(i64, i64, i64)> {
     Some((
         get("schema")?,
         get("projection").unwrap_or(0),
-        get("reasoning").unwrap_or(1),
+        get("settings").unwrap_or(0),
     ))
 }
 
@@ -208,7 +243,8 @@ impl Index {
                  offset INTEGER NOT NULL,
                  next_index INTEGER NOT NULL,
                  codex_mode INTEGER NOT NULL,
-                 mode_final INTEGER NOT NULL,
+                 head_hash INTEGER NOT NULL,
+                 tail_hash INTEGER NOT NULL,
                  run_category TEXT,
                  run_count INTEGER,
                  last_kind TEXT,
@@ -220,11 +256,11 @@ impl Index {
                  tokenize = 'unicode61 remove_diacritics 2'
              );",
         )?;
-        let (schema, projection, reasoning) = built_with(limits);
+        let (schema, projection, settings) = built_with(limits);
         for (key, value) in [
             ("schema", schema),
             ("projection", projection),
-            ("reasoning", reasoning),
+            ("settings", settings),
         ] {
             self.conn.execute(
                 "INSERT INTO meta (key, value) VALUES (?1, ?2)
@@ -332,6 +368,7 @@ pub struct RefreshReport {
 
 struct StoredRow {
     id: i64,
+    hashes: (i64, i64),
     file: String,
     size: i64,
     mtime_ns: i64,
@@ -358,6 +395,8 @@ struct Done {
     resumed_from: Option<(i64, u64)>,
     records: Vec<(usize, RecordKind, Option<String>, String)>,
     state: ProjectionState,
+    /// `region_hashes` at `state.offset`, so the next pass can tell an append from a rewrite.
+    hashes: (i64, i64),
 }
 
 fn text_eligible(meta: &SessionMeta) -> bool {
@@ -406,10 +445,10 @@ fn project(job: Job, limits: &Limits) -> Option<Done> {
         // Not projected at all: the row only carries metadata.
         ProjectionState {
             offset: job.entry.size_bytes,
-            mode_final: true,
             ..Default::default()
         }
     };
+    let hashes = region_hashes(&job.entry.file, state.offset)?;
     Some(Done {
         entry: job.entry,
         meta,
@@ -417,6 +456,7 @@ fn project(job: Job, limits: &Limits) -> Option<Done> {
         resumed_from,
         records,
         state,
+        hashes,
     })
 }
 
@@ -424,14 +464,14 @@ impl Index {
     fn stored_rows(&self) -> Result<HashMap<(Backend, String), StoredRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, backend, session_id, file, size, mtime_ns, text_indexed,
-                    projection_version, offset, next_index, codex_mode, mode_final,
+                    projection_version, offset, next_index, codex_mode, head_hash, tail_hash,
                     run_category, run_count, last_kind, last_hash
              FROM sessions",
         )?;
         let rows = stmt.query_map([], |r| {
             let run = match (
-                r.get::<_, Option<String>>(12)?,
-                r.get::<_, Option<i64>>(13)?,
+                r.get::<_, Option<String>>(13)?,
+                r.get::<_, Option<i64>>(14)?,
             ) {
                 (Some(c), Some(n)) => Some((c, n as usize)),
                 _ => None,
@@ -446,15 +486,15 @@ impl Index {
                     mtime_ns: r.get(5)?,
                     text_indexed: r.get::<_, i64>(6)? != 0,
                     projection_version: r.get(7)?,
+                    hashes: (r.get(11)?, r.get(12)?),
                     state: ProjectionState {
                         offset: r.get::<_, i64>(8)? as u64,
                         next_index: r.get::<_, i64>(9)? as usize,
                         mode: CodexMode::from_i64(r.get(10)?),
-                        mode_final: r.get::<_, i64>(11)? != 0,
                         run,
                         last_turn: match (
-                            r.get::<_, Option<String>>(14)?,
-                            r.get::<_, Option<i64>>(15)?,
+                            r.get::<_, Option<String>>(15)?,
+                            r.get::<_, Option<i64>>(16)?,
                         ) {
                             (Some(k), Some(h)) => kind_from_str(&k).map(|k| (k, h as u64)),
                             _ => None,
@@ -507,14 +547,16 @@ impl Index {
                     report.unchanged += 1;
                     continue;
                 }
-                // An append-only file that only grew continues where the last pass stopped.
+                // A file continues where the last pass stopped only if it grew and the
+                // bytes it was indexed from are still the same. Growing alone did not prove
+                // that: a rewrite of the same size or larger kept its old rows (#25).
                 Some(s)
                     if s.file == file
                         && s.text_indexed
                         && s.projection_version == PROJECTION_VERSION
-                        && s.state.mode_final
+                        && e.size_bytes as i64 > s.size
                         && e.size_bytes >= s.state.offset
-                        && e.size_bytes as i64 >= s.size =>
+                        && region_hashes(&e.file, s.state.offset) == Some(s.hashes) =>
                 {
                     Work::Resume(s.id, s.state.clone())
                 }
@@ -651,15 +693,16 @@ impl Index {
         let id: i64 = tx.query_row(
             "INSERT INTO sessions (backend, session_id, file, size, mtime_ns, meta, paths, origin,
                  subagent, text_indexed, projection_version, offset, next_index, codex_mode,
-                 mode_final, run_category, run_count, last_kind, last_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+                 head_hash, tail_hash, run_category, run_count, last_kind, last_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
              ON CONFLICT (backend, session_id) DO UPDATE SET
                  file = excluded.file, size = excluded.size, mtime_ns = excluded.mtime_ns,
                  meta = excluded.meta, paths = excluded.paths, origin = excluded.origin,
                  subagent = excluded.subagent, text_indexed = excluded.text_indexed,
                  projection_version = excluded.projection_version, offset = excluded.offset,
                  next_index = excluded.next_index, codex_mode = excluded.codex_mode,
-                 mode_final = excluded.mode_final, run_category = excluded.run_category,
+                 head_hash = excluded.head_hash, tail_hash = excluded.tail_hash,
+                 run_category = excluded.run_category,
                  run_count = excluded.run_count, last_kind = excluded.last_kind,
                  last_hash = excluded.last_hash
              RETURNING id",
@@ -678,7 +721,8 @@ impl Index {
                 s.offset as i64,
                 s.next_index as i64,
                 s.mode.as_i64(),
-                s.mode_final as i64,
+                d.hashes.0,
+                d.hashes.1,
                 s.run.as_ref().map(|(c, _)| c.clone()),
                 s.run.as_ref().map(|(_, n)| *n as i64),
                 s.last_turn.map(|(k, _)| kind_str(k)),
