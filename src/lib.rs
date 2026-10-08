@@ -6,6 +6,7 @@ pub mod archive;
 pub mod consent;
 pub mod doctor;
 pub mod gc;
+pub mod hook;
 pub mod import;
 pub mod index;
 pub mod limits;
