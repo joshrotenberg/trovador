@@ -4,7 +4,6 @@
 //! where spawn provenance is recorded, and where the run log is written, so no caller can
 //! skip any of them.
 
-use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -15,6 +14,7 @@ use serde_json::{Value, json};
 
 use crate::archive::{self, Backend, LookupError};
 use crate::consent::{self, Check};
+use crate::runlog;
 use crate::sessions::Ctx;
 
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
@@ -74,6 +74,9 @@ pub struct Continuation {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct AskResult {
+    /// Names this one run in `runs.jsonl`, whose start and end records carry it. A session
+    /// takes many turns, so its id cannot tell overlapping turns apart.
+    pub run_id: String,
     pub backend: Backend,
     /// The session the turn ran in. Present whenever the provider got far enough to name
     /// it, including runs that failed or timed out.
@@ -141,8 +144,12 @@ pub enum RunError {
     Depth { depth: usize, max: usize },
     #[error("{0}")]
     Invalid(String),
-    #[error("could not start {backend}: {message}")]
-    Spawn { backend: Backend, message: String },
+    #[error("could not start {backend} (run {run_id}): {message}")]
+    Spawn {
+        backend: Backend,
+        run_id: String,
+        message: String,
+    },
 }
 
 /// What the stream callback learns as the run goes.
@@ -319,9 +326,10 @@ async fn run_turn(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
 
     let seen = Arc::new(Mutex::new(Seen::default()));
     let started = Instant::now();
-    log_run(
-        ctx,
-        json!({"phase": "start", "backend": backend, "verb": verb,
+    let run_id = uuid::Uuid::new_v4().to_string();
+    runlog::append(
+        &ctx.paths,
+        json!({"phase": "start", "run_id": run_id, "backend": backend, "verb": verb,
         "session": resume, "cwd": cwd, "depth": depth}),
     );
     let mut warnings = Vec::new();
@@ -367,13 +375,14 @@ async fn run_turn(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
         )),
         Err(Failure::Failed(m)) => Some(seen.error.clone().unwrap_or_else(|| m.clone())),
         Err(Failure::Spawn(m)) => {
-            log_run(
-                ctx,
-                json!({"phase": "end", "backend": backend, "verb": verb,
-                "outcome": "spawn_failed", "ms": duration_ms}),
+            runlog::append(
+                &ctx.paths,
+                json!({"phase": "end", "run_id": run_id, "backend": backend, "verb": verb,
+                "session": resume, "outcome": "spawn_failed", "ms": duration_ms}),
             );
             return Err(RunError::Spawn {
                 backend,
+                run_id,
                 message: m.clone(),
             });
         }
@@ -423,14 +432,15 @@ async fn run_turn(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
         }
         None => (None, None, None),
     };
-    log_run(
-        ctx,
-        json!({"phase": "end", "backend": backend, "verb": verb,
+    runlog::append(
+        &ctx.paths,
+        json!({"phase": "end", "run_id": run_id, "backend": backend, "verb": verb,
         "session": session_id, "outcome": if timed_out { "timeout" } else if is_error { "error" } else { "ok" },
         "ms": duration_ms}),
     );
 
     Ok(AskResult {
+        run_id,
         backend,
         session_id,
         verb: verb.into(),
@@ -829,6 +839,11 @@ pub(crate) async fn oneshot(
         // Reading the transcript in the prompt is the whole job; no tools are needed.
         .max_turns(1);
     let started = Instant::now();
+    let run_id = uuid::Uuid::new_v4().to_string();
+    runlog::append(
+        &ctx.paths,
+        json!({"phase": "start", "run_id": run_id, "backend": "claude", "verb": "summarize"}),
+    );
     let result = cmd.execute_json(&claude).await;
     let outcome = match &result {
         Ok(r) if !r.is_error => "ok",
@@ -836,35 +851,14 @@ pub(crate) async fn oneshot(
         Err(claude_wrapper::Error::Timeout { .. }) => "timeout",
         Err(_) => "failed",
     };
-    log_run(
-        ctx,
-        json!({"phase": "end", "backend": "claude", "verb": "summarize",
+    runlog::append(
+        &ctx.paths,
+        json!({"phase": "end", "run_id": run_id, "backend": "claude", "verb": "summarize",
         "outcome": outcome, "ms": started.elapsed().as_millis() as u64}),
     );
     match result {
         Ok(r) if r.is_error => Err(r.result),
         Ok(r) => Ok((r.result, r.cost_usd.unwrap_or(0.0))),
         Err(e) => Err(e.to_string()),
-    }
-}
-
-/// One JSONL line per run start and end. Losing a line never affects the run.
-fn log_run(ctx: &Ctx, mut line: Value) {
-    if let Some(obj) = line.as_object_mut() {
-        obj.insert(
-            "at".into(),
-            humantime::format_rfc3339_millis(std::time::SystemTime::now())
-                .to_string()
-                .into(),
-        );
-        obj.insert("pid".into(), std::process::id().into());
-    }
-    let _ = std::fs::create_dir_all(&ctx.paths.home);
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(ctx.paths.home.join("runs.jsonl"))
-    {
-        let _ = writeln!(f, "{line}");
     }
 }

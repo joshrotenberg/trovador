@@ -11,6 +11,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, Backend};
+use crate::runlog;
 use crate::sessions::Ctx;
 use crate::summary::{self, Summary};
 
@@ -87,7 +88,14 @@ pub fn gc(ctx: &Ctx, older_than: Duration, apply: bool) -> std::io::Result<GcRep
         }
     }
 
-    let log = ctx.paths.home.join("runs.jsonl");
+    let log = runlog::path(&ctx.paths);
+    // Held across the read and the rewrite, so a run that ends meanwhile waits rather than
+    // appending to the file about to be replaced.
+    let _lock = if apply {
+        Some(runlog::lock(&ctx.paths)?)
+    } else {
+        None
+    };
     if let Ok(text) = std::fs::read_to_string(&log) {
         report.runs.bytes_before = text.len() as u64;
         let mut kept = String::with_capacity(text.len());
@@ -112,8 +120,7 @@ pub fn gc(ctx: &Ctx, older_than: Duration, apply: bool) -> std::io::Result<GcRep
     Ok(report)
 }
 
-/// Replaces a file atomically. A run that appends to the log between the read and the
-/// rename loses that line, so gc is best run when no runs are in progress.
+/// Replaces a file atomically. The caller holds the log's lock.
 fn rewrite(path: &Path, contents: &str) -> std::io::Result<()> {
     let tmp = path.with_extension(format!("jsonl.{}.tmp", std::process::id()));
     std::fs::write(&tmp, contents)?;

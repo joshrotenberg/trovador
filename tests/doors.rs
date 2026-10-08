@@ -199,8 +199,16 @@ async fn a_bad_query_is_a_readable_tool_error() {
     assert!(r.all_text().starts_with("invalid query"));
 }
 
+/// Drops what differs on every run by design: the time it took and the run's own id,
+/// which must be a well-formed uuid.
 fn without_duration(mut v: Value) -> Value {
-    v.as_object_mut().unwrap().remove("duration_ms");
+    let obj = v.as_object_mut().unwrap();
+    obj.remove("duration_ms");
+    let run_id = obj.remove("run_id").expect("every ask result has a run_id");
+    assert!(
+        uuid::Uuid::parse_str(run_id.as_str().unwrap()).is_ok(),
+        "{run_id}"
+    );
     v
 }
 

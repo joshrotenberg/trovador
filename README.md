@@ -191,7 +191,7 @@ another turn.
   to both backends. `bypassPermissions` and Codex's `danger-full-access` are refused.
 - **Depth.** Every session trovador starts can reach trovador again. `TROVADOR_DEPTH` is
   passed down and a run at `TROVADOR_MAX_DEPTH` (2) is refused.
-- **Log.** Every run's start and end is a line in `~/.trovador/runs.jsonl`.
+- **Log.** Every run's start and end is a line in `~/.trovador/runs.jsonl`, and both carry the `run_id` that the `ask` result returns.
 
 ## Summaries and consulting
 
