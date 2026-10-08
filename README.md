@@ -110,6 +110,133 @@ Every command prints one JSON document. The MCP `sessions` tool takes the same i
 `session://{backend}/{id}` and `session://{backend}/{id}/transcript` return `show` and the
 first transcript page.
 
+## Examples
+
+Real output from the development machine on 2026-10-08, over 5,452 sessions, while working on
+trovador itself. Fields are trimmed (`…`), and home paths are shortened to `~`. Costs are as
+the provider reported them.
+
+**Where did that come from?** One search covers both agents. The session running the search
+had just mentioned the term, so it is left out and counted in `hidden`.
+
+```console
+$ trovador search stdout-check --per-session 1
+{
+  "query": "stdout-check",
+  "sessions_matched": 3,
+  "returned": 3,
+  "hits": [
+    {
+      "backend": "claude",
+      "session_id": "baad058e-684e-417c-9c59-dbf351e2dc7b",
+      "title": "spike-dev",
+      "matches": [{"index": 6074, "type": "tool_result",
+        "excerpt": "14: \"verify\": \"npm run fmt:check && npm run lint && npm run check && npm run [stdout-check] && npm test\","}],
+      …
+    },
+    { "backend": "claude", "session_id": "79892eda-…", "title": "spike-dev2", … },
+    {
+      "backend": "codex",
+      "session_id": "01a007a0-134e-70e2-84e5-a19ae6996317",
+      "matches": [{"index": 2987, "type": "system",
+        "excerpt": "...cal blocker: `npm run fmt:check` fails on `README.md`. Tests pass 449/0; typecheck, lint, [stdout-check], and `git diff --check` pass."}],
+      …
+    }
+  ],
+  "hidden": {"active": 1, "automated": 0, "excluded": 0, "unavailable": 0},
+  "exhaustive": true,
+  "note": "matching sessions left out by default: 1 written in the last 600 s (include_active)"
+}
+```
+
+**Open it where the match is.** `index` is the record to start a transcript page at.
+
+```console
+$ trovador sessions transcript 79892eda --limit 4
+{
+  "backend": "claude",
+  "session_id": "79892eda-e7f0-4ff6-a162-623ae8bc2718",
+  "offset": 0,
+  "records": [
+    {"index": 0, "type": "omitted", "name": "ai-title", "count": 1},
+    {"index": 1, "type": "omitted", "name": "queue-operation", "count": 2},
+    {"index": 2, "type": "user", "text": "```ini\n[wrap] main f528143 · 2 PRs open · 52 issues · working tree clean\n…"},
+    {"index": 3, "type": "omitted", "name": "attachment", "count": 4}
+  ],
+  "has_more": true,
+  "next_offset": 4
+}
+```
+
+**What happened in it?** A 1.1 MB session, summarized with haiku for about a cent. Asking
+again returns the cache at no cost until the session changes.
+
+```console
+$ trovador summarize 79892eda
+{
+  "session_id": "79892eda-e7f0-4ff6-a162-623ae8bc2718",
+  "summary": "**Goal:** Fix issue #63 in the `spike` repo: `list --project` took about 1.16s because every session's metadata was read to apply the filter.\n\n**What happened:** Measurement showed the issue's framing was incomplete. …\n\n**Open items:**\n- Review and merge PR #90.\n- #66: file mtime is processing time, but records carry event time. …\n- #89: use tool-use count as liveness, …",
+  "cached": false,
+  "cost_usd": 0.00971224,
+  "model": "haiku",
+  "chunks": 1,
+  "transcript_chars": 88727,
+  …
+}
+```
+
+**Ask about it, then keep going.** `about` seeds a new session with that summary. trovador
+started the new session, so it can be continued without approval.
+
+```console
+$ trovador ask "Of the open items, which would you pick up first and why? Two sentences." \
+    --about 79892eda --backend claude --model haiku
+{
+  "run_id": "23c5f3a2-751a-48e5-b240-c999735131ea",
+  "session_id": "ba5efbe7-4458-4fa7-a312-1bc167cb4199",
+  "verb": "started",
+  "result": "I'd start with #66, because it's a correctness bug that affects every \"recent\" answer, and the fix doesn't depend on PR #90. Merging #90 should come right after, since it's already ready and it unblocks #89, but that merge is yours to approve.",
+  "cost_usd": 0.00532333,
+  "continuation": {"resumable": true, "allowed": true, …},
+  "consulted": {"backend": "claude", "session_id": "79892eda-…", "summary_cached": true, "summary_cost_usd": 0.0},
+  "open_with": "cd '…/spike' && claude --resume ba5efbe7-4458-4fa7-a312-1bc167cb4199",
+  …
+}
+
+$ trovador ask "In one sentence: what is the main risk in doing #66 first?" --session ba5efbe7 --model haiku
+{
+  "run_id": "d843fe27-932b-4e64-b536-0fd82c41c3b7",
+  "session_id": "ba5efbe7-4458-4fa7-a312-1bc167cb4199",
+  "verb": "continued",
+  "result": "The main risk is that deriving event time from records means reading each session file, which reintroduces the cost #63 just removed and collides with the unmerged #90 cache and listing code.",
+  "cost_usd": 0.0061699300000000006,
+  …
+}
+```
+
+**Check a new machine.**
+
+```console
+$ trovador doctor
+{
+  "version": "0.1.0",
+  "ok": true,
+  "problems": [],
+  "providers": [
+    {"backend": "claude", "path": "~/.local/bin/claude", "version": "2.1.293 (Claude Code)"},
+    {"backend": "codex", "path": "~/.local/bin/codex", "version": "codex-cli 0.157.1"}
+  ],
+  "archives": [
+    {"name": "claude", "path": "~/.claude/projects", "readable": true, "sessions": 1594},
+    {"name": "codex", "path": "~/.codex/sessions", "readable": true, "sessions": 3786},
+    {"name": "codex archived", "path": "~/.codex/archived_sessions", "readable": true, "sessions": 73}
+  ],
+  "index": {"size_bytes": 418643968, "sessions": 5452, "text_indexed": 3694, "records": 671135, …},
+  "consent": {"level": "approved", "source": "file", "spawned": 4, "approved": 2, "denied": 0, …},
+  …
+}
+```
+
 ## What a session row carries
 
 | Field | Source |
