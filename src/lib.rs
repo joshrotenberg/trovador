@@ -14,6 +14,7 @@ pub mod redact;
 pub mod run;
 pub mod sessions;
 pub mod summary;
+pub mod timespec;
 pub mod transcript;
 
 pub use archive::Backend;

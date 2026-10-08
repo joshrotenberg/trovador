@@ -76,7 +76,7 @@ fn live() -> &'static Live {
                 limit: Some(usize::MAX),
                 ..Default::default()
             },
-        );
+        ).unwrap();
         let all: Vec<(ArchiveEntry, SessionMeta)> = listed
             .sessions
             .into_iter()
@@ -322,6 +322,7 @@ fn every_session_file_is_listed_exactly_once_newest_first() {
             ..Default::default()
         },
     )
+    .unwrap()
     .sessions
     .into_iter()
     .map(|r| (r.backend, r.session_id))
@@ -658,6 +659,7 @@ fn listing_is_the_same_with_and_without_the_index() {
     };
     let rows = |c: &Ctx| -> HashMap<String, Value> {
         sessions::list(c, &opts)
+            .unwrap()
             .sessions
             .into_iter()
             .map(|r| {
@@ -740,13 +742,16 @@ async fn the_cli_and_mcp_return_the_library_answer_on_real_data() {
     let mut client = tower_mcp::TestClient::from_router(trovador::mcp::router(ctx.clone()));
     client.initialize().await;
 
-    let lib = served(sessions::list(
-        &ctx,
-        &ListOpts {
-            limit: Some(50),
-            ..Default::default()
-        },
-    ));
+    let lib = served(
+        sessions::list(
+            &ctx,
+            &ListOpts {
+                limit: Some(50),
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    );
     let since = l.started;
     assert_eq!(
         stable(cli(&ctx, &["sessions", "list", "--limit", "50"]), since),

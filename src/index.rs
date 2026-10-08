@@ -72,6 +72,10 @@ pub const AUTOMATED_ORIGINS: &[&str] = &["sdk-cli", "exec", "sdk-ts"];
 /// What a search leaves out by default, beyond the caller's own filters.
 #[derive(Clone, Debug, Default)]
 pub struct Visibility {
+    /// The caller's time window: last written at or after, and before. Not defaults, so
+    /// what they leave out is not counted as hidden.
+    pub since_ns: Option<i64>,
+    pub until_ns: Option<i64>,
     /// Leave out sessions written at or after this time, in nanoseconds since the epoch.
     pub active_since_ns: Option<i64>,
     pub exclude_session: Option<String>,
@@ -756,6 +760,11 @@ pub struct SearchOpts {
     pub include_automated: bool,
     /// Leave out this session id, typically the caller's own.
     pub exclude_session: Option<String>,
+    /// Only sessions last written at or after this: an RFC 3339 time, a date, or a
+    /// duration back from now such as `2d`.
+    pub since: Option<String>,
+    /// Only sessions last written before this, in the same forms as `since`.
+    pub until: Option<String>,
     /// Sessions to return.
     pub limit: Option<usize>,
     /// Matching records to show per session.
@@ -861,6 +870,14 @@ impl Index {
         }
         if !opts.include_subagents {
             filters.push("s.subagent = 0".to_string());
+        }
+        if let Some(t) = vis.since_ns {
+            args.push(t.into());
+            filters.push(format!("s.mtime_ns >= ?{}", args.len()));
+        }
+        if let Some(t) = vis.until_ns {
+            args.push(t.into());
+            filters.push(format!("s.mtime_ns < ?{}", args.len()));
         }
         // The defaults, each kept apart so what it hid can be counted.
         let mut defaults: Vec<(&str, String, rusqlite::types::Value)> = Vec::new();
