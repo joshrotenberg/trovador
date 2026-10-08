@@ -3,10 +3,16 @@ name = "trovador"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
-description = "Local Claude Code and Codex sessions as one MCP server and CLI"
+description = "Search, read, continue, and consult local Claude Code and Codex sessions, as one MCP server and CLI"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/joshrotenberg/trovador"
-publish = false
+homepage = "https://github.com/joshrotenberg/trovador"
+documentation = "https://docs.rs/trovador"
+readme = "README.md"
+keywords = ["claude", "codex", "mcp", "agents", "sessions"]
+categories = ["command-line-utilities", "development-tools"]
+# Planning notes, parity scripts, and live tests are for this repository, not the crate.
+exclude = ["docs/", "scripts/", ".github/", "AGENTS.md", "CLAUDE.md"]
 
 [[bin]]
 name = "trovador"

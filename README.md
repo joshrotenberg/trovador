@@ -28,14 +28,22 @@ is tracked in [#1](https://github.com/joshrotenberg/trovador/issues/1).
 
 ## Install
 
+From crates.io once published, or from a checkout:
+
 ```sh
-cargo install --path . --locked
+cargo install trovador --locked        # or: cargo install --path . --locked
 trovador import --dry-run      # optional: see what would come over from spike
 trovador import                # optional: spike's consent records and summaries
 trovador index                 # build the search index once; searches keep it current
 claude mcp add --scope user trovador -- ~/.cargo/bin/trovador serve
 codex mcp add trovador -- ~/.cargo/bin/trovador serve
 ```
+
+`trovador doctor` checks the setup: it finds `claude` and `codex` and their versions,
+reads the archives, and reports the index and consent state, with a fix for each problem.
+
+Supported on macOS and Linux. Windows is untested: running a provider relies on Unix
+process groups to stop it on timeout.
 
 Register the absolute path: a client launched from the desktop may not have `~/.cargo/bin`
 on its `PATH`. A stdio server is started once per client session and never reloads, so
