@@ -439,26 +439,13 @@ fn main() -> ExitCode {
             }
         }
         Command::Doctor => {
-            let claude = archive::scan_claude(&ctx.paths.claude_archive);
-            let codex = archive::scan_codex(&ctx.paths.codex_archive, false);
-            let archived = archive::scan_codex(&ctx.paths.codex_archived, true);
-            print(&json!({
-                "version": env!("CARGO_PKG_VERSION"),
-                "paths": {
-                    "claude_archive": ctx.paths.claude_archive,
-                    "codex_archive": ctx.paths.codex_archive,
-                    "codex_archived": ctx.paths.codex_archived,
-                    "home": ctx.paths.home,
-                },
-                "sessions": {
-                    "claude": claude.len(),
-                    "codex": codex.len(),
-                    "codex_archived": archived.len(),
-                },
-                "index": sessions::index_status(&ctx),
-                "consent": consent::status(&ctx.paths),
-                "limits": ctx.limits,
-            }))
+            let runtime = match tokio::runtime::Runtime::new() {
+                Ok(r) => r,
+                Err(e) => return fail(e),
+            };
+            let report = runtime.block_on(trovador::doctor::report(&ctx));
+            let code = print(&report);
+            if report.ok { code } else { ExitCode::FAILURE }
         }
     }
 }
