@@ -360,6 +360,15 @@ async fn run_turn(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
         json!({"phase": "start", "run_id": run_id, "backend": backend, "verb": verb,
         "session": resume, "cwd": cwd, "depth": depth}),
     );
+    let unfinished = Unfinished {
+        ctx,
+        record: Some(
+            json!({"phase": "end", "run_id": run_id, "backend": backend, "verb": verb,
+            "session": resume, "outcome": "cancelled"}),
+        ),
+        seen: Some(seen.clone()),
+        started,
+    };
     let mut warnings = Vec::new();
     let outcome = match backend {
         Backend::Claude => {
@@ -403,6 +412,7 @@ async fn run_turn(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
         )),
         Err(Failure::Failed(m)) => Some(seen.error.clone().unwrap_or_else(|| m.clone())),
         Err(Failure::Spawn(m)) => {
+            unfinished.finish();
             runlog::append(
                 &ctx.paths,
                 json!({"phase": "end", "run_id": run_id, "backend": backend, "verb": verb,
@@ -460,6 +470,7 @@ async fn run_turn(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
         }
         None => (None, None, None),
     };
+    unfinished.finish();
     runlog::append(
         &ctx.paths,
         json!({"phase": "end", "run_id": run_id, "backend": backend, "verb": verb,
@@ -487,6 +498,38 @@ async fn run_turn(ctx: &Ctx, opts: &AskOpts) -> Result<AskResult, RunError> {
         resource,
         open_with,
     })
+}
+
+/// Writes the end record of a run whose future is dropped before it writes its own: a
+/// cancelled or expired MCP task, or a client that went away mid-turn. Dropping the future
+/// kills the provider, and without this the log showed a start with no end.
+struct Unfinished<'a> {
+    ctx: &'a Ctx,
+    record: Option<Value>,
+    seen: Option<Arc<Mutex<Seen>>>,
+    started: Instant,
+}
+
+impl Unfinished<'_> {
+    fn finish(mut self) {
+        self.record = None;
+    }
+}
+
+impl Drop for Unfinished<'_> {
+    fn drop(&mut self) {
+        let Some(mut record) = self.record.take() else {
+            return;
+        };
+        if let Some(seen) = &self.seen
+            && let Ok(seen) = seen.lock()
+            && let Some(id) = &seen.session_id
+        {
+            record["session"] = json!(id);
+        }
+        record["ms"] = json!(self.started.elapsed().as_millis() as u64);
+        runlog::append(&self.ctx.paths, record);
+    }
 }
 
 enum Failure {
@@ -892,7 +935,17 @@ pub(crate) async fn oneshot(
         &ctx.paths,
         json!({"phase": "start", "run_id": run_id, "backend": "claude", "verb": "summarize"}),
     );
+    let unfinished = Unfinished {
+        ctx,
+        record: Some(
+            json!({"phase": "end", "run_id": run_id, "backend": "claude",
+            "verb": "summarize", "outcome": "cancelled"}),
+        ),
+        seen: None,
+        started,
+    };
     let result = cmd.execute_json(&claude).await;
+    unfinished.finish();
     let outcome = match &result {
         Ok(r) if !r.is_error => "ok",
         Ok(_) => "error",
