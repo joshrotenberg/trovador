@@ -480,3 +480,29 @@ fn every_run_is_logged_at_start_and_end() {
     assert_eq!(lines[1]["outcome"], "ok");
     assert_eq!(lines[1]["session"], json!(r.session_id));
 }
+
+#[test]
+fn a_claude_that_cannot_start_is_a_spawn_error_and_leaves_no_spawned_record() {
+    // A missing claude used to come back as an ordinary error result, with the id chosen
+    // for the new session recorded as spawned although no session was ever created.
+    let f = Fixture::new().with_fakes();
+    let not_executable = f.dir.path().join("claude-not-executable");
+    std::fs::write(&not_executable, "#!/bin/sh\n").unwrap();
+    for bin in [f.dir.path().join("no-such-claude"), not_executable] {
+        let mut ctx = f.ctx();
+        ctx.paths.claude_bin = Some(bin.clone());
+        let err = ask(&ctx, prompt("hello")).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                RunError::Spawn {
+                    backend: Backend::Claude,
+                    ..
+                }
+            ),
+            "{}: {err}",
+            bin.display()
+        );
+        assert_eq!(consent::status(&ctx.paths).spawned, 0, "{}", bin.display());
+    }
+}
