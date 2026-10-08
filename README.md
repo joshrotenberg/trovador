@@ -194,6 +194,12 @@ another turn.
   passed down and a run at `TROVADOR_MAX_DEPTH` (2) is refused.
 - **Log.** Every run's start and end is a line in `~/.trovador/runs.jsonl`, and both carry
   the `run_id` that the `ask` result returns.
+- **Tasks.** Over MCP, `ask` and `summarize` accept task execution. A client that
+  negotiates tasks gets a task id at once and polls `tasks/get` for the result instead of
+  holding one call open for the length of the turn; any other client gets the result as
+  before. A task without a TTL keeps its run and result for the longest provider timeout plus
+  one hour (75 minutes by default). Cancelling a task, or letting it expire, kills the run,
+  and the run log records it as `cancelled`.
 - **Long replies.** A reply longer than `TROVADOR_RESPONSE_MAX_CHARS` (100,000) is cut to
   that many characters and `result_truncated` says so. The whole reply is saved in
   `~/.trovador/outputs/<run_id>.txt` (mode 0600), and the rest is read with

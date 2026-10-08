@@ -42,7 +42,7 @@ after #15 is in the person's hands: making the repository public, adding the
 
 | Item | Why | Use case |
 |---|---|---|
-| A long `ask` returns a task handle at once and reports progress, through MCP's task extension, which tower-mcp supports | A 10-minute Codex turn otherwise holds one tool call open for 10 minutes | 3 |
+| A long `ask` returns a task handle at once, through MCP's task extension (done: `ask` and `summarize` accept tasks; progress beyond working and finished is not reported, since tower-mcp sets a task's status message only from a handler that requires tasks) | A 10-minute Codex turn otherwise holds one tool call open for 10 minutes | 3 |
 | `since` and `until` on `list` and `search` (done, #16) | "What did I do last week" without a model call | 1, 7 |
 | `resume_blocked_by` names the call that works: `ask` with `about` and the same backend (done, #16) | The way to continue past a full context is not discoverable | 5 |
 | `trovador gc` for `summaries/` and `runs.jsonl` (done, #17) | Both grow without bound | |
