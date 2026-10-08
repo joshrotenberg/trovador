@@ -1,6 +1,6 @@
 //! Removing what trovador keeps that will never be used again.
 //!
-//! Only derived files are touched: cached summaries and the run log. Consent is never
+//! Only derived files are touched: cached summaries, saved replies, and the run log. Consent is never
 //! touched, because it is the only record of which sessions trovador started.
 
 use std::collections::HashMap;
@@ -21,7 +21,17 @@ pub struct GcReport {
     pub dry_run: bool,
     pub older_than: String,
     pub summaries: SummaryCounts,
+    /// Whole ask replies saved because they exceeded the response budget.
+    pub outputs: OutputCounts,
     pub runs: RunCounts,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+pub struct OutputCounts {
+    pub kept: usize,
+    /// Saved before the cutoff.
+    pub old: usize,
+    pub bytes_removed: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
@@ -85,6 +95,23 @@ pub fn gc(ctx: &Ctx, older_than: Duration, apply: bool) -> std::io::Result<GcRep
                 }
             }
             None => report.summaries.kept += 1,
+        }
+    }
+
+    for item in std::fs::read_dir(crate::output::dir(&ctx.paths))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let Ok(meta) = item.metadata() else { continue };
+        if meta.modified().is_ok_and(|m| m < cutoff) {
+            report.outputs.old += 1;
+            report.outputs.bytes_removed += meta.len();
+            if apply {
+                std::fs::remove_file(item.path())?;
+            }
+        } else {
+            report.outputs.kept += 1;
         }
     }
 

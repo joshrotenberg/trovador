@@ -139,6 +139,10 @@ enum Command {
         force: bool,
         #[arg(long)]
         model: Option<String>,
+        /// The character to start from, for the next part of a summary longer than the
+        /// response budget.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
     },
     /// Import consent and summaries from spike (agent-sessions). Reads, never writes, the
     /// spike directory.
@@ -245,6 +249,14 @@ enum SessionsCmd {
         #[arg(long)]
         limit: Option<usize>,
     },
+    /// The rest of an ask reply that was longer than the response budget.
+    Output {
+        /// The run_id from the ask result.
+        run_id: String,
+        /// The character to start from.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+    },
 }
 
 /// Whether output is redacted, set once from the command line before anything prints.
@@ -339,6 +351,12 @@ fn main() -> ExitCode {
                 Ok(t) => print(&t),
                 Err(e) => fail(e),
             },
+            SessionsCmd::Output { run_id, offset } => {
+                match trovador::output::read(&ctx, &run_id, offset) {
+                    Ok(o) => print(&o),
+                    Err(e) => fail(e),
+                }
+            }
         },
         Command::Search {
             query,
@@ -458,6 +476,7 @@ fn main() -> ExitCode {
             backend,
             force,
             model,
+            offset,
         } => {
             let runtime = match tokio::runtime::Runtime::new() {
                 Ok(r) => r,
@@ -470,7 +489,7 @@ fn main() -> ExitCode {
                 force,
                 model.as_deref(),
             )) {
-                Ok(s) => print(&s),
+                Ok(s) => print(&summary::part(s, offset, &ctx.limits)),
                 Err(e) => fail(e),
             }
         }

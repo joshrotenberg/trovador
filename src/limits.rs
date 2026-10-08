@@ -10,7 +10,9 @@ use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Limits {
-    /// Hard ceiling on the characters a single response may carry.
+    /// Ceiling on the content of one response: the characters of transcript records in a
+    /// page, or of model text (an ask reply, a summary). The fields around them are extra.
+    /// Model text past it is cut, and the response says how to read the rest.
     pub response_max_chars: usize,
     /// Head read steps for session metadata, smallest first. Each step is used only when
     /// the previous one left cwd or the first user message missing. Codex writes a large
