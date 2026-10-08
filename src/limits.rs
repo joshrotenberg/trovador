@@ -62,6 +62,9 @@ pub struct Limits {
     /// search. They raised the index from 287 MB to 415 MB on the development machine.
     /// Transcripts show them either way.
     pub index_reasoning: bool,
+    /// Redact secrets in what is returned, including search excerpts, which are built
+    /// after redaction. Turned off only by `--no-redact` when the process starts.
+    pub redact: bool,
 }
 
 impl Default for Limits {
@@ -86,6 +89,7 @@ impl Default for Limits {
             fanout: 3,
             active_window_s: 600,
             index_reasoning: true,
+            redact: true,
         }
     }
 }
@@ -143,6 +147,8 @@ impl Limits {
             index_reasoning: get("TROVADOR_INDEX_REASONING")
                 .map(|v| !matches!(v.trim(), "0" | "false" | "no" | "off"))
                 .unwrap_or(d.index_reasoning),
+            // Deliberately not read from the environment: only the command line turns it off.
+            redact: d.redact,
         }
     }
 }

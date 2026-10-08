@@ -858,6 +858,7 @@ impl Index {
         vis: &Visibility,
         limit: usize,
         per_session: usize,
+        redact: bool,
     ) -> Result<RawSearch> {
         let expression = if opts.regex || opts.fts {
             opts.query.clone()
@@ -981,28 +982,22 @@ impl Index {
             })?
             .collect::<rusqlite::Result<_>>()?;
 
-        let excerpt_sql = if opts.regex {
-            format!(
-                "SELECT rowid & 4294967295, kind, name, text FROM records
-                 WHERE {matcher} AND rowid BETWEEN ?2 AND ?3
-                 ORDER BY rowid LIMIT {per_session}"
-            )
-        } else {
-            format!(
-                "SELECT rowid & 4294967295, kind, name,
-                        snippet(records, 0, '[', ']', '...', 24) FROM records
-                 WHERE {matcher} AND rowid BETWEEN ?2 AND ?3
-                 ORDER BY rank LIMIT {per_session}"
-            )
-        };
-        let mut excerpts = self.conn.prepare(&excerpt_sql)?;
+        // Whole records, not snippet(): an excerpt is cut and highlighted only after the
+        // full text is redacted. snippet() bracketed a match inside a key before the doors
+        // redacted, which split the key past recognition and returned it whole (#22).
+        let order_by = if opts.regex { "rowid" } else { "rank" };
+        let mut excerpts = self.conn.prepare(&format!(
+            "SELECT rowid & 4294967295, kind, name, text FROM records
+             WHERE {matcher} AND rowid BETWEEN ?2 AND ?3
+             ORDER BY {order_by} LIMIT {per_session}"
+        ))?;
         let re = if opts.regex {
             regex::RegexBuilder::new(&opts.query)
                 .case_insensitive(true)
                 .build()
                 .ok()
         } else {
-            None
+            fts_highlighter(&expression)
         };
 
         let mut hits = Vec::new();
@@ -1019,10 +1014,7 @@ impl Index {
                             index: r.get::<_, i64>(0)? as usize,
                             kind: r.get(1)?,
                             name: r.get(2)?,
-                            excerpt: match &re {
-                                Some(re) => regex_excerpt(re, &text),
-                                None => text.split_whitespace().collect::<Vec<_>>().join(" "),
-                            },
+                            excerpt: excerpt(&text, re.as_ref(), redact),
                         })
                     },
                 )?
@@ -1081,33 +1073,116 @@ impl Index {
     }
 }
 
-/// About 90 characters either side of the first match, whitespace collapsed.
-fn regex_excerpt(re: &regex::Regex, text: &str) -> String {
-    let Some(m) = re.find(text) else {
-        return text.chars().take(180).collect();
+/// A pattern that finds a terms or FTS5 query's words and phrases in a record, for
+/// highlighting. Operators, column names, and grouping are dropped; `word*` matches as a
+/// prefix. Approximate by design: it only decides where the brackets go.
+pub fn fts_highlighter(expression: &str) -> Option<regex::Regex> {
+    let mut pieces: Vec<(String, bool)> = Vec::new();
+    let mut chars = expression.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '"' {
+            let mut phrase = String::new();
+            while let Some(c) = chars.next() {
+                if c == '"' {
+                    if chars.peek() == Some(&'"') {
+                        chars.next();
+                        phrase.push('"');
+                        continue;
+                    }
+                    break;
+                }
+                phrase.push(c);
+            }
+            let prefix = chars.peek() == Some(&'*');
+            pieces.push((phrase, prefix));
+        } else if !c.is_whitespace() && !"(),^+-".contains(c) {
+            let mut word = String::from(c);
+            while let Some(&n) = chars.peek() {
+                if n.is_whitespace() || "()\",".contains(n) {
+                    break;
+                }
+                word.push(n);
+                chars.next();
+            }
+            let word = word.rsplit(':').next().unwrap_or("").to_string();
+            if matches!(word.as_str(), "AND" | "OR" | "NOT") || word.starts_with("NEAR") {
+                continue;
+            }
+            let prefix = word.ends_with('*');
+            pieces.push((word.trim_end_matches('*').to_string(), prefix));
+        }
+    }
+    let alternatives: Vec<String> = pieces
+        .iter()
+        .filter_map(|(text, prefix)| {
+            let words: Vec<String> = text
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|w| !w.is_empty())
+                .map(regex::escape)
+                .collect();
+            if words.is_empty() {
+                return None;
+            }
+            let body = words.join(r"[^\p{L}\p{N}]+");
+            Some(if *prefix {
+                format!(r"\b{body}[\p{{L}}\p{{N}}]*")
+            } else {
+                format!(r"\b{body}\b")
+            })
+        })
+        .collect();
+    if alternatives.is_empty() {
+        return None;
+    }
+    regex::RegexBuilder::new(&alternatives.join("|"))
+        .case_insensitive(true)
+        .build()
+        .ok()
+}
+
+/// About 90 characters either side of the first match, with every match in that window
+/// bracketed and whitespace collapsed. With `redact`, the whole text is redacted first, so
+/// neither a bracket inside a key nor the window's edge can keep a key from being caught.
+/// A match that lay inside a secret is gone from the redacted text, and the excerpt shows
+/// the start of the record instead.
+pub fn excerpt(text: &str, re: Option<&regex::Regex>, redact: bool) -> String {
+    let text: std::borrow::Cow<str> = if redact {
+        crate::redact::redact_str(text)
+    } else {
+        std::borrow::Cow::Borrowed(text)
     };
-    let start = text[..m.start()]
+    let collapse = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let Some(first) = re.and_then(|re| re.find(&text)) else {
+        let head: String = text.chars().take(180).collect();
+        let more = head.len() < text.len();
+        return format!("{}{}", collapse(&head), if more { "..." } else { "" });
+    };
+    let start = text[..first.start()]
         .char_indices()
         .rev()
         .nth(89)
         .map(|(i, _)| i)
         .unwrap_or(0);
-    let end = text[m.end()..]
+    let end = text[first.end()..]
         .char_indices()
         .nth(90)
-        .map(|(i, _)| m.end() + i)
+        .map(|(i, _)| first.end() + i)
         .unwrap_or(text.len());
-    let body = format!(
-        "{}[{}]{}",
-        &text[start..m.start()],
-        m.as_str(),
-        &text[m.end()..end]
-    );
-    let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let window = &text[start..end];
+    let mut body = String::with_capacity(window.len() + 8);
+    let mut last = 0;
+    for m in re.into_iter().flat_map(|re| re.find_iter(window)) {
+        body.push_str(&window[last..m.start()]);
+        body.push('[');
+        body.push_str(m.as_str());
+        body.push(']');
+        last = m.end();
+    }
+    body.push_str(&window[last..]);
     format!(
         "{}{}{}",
         if start > 0 { "..." } else { "" },
-        body,
+        collapse(&body),
         if end < text.len() { "..." } else { "" }
     )
 }
@@ -1128,8 +1203,53 @@ mod tests {
     }
 
     #[test]
-    fn a_regex_excerpt_brackets_the_match() {
+    fn an_excerpt_brackets_every_match_in_its_window() {
         let re = regex::Regex::new("needle").unwrap();
-        assert_eq!(regex_excerpt(&re, "a needle here"), "a [needle] here");
+        assert_eq!(
+            excerpt("a needle, another needle", Some(&re), false),
+            "a [needle], another [needle]"
+        );
+    }
+
+    #[test]
+    fn a_match_inside_a_key_cannot_expose_it() {
+        // The #22 reproduction: a terms match on the key's prefix and a regex match on its
+        // body both used to return the whole key with brackets inside it.
+        let key = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
+        let text = format!("fixture key {key} here");
+        let terms = fts_highlighter("\"api03\"").unwrap();
+        let body = regex::RegexBuilder::new("abc")
+            .case_insensitive(true)
+            .build()
+            .unwrap();
+        for re in [&terms, &body] {
+            let e = excerpt(&text, Some(re), true);
+            assert!(!e.contains("sk-ant-api03"), "{e}");
+            assert!(!e.contains("defghijklmnop"), "{e}");
+            assert!(e.contains("[redacted:anthropic]"), "{e}");
+        }
+        // --no-redact still highlights inside the raw text.
+        assert!(excerpt(&text, Some(&terms), false).contains("sk-ant-[api03]-"));
+        assert!(excerpt(&text, Some(&body), false).contains("api03-[abc]def"));
+    }
+
+    #[test]
+    fn a_key_at_the_window_edge_is_redacted_before_the_window_is_cut() {
+        let key = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
+        // The match sits 90 characters before the key's middle, so the window ends inside it.
+        let text = format!("needle {} {key}", "x".repeat(70));
+        let re = regex::Regex::new("needle").unwrap();
+        let e = excerpt(&text, Some(&re), true);
+        assert!(!e.contains("sk-ant-api03"), "{e}");
+    }
+
+    #[test]
+    fn the_highlighter_drops_operators_and_keeps_phrases_and_prefixes() {
+        let re = fts_highlighter(r#""exact phrase" OR deploy* NOT text:skip"#).unwrap();
+        let hits: Vec<&str> = re
+            .find_iter("an Exact  Phrase, deploying, skip, OR not")
+            .map(|m| m.as_str())
+            .collect();
+        assert_eq!(hits, vec!["Exact  Phrase", "deploying", "skip"]);
     }
 }

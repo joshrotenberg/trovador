@@ -290,7 +290,8 @@ fn main() -> ExitCode {
 
     let cli = Cli::parse();
     let _ = REDACT.set(!cli.no_redact);
-    let ctx = Ctx::from_env();
+    let mut ctx = Ctx::from_env();
+    ctx.limits.redact = !cli.no_redact;
     match cli.command {
         Command::Serve { read_only } => serve(
             ctx,
