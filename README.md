@@ -14,6 +14,10 @@ so trovador's list and search include them. Past sessions are read-only history:
 read, search, and summarize them, and nothing in the toolkit continues or forks one. Both
 tools came from repositories of their own, now archived; their history is kept here.
 
+[`docs/architecture.md`](docs/architecture.md) describes the design behind all of this, done and planned:
+the principles, the services, the MCP and skill surfaces, the plugin design, and the state
+layout, independent of the implementation.
+
 ## How it fits together
 
 Nothing is released. A plugin directory holds manifests, skills, hooks, and a `bin/`
