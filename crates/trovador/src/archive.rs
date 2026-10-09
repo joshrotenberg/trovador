@@ -375,9 +375,11 @@ fn parse_claude_head(text: &str) -> SessionMeta {
         if meta.origin.is_none() {
             meta.origin = str_at(&r, "entrypoint").map(str::to_string);
         }
+        // Issue #38: generated context cannot supply the first prompt the user typed.
         if meta.snippet.is_none()
             && str_at(&r, "type") == Some("user")
             && r.get("isMeta").and_then(Value::as_bool) != Some(true)
+            && r.get("isCompactSummary").and_then(Value::as_bool) != Some(true)
         {
             meta.snippet = typed_snippet(r.pointer("/message/content").unwrap_or(&Value::Null));
         }

@@ -291,6 +291,90 @@ fn a_session_over_the_resume_ceiling_says_why_it_cannot_resume() {
 // --- transcripts -----------------------------------------------------------
 
 #[test]
+fn a_claude_snippet_never_uses_a_compact_summary_as_the_typed_prompt() {
+    for prompt in [None, Some("later typed prompt")] {
+        let f = Fixture::new();
+        let mut records = vec![
+            claude_user("/w", "<command-name>/compact</command-name>"),
+            json!({"type": "user", "isMeta": true,
+                "message": {"content": "Continue from where you left off."}}),
+            json!({"type": "user", "isCompactSummary": true,
+                "message": {"content": "generated summary"}}),
+        ];
+        if let Some(text) = prompt {
+            records.push(claude_user("/w", text));
+        }
+        f.claude("-w", ID_A, &records, 0);
+        let e = archive::find_session(&f.paths, ID_A, None).unwrap();
+        let meta = archive::read_meta(&e, &f.ctx().limits);
+        assert_eq!(meta.snippet.as_deref(), prompt);
+    }
+}
+
+#[test]
+fn meta_and_compact_summary_records_are_not_user_turns() {
+    let f = Fixture::new();
+    let mut records = vec![claude_user("/w", "real user prompt")];
+    for content in [
+        json!("generated context"),
+        json!([{"type": "text", "text": "generated context"}]),
+    ] {
+        records.push(json!({"type": "user", "isMeta": true,
+            "message": {"content": content}}));
+        records.push(json!({"type": "user", "isCompactSummary": true,
+            "message": {"content": content}}));
+        records.push(
+            json!({"type": "user", "isCompactSummary": true, "isMeta": true,
+            "message": {"content": content}}),
+        );
+    }
+    records.push(
+        json!({"type": "user", "isMeta": false, "isCompactSummary": false,
+        "message": {"content": [{"type": "text", "text": "another user prompt"},
+            {"type": "tool_result", "content": "tool output"}]}}),
+    );
+    for content in [
+        json!(""),
+        json!(" \n\t"),
+        json!([{"type": "image", "source": {}}]),
+        json!([{"type": "text", "text": "  "}]),
+    ] {
+        records.push(json!({"type": "user", "isCompactSummary": true,
+            "message": {"content": content}}));
+    }
+    f.claude("-w", ID_A, &records, 0);
+    let t = sessions::transcript(&f.ctx(), ID_A, None, 0, None).unwrap();
+    assert_eq!(
+        kinds(&t),
+        vec![
+            (RecordKind::User, "real user prompt".into()),
+            (RecordKind::Omitted, "meta".into()),
+            (RecordKind::System, "generated context".into()),
+            (RecordKind::System, "generated context".into()),
+            (RecordKind::Omitted, "meta".into()),
+            (RecordKind::System, "generated context".into()),
+            (RecordKind::System, "generated context".into()),
+            (RecordKind::User, "another user prompt".into()),
+            (RecordKind::ToolResult, "tool output".into()),
+            (RecordKind::Omitted, "compact_summary".into()),
+        ]
+    );
+    for index in [1, 4] {
+        assert_eq!(t.page.records[index].name.as_deref(), Some("meta"));
+        assert_eq!(t.page.records[index].count, Some(1));
+        assert_eq!(t.page.records[index].text, None);
+    }
+    for index in [2, 3, 5, 6] {
+        assert_eq!(
+            t.page.records[index].name.as_deref(),
+            Some("compact_summary")
+        );
+    }
+    assert_eq!(t.page.records[9].text, None);
+    assert_eq!(t.page.records[9].count, Some(4));
+}
+
+#[test]
 fn a_current_codex_turn_is_projected_once_not_once_per_stream() {
     // Codex writes each message as a model-facing response_item and a UI-facing
     // item_completed. The first user response_item comes before the first item event.

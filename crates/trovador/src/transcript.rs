@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 /// Bumped whenever the projection changes what it emits, which invalidates every index row.
-pub const PROJECTION_VERSION: i64 = 4;
+pub const PROJECTION_VERSION: i64 = 5;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -104,6 +104,19 @@ fn str_at<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 fn project_claude(r: &Value, limits: &Limits, out: &mut Vec<Draft>) {
     let (rc, tc) = (limits.record_chars, limits.tool_chars);
     match str_at(r, "type") {
+        // Issue #38: client-generated context is not a user turn. Keep compact
+        // summaries readable even when Claude also marks them as meta.
+        Some("user") if r.get("isCompactSummary").and_then(Value::as_bool) == Some(true) => {
+            let text = block_text(r.pointer("/message/content").unwrap_or(&Value::Null));
+            out.push(if text.trim().is_empty() {
+                Draft::omitted("compact_summary")
+            } else {
+                Draft::named(RecordKind::System, "compact_summary", cap(&text, rc))
+            });
+        }
+        Some("user") if r.get("isMeta").and_then(Value::as_bool) == Some(true) => {
+            out.push(Draft::omitted("meta"));
+        }
         Some("user") => match r.pointer("/message/content") {
             Some(Value::String(s)) => out.push(Draft::new(RecordKind::User, cap(s, rc))),
             Some(Value::Array(blocks)) => {
