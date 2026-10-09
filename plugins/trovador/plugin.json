@@ -12,13 +12,13 @@
     "codex",
     "history"
   ],
-  "repository": "https://github.com/joshrotenberg/trovador",
+  "repository": "https://github.com/joshrotenberg/bottega",
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "Trovador",
         "shortDescription": "Search past Claude and Codex sessions",
-        "longDescription": "Find, read, and summarize any earlier Claude Code or Codex session on this machine, and ask a new session about one.",
+        "longDescription": "Find, read, and summarize any earlier Claude Code or Codex session on this machine.",
         "developerName": "Josh Rotenberg",
         "category": "Developer Tools",
         "capabilities": [
@@ -28,20 +28,6 @@
           "Find where we decided this before",
           "What was I working on yesterday?"
         ]
-      },
-      "hooks": {
-        "hooks": {
-          "SessionStart": [
-            {
-              "hooks": [
-                {
-                  "type": "command",
-                  "command": "\"${PLUGIN_ROOT}/bin/trovador\" hook session-start --backend codex || true"
-                }
-              ]
-            }
-          ]
-        }
       }
     }
   }

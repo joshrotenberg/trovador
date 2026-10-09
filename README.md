@@ -30,7 +30,7 @@ Each plugin directory carries both hosts' files side by side:
 |---|---|---|
 | Manifest | `.claude-plugin/plugin.json` | `plugin.json` (Agent Plugins 1.0) |
 | MCP servers | `.mcp.json`, paths from `${CLAUDE_PLUGIN_ROOT}` | `mcp.json`, a `./bin/<tool>` command relative to the plugin |
-| Hooks | `hooks/claude.json`, named in the manifest | `extensions["com.openai"].hooks` in `plugin.json` |
+| Hooks | `hooks/claude.json`, named in the manifest | not loaded from plugins; see [Codex hook](#codex-hook) |
 | Skills | `skills/<name>/SKILL.md` | the same files |
 
 Hooks stay out of the default `hooks/hooks.json` path because Codex also reads that
@@ -43,9 +43,11 @@ straight from this checkout, so every commit is an update. Codex copies each plu
 Codex accepts `${PLUGIN_ROOT}` in an MCP server's `command` without error but does not
 start the server; a relative `./bin/<tool>` command works.
 
-Codex runs a plugin's hooks only after you trust them: open `codex`, run `/hooks`, and
-trust the plugin's hooks. Until then trovador's SessionStart hook is skipped and search
-falls back to leaving out every recently written session.
+Codex 0.162 loads no hooks from plugins. Its app server lists none for any plugin,
+including OpenAI's bundled ones, and `codex features list` reports `plugin_hooks` as
+removed. trovador's SessionStart hook therefore runs only in Claude Code unless you add
+it to Codex yourself (below). Without it, search in a Codex session leaves out every
+recently written session instead of only the current one.
 
 ## Set up a machine
 
@@ -74,6 +76,34 @@ codex plugin marketplace add ~/Code/github.com/joshrotenberg/bottega
 codex plugin add trovador@bottega
 codex plugin add tosi@bottega
 ```
+
+### Codex hook
+
+Optional. The hook tells a Codex session its own id, so trovador's search can leave out
+only that session. Codex does not load it from the plugin, so it goes in
+`~/.codex/hooks.json`, with the absolute path to the installed binary:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/you/.cargo/bin/trovador hook session-start --backend codex || true"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Then open `codex`, run `/hooks`, and trust it under SessionStart. This file is outside
+the plugin: removing the plugin does not remove it, so delete the entry yourself.
+
+### Earlier registrations
 
 If a tool was registered some other way before (`claude mcp add`, an
 `[mcp_servers.<name>]` table in `~/.codex/config.toml`, or another local marketplace),

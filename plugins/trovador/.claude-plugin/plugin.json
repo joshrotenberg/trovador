@@ -11,6 +11,6 @@
     "codex",
     "history"
   ],
-  "repository": "https://github.com/joshrotenberg/trovador",
+  "repository": "https://github.com/joshrotenberg/bottega",
   "hooks": "./hooks/claude.json"
 }

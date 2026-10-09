@@ -18,7 +18,9 @@ working in it; read it before changing that crate.
 - In Codex `mcp.json`, use a relative `./bin/<tool>` command. With `${PLUGIN_ROOT}` in
   `command`, Codex installs the plugin but never starts the server.
 - Keep hooks out of `hooks/hooks.json`: Codex reads that path too. Claude hooks go in a
-  file the Claude manifest names; Codex hooks go in `extensions["com.openai"].hooks`.
+  file the Claude manifest names. Codex 0.162 loads no hooks from plugins, not even its
+  bundled ones, so a Codex hook belongs in the user's `~/.codex/hooks.json`, documented
+  in the README, not in a plugin manifest.
 - Skills a tool serves itself (its crate's `resources/skills/`) are copied into its
   plugin with `scripts/sync-skills.sh`; edit them in the crate, never in `plugins/`.
 - No `version` fields. Claude Code uses the git commit instead.

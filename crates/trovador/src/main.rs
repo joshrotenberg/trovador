@@ -126,7 +126,7 @@ enum Command {
     },
     /// Report paths, limits, the index, and what the archives contain.
     Doctor,
-    /// Handlers for Claude Code and Codex hooks, run by a plugin rather than by hand.
+    /// Handlers for Claude Code and Codex hooks, run by a host's hook configuration rather than by hand.
     Hook {
         #[command(subcommand)]
         event: HookCmd,
