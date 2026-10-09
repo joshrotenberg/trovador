@@ -1,0 +1,28 @@
+--- reviewed/README.md
++++ final/README.md
+@@ -111,10 +111,9 @@
+ 
+ The source directory is now `tosi` instead of `task-runners`, and the executable,
+ plugin, and generated package use `tosi`. Rebuild from the renamed checkout and
+-update explicit launch paths. Install `tosi@tosi-local` through the host's normal
+-plugin management, then remove the old plugin and its catalog registration. The
+-old catalog points at the moved source directory and will otherwise remain stale.
+-For the previous user-scoped installations:
++update explicit launch paths. First remove the old plugin and its catalog
++registration: the old catalog points at the moved directory, and its stale path
++can prevent host catalog operations. For the previous user-scoped installations:
+ 
+ ```sh
+ codex plugin remove task-runners@task-runners-local
+@@ -123,8 +122,9 @@
+ claude plugin marketplace remove task-runners-local --scope user
+ ```
+ 
+-This avoids loading both servers and preserves Claude's plugin data. Refresh the
+-host session and rediscover the tools;
++Then use the install commands above to register the renamed checkout and install
++`tosi@tosi-local`. This avoids loading both servers and preserves Claude's plugin
++data. Refresh the host session and rediscover the tools;
+ existing host caches do not rename themselves. MCP resource URIs now start with
+ `skill://tosi/`.
+ 

@@ -1,0 +1,29 @@
+[package]
+name = "tosi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "Short-lived Claude and Codex tasks over MCP"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+async-trait = "0.1"
+clap = { version = "4.6", features = ["derive"] }
+claude-wrapper = "=0.14.4"
+codex-wrapper = "=0.4.4"
+jsonschema = { version = "0.56", default-features = false }
+schemars = "1.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tower-mcp = "=0.23.2"
+# Session lookup, resumability, and consent: one implementation shared with trovador.
+trovador = { path = "../trovador" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tower-mcp = { version = "=0.23.2", features = ["testing"] }

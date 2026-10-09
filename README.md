@@ -1,25 +1,28 @@
 # bottega
 
-A personal marketplace of Claude Code and Codex plugins. This repository is the
-marketplace: a catalog in `.claude-plugin/marketplace.json` and one directory per
-plugin under `plugins/`. Both hosts read the same checkout.
+Personal tools for Claude Code and Codex, and the plugin marketplace that installs them
+in both. One repository holds the tools' source (`crates/`), the plugins (`plugins/`),
+and the catalog (`.claude-plugin/marketplace.json`).
 
 | Plugin | What it gives an agent | Source |
 |---|---|---|
-| `trovador` | Search, read, and summarize every past Claude Code and Codex session on the machine | [joshrotenberg/trovador](https://github.com/joshrotenberg/trovador) |
-| `tosi` | Delegate bounded tasks to local Claude and Codex workers: spawn, wait, continue, cancel | [joshrotenberg/tosi](https://github.com/joshrotenberg/tosi) |
+| `trovador` | Search, read, and summarize every past Claude Code and Codex session on the machine | [`crates/trovador`](crates/trovador) |
+| `tosi` | Delegate bounded tasks to local Claude and Codex workers: spawn, wait, continue, cancel, and continue or fork an existing session | [`crates/tosi`](crates/tosi) |
+
+`crates/` is one Cargo workspace. tosi links trovador as a library for session lookup
+and consent, so the rules for which sessions may be continued have one implementation.
+Both tools came from repositories of their own, now archived; their history is kept
+here.
 
 ## How it fits together
 
-Nothing here is built or released. A plugin directory holds manifests, skills, hooks,
-and a `bin/` shim. The shim runs the tool that `cargo install` put in `~/.cargo/bin`
+Nothing is released. A plugin directory holds manifests, skills, hooks, and a `bin/`
+shim. The shim runs the tool that `cargo install` put in `~/.cargo/bin`
 (or `$<TOOL>_BIN`, or `PATH`), and prints the install command if it is missing.
-Updating a tool is `cargo install`; updating a plugin is a commit here.
 
-A tool that also serves its skills as MCP resources keeps them in its own
-`resources/skills/`, and `scripts/sync-skills.sh <plugin>` copies them here. `check.sh`
-fails when a copy has drifted from a local checkout of the tool. trovador's skill is
-written here directly.
+A tool that also serves its skills as MCP resources keeps them in its crate's
+`resources/skills/`, and `scripts/sync-skills.sh <plugin>` copies them into the plugin.
+`check.sh` fails when a copy has drifted. trovador's skill is written in its plugin.
 
 Each plugin directory carries both hosts' files side by side:
 
@@ -46,13 +49,13 @@ falls back to leaving out every recently written session.
 
 ## Set up a machine
 
-Both repositories are private, so cargo fetches with the git CLI, which uses your
-GitHub credentials.
+The repository is private, so cargo fetches with the git CLI, which uses your GitHub
+credentials. From a clone, `cargo install --path crates/<tool>` works too.
 
 ```sh
 export CARGO_NET_GIT_FETCH_WITH_CLI=true
-cargo install --locked --git https://github.com/joshrotenberg/trovador
-cargo install --locked --git https://github.com/joshrotenberg/tosi
+cargo install --locked --git https://github.com/joshrotenberg/bottega trovador
+cargo install --locked --git https://github.com/joshrotenberg/bottega tosi
 gh repo clone joshrotenberg/bottega ~/Code/github.com/joshrotenberg/bottega
 ```
 
@@ -80,7 +83,7 @@ remove that registration so its tools are not listed twice.
 
 ```sh
 git -C ~/Code/github.com/joshrotenberg/bottega pull
-CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install --locked --git https://github.com/joshrotenberg/<tool>
+cargo install --locked --path ~/Code/github.com/joshrotenberg/bottega/crates/<tool>
 ```
 
 Then update the plugin in each host (`claude plugin update <tool>@bottega`; in Codex,
@@ -89,9 +92,13 @@ add it again) and start a new session. A running MCP server never reloads.
 ## Check
 
 ```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 scripts/check.sh
 ```
 
-Parses every JSON file, runs `claude plugin validate` on the marketplace and each
-plugin, compares synced skills with the tool checkouts, and starts each shim with
-`--version`.
+`check.sh` parses every JSON file, runs `claude plugin validate` on the marketplace and
+each plugin when `claude` is installed, compares synced skills with their crates, and
+starts each shim with `--version`. CI runs all four on Linux, and the Rust checks on
+macOS.

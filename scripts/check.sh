@@ -23,8 +23,8 @@ else
   echo "skip: claude not installed, Claude Code validation not run" >&2
 fi
 
-# A plugin whose tool repository has resources/skills must match it; see sync-skills.sh.
-tools=${TOOLS_ROOT:-$HOME/Code/github.com/joshrotenberg}
+# A plugin whose crate has resources/skills must match it; see sync-skills.sh.
+tools="$root/crates"
 for p in plugins/*/; do
   name=$(basename "$p")
   source="$tools/$name/resources/skills"

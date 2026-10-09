@@ -1,0 +1,65 @@
+[
+  {
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "exit_code": 0,
+    "log": "fix-check-1.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "clippy",
+      "--offline",
+      "--locked",
+      "--workspace",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "log": "fix-check-2.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "--locked",
+      "--test",
+      "diagnostics",
+      "--test",
+      "shutdown"
+    ],
+    "exit_code": 0,
+    "log": "fix-check-3.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "--locked",
+      "--package",
+      "xtask"
+    ],
+    "exit_code": 0,
+    "log": "fix-check-4.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "build",
+      "--offline",
+      "--locked",
+      "--release"
+    ],
+    "exit_code": 0,
+    "log": "fix-check-5.log"
+  }
+]

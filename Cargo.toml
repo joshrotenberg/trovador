@@ -1,0 +1,7 @@
+[workspace]
+members = ["crates/trovador", "crates/tosi"]
+resolver = "3"
+
+[profile.release]
+lto = "thin"
+strip = true

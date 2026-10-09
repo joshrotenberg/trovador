@@ -1,0 +1,247 @@
+{
+  "snapshot": "/private/var/folders/kr/h7p0086n6vd22zbkwc2gvhjw0000gn/T/tosi-rename-review-abwmzp9r",
+  "snapshot_sha256": "c695f8f2ed18897918dc8b3c9efd24a1a0a1a9214678fff12c7c467166a2ff8b",
+  "files": [
+    {
+      "path": ".cargo/config.toml",
+      "sha256": "783fdc447abb5b8f8b5652157aa9ede64da640813fa89679c29c5251c8e0cbe6",
+      "bytes": 41
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "66e519d1d8d9cd975e412a70eb7a2f935f67f1ee9cec475010a9119b374323a5",
+      "bytes": 77
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "18382a8846c8e20fc010bb40910b164ccc8dbfa57bbbccd9a08ea2a877458f35",
+      "bytes": 3907
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "7b62d8a370c5381dc5c8909ac42276aec838502ea9a986049c20497a76472733",
+      "bytes": 36509
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "7af3df0de0a6d923f0e71a63c27d34c083bca5520b818b9bd349d77160f01349",
+      "bytes": 961
+    },
+    {
+      "path": "NAMING.md",
+      "sha256": "f7ec05b236d7595b95e4f3455b8d6bea7f372762f5cbe266b99163dd6384bd3e",
+      "bytes": 7566
+    },
+    {
+      "path": "README.md",
+      "sha256": "36d1322211214cf4cce379a019521b9ea63152869bc14aa1239e1ef89e5e991c",
+      "bytes": 21550
+    },
+    {
+      "path": "ROADMAP.md",
+      "sha256": "42bc4ad7173e2970c1c37392bc05773bd97f0626ac6aa4258df208c9134ca9f1",
+      "bytes": 19944
+    },
+    {
+      "path": "resources/cli/after-help.txt",
+      "sha256": "29dff7a2dec4b72417144832f148a51b4dc1df795066043f9fc25b57a0b51ce1",
+      "bytes": 676
+    },
+    {
+      "path": "resources/mcp/instructions.md",
+      "sha256": "26408eb9563de36053726867cba196d8da8231f246b135d54573ac0e47b20962",
+      "bytes": 2284
+    },
+    {
+      "path": "resources/mcp/tools/cancel_task.md",
+      "sha256": "d3bd43596ea2f08e952d279c76aaf213b393f3b0aff464bf41bc04a2f4f8b9a1",
+      "bytes": 254
+    },
+    {
+      "path": "resources/mcp/tools/check_environment.md",
+      "sha256": "fd1aa6067b96a702be1594b3db67e69720632b4efa177459bf6b2485472b6344",
+      "bytes": 763
+    },
+    {
+      "path": "resources/mcp/tools/continue_task.md",
+      "sha256": "2c5fe77d5317901df4965851c9df1656fbc304630d0ee14bd2437e22c1ce3b5c",
+      "bytes": 812
+    },
+    {
+      "path": "resources/mcp/tools/spawn_task.md",
+      "sha256": "6d19b8ef2d2f6e6d22ca4994797167a581b79b1d5c1e9a1b6e8ee3c6d37f3234",
+      "bytes": 1826
+    },
+    {
+      "path": "resources/mcp/tools/wait_tasks.md",
+      "sha256": "a4d53720545e323a5c17a76c3ddfb9c0566840b98a1656bbd8c7cc21ecae320b",
+      "bytes": 411
+    },
+    {
+      "path": "resources/model-capabilities.json",
+      "sha256": "39a37ed67ed8d9da303d8786e6e1e0f3a1ecf63fc1135597643b63393e0e4c9c",
+      "bytes": 920
+    },
+    {
+      "path": "resources/skills/delegate/SKILL.md",
+      "sha256": "76fa7e2ce736b118c0d78315326600c95bde065c7e8c9d5befa649bcd902d009",
+      "bytes": 4447
+    },
+    {
+      "path": "resources/skills/delegate/references/follow-up.md",
+      "sha256": "df7d13f1c47538a74e48c12d603f0b323afc31aa305e862f172e2fe3ecda0176",
+      "bytes": 3080
+    },
+    {
+      "path": "resources/skills/delegate/references/implementation-review.md",
+      "sha256": "798b1d596350a879311adb041c635fb46d7f40c9a60f220ef82858849d3f1efe",
+      "bytes": 3607
+    },
+    {
+      "path": "resources/skills/delegate/references/model-effort.md",
+      "sha256": "3019d4077533ff0ceff087b81d2dff6546a020c9c28ba977f631e5bad7ca4270",
+      "bytes": 3686
+    },
+    {
+      "path": "resources/skills/delegate/references/parallel-tasks.md",
+      "sha256": "2a823e651a2301a88de3cb54c77af124ca4cb4ee096bf22988d1308c6424d952",
+      "bytes": 2073
+    },
+    {
+      "path": "scripts/package.sh",
+      "sha256": "9acf22ff4a5fb7a866a0116915542fd7f01684fdf3533c7a98292f485651fb72",
+      "bytes": 170
+    },
+    {
+      "path": "scripts/smoke.py",
+      "sha256": "0c26000c5a06e01ff6a6ec8c3a6bad322290b580638bcbe1878964a7d1cd000b",
+      "bytes": 13100
+    },
+    {
+      "path": "src/backend.rs",
+      "sha256": "0a716ea01d85cb69baf885bdce0e23396dc1558f2d78ede19b1ea0d44cb8360c",
+      "bytes": 16368
+    },
+    {
+      "path": "src/config.rs",
+      "sha256": "0e1b389b99be7cb5320a2a6b162b0539ab7a7777f937afe086cd21dbfb851f2a",
+      "bytes": 2399
+    },
+    {
+      "path": "src/diagnostics.rs",
+      "sha256": "bf929ab04c160b85db806db247fb64ea6d9e56aa2e8fd7e47a41013be88bfa9b",
+      "bytes": 12663
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "35836ab1f4db46a445547f19283f96e17c6cd67444a00e0f0424063af62a18c6",
+      "bytes": 133
+    },
+    {
+      "path": "src/main.rs",
+      "sha256": "6dfce271896de6a1b2074170e4a8c6b2140caa39227b1a75849d8b57720b4653",
+      "bytes": 4308
+    },
+    {
+      "path": "src/manager.rs",
+      "sha256": "0e9b9536be9ff2945b2daef2318baa14b024b8074c2dd03210f7e9f4349655a4",
+      "bytes": 16933
+    },
+    {
+      "path": "src/output.rs",
+      "sha256": "f3cc792eaeeafc9b7a6633edc8a19a4827149aca3c07773dfe26c41afba227eb",
+      "bytes": 2282
+    },
+    {
+      "path": "src/selection.rs",
+      "sha256": "218cfdf0049e171dece8f1236556590228f1b9942ae325f3b93098a041de1404",
+      "bytes": 3551
+    },
+    {
+      "path": "src/server.rs",
+      "sha256": "c99fef86fe74603fa08715169035588650483723863047abc6ada993bee74159",
+      "bytes": 5739
+    },
+    {
+      "path": "src/types.rs",
+      "sha256": "3d686bdcc00dc605d27d5f0be324f4ba745966f91a4a42484ce648daae41fd0e",
+      "bytes": 2785
+    },
+    {
+      "path": "tests/backend.rs",
+      "sha256": "9e248cf315765e0fa72f9c4ae62eaac037f52bea2a50c6d3b4eb7a4bbfe4e857",
+      "bytes": 25656
+    },
+    {
+      "path": "tests/diagnostics.rs",
+      "sha256": "54965c0892a5aa6720514c458a3e1e4bcfab584a941a6bd79cebbcb2c0f766b8",
+      "bytes": 18594
+    },
+    {
+      "path": "tests/lifecycle.rs",
+      "sha256": "8279945f596f4cf7a1d79554c4eb0c81043bcd625742c6ba00e43467248d89e2",
+      "bytes": 16325
+    },
+    {
+      "path": "tests/live.rs",
+      "sha256": "0eb8a25b1a88b4631c4eee4da4dedfa030069839cdd494e8c0dce943c64783a1",
+      "bytes": 9572
+    },
+    {
+      "path": "tests/resources.rs",
+      "sha256": "046989a653b23514730e6af3d50a70a7dec84ed5a172de91fdc93dd6adc1757d",
+      "bytes": 4345
+    },
+    {
+      "path": "tests/shutdown.rs",
+      "sha256": "9c220cb4a8cc025420103bdfd63e9b137985717daf1018bccbfb2256e7fbaf94",
+      "bytes": 11196
+    },
+    {
+      "path": "tests/support/mod.rs",
+      "sha256": "cec764322174b458f06cdbb72495d4a0f1b0873f2621f971870178ab748137d1",
+      "bytes": 8571
+    },
+    {
+      "path": "xtask/Cargo.toml",
+      "sha256": "4ef9325852a481079120ad10863921d235003d493eb99a445f60bbcb5a93054d",
+      "bytes": 166
+    },
+    {
+      "path": "xtask/src/main.rs",
+      "sha256": "8b1cb7a0f6b51fe76bace59ad8585bf22cd69c3b28419a40e43463e8e754d609",
+      "bytes": 22238
+    }
+  ],
+  "changed_files": [
+    "AGENTS.md",
+    "Cargo.lock",
+    "Cargo.toml",
+    "NAMING.md",
+    "README.md",
+    "ROADMAP.md",
+    "resources/cli/after-help.txt",
+    "resources/mcp/instructions.md",
+    "resources/mcp/tools/spawn_task.md",
+    "resources/skills/delegate/SKILL.md",
+    "resources/skills/delegate/references/follow-up.md",
+    "resources/skills/delegate/references/implementation-review.md",
+    "resources/skills/delegate/references/model-effort.md",
+    "resources/skills/delegate/references/parallel-tasks.md",
+    "scripts/package.sh",
+    "scripts/smoke.py",
+    "src/backend.rs",
+    "src/config.rs",
+    "src/lib.rs",
+    "src/main.rs",
+    "src/server.rs",
+    "tests/backend.rs",
+    "tests/diagnostics.rs",
+    "tests/lifecycle.rs",
+    "tests/live.rs",
+    "tests/resources.rs",
+    "tests/shutdown.rs",
+    "tests/support/mod.rs",
+    "xtask/src/main.rs"
+  ]
+}

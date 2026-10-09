@@ -1,0 +1,31 @@
+{
+  "binaries": {
+    "release": {
+      "path": "/Users/joshrotenberg/Code/github.com/genagent/task-runners/target/release/task-runners",
+      "sha256": "5605a9d62c0cbe2de6a4df3073f72c92f2a81bf60321b72365172367a0a6d219"
+    },
+    "codex": {
+      "path": "/Users/joshrotenberg/.codex/plugins/cache/task-runners-local/task-runners/0.1.0/bin/task-runners",
+      "sha256": "5605a9d62c0cbe2de6a4df3073f72c92f2a81bf60321b72365172367a0a6d219"
+    },
+    "claude": {
+      "path": "/Users/joshrotenberg/.claude/plugins/cache/task-runners-local/task-runners/0.1.0/bin/task-runners",
+      "sha256": "5605a9d62c0cbe2de6a4df3073f72c92f2a81bf60321b72365172367a0a6d219"
+    }
+  },
+  "refresh": {
+    "codex": "plugin add refreshed same-version cache",
+    "claude": "plugin update returned up_to_date with stale binary; uninstall --keep-data followed by install refreshed cache"
+  },
+  "fresh_process_smoke": {
+    "command": [
+      "python3",
+      "scripts/smoke.py",
+      "--binary",
+      "/Users/joshrotenberg/.codex/plugins/cache/task-runners-local/task-runners/0.1.0/bin/task-runners"
+    ],
+    "exit_code": 0,
+    "mode": "fake providers, fresh MCP stdio process from installed binary"
+  },
+  "existing_host_processes": "May retain old executable; fresh host sessions required. No new model call or actual host-loader run for final candidate."
+}

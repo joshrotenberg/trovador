@@ -1,0 +1,45 @@
+{
+  "environment": {
+    "home": "/Users/joshrotenberg",
+    "claude_config_dir": null,
+    "codex_home": null,
+    "codex_sandbox": null,
+    "network_disabled": null,
+    "auth_env_present": {
+      "ANTHROPIC_API_KEY": false,
+      "ANTHROPIC_AUTH_TOKEN": false,
+      "CLAUDE_CODE_OAUTH_TOKEN": false,
+      "CODEX_API_KEY": false,
+      "OPENAI_API_KEY": false
+    }
+  },
+  "providers": [
+    {
+      "backend": "claude",
+      "executable": "/Users/joshrotenberg/.local/bin/claude",
+      "version": null,
+      "authentication": "unknown",
+      "ready": false,
+      "hints": [
+        "CLI version probe exited unsuccessfully; raw output is withheld.",
+        "The status probe could not establish authentication in this launch context. Check the installed plugin's environment; an unknown result is not evidence that credentials are missing.",
+        "macOS Keychain access can differ between a sandboxed child, the terminal, and the installed plugin host."
+      ]
+    },
+    {
+      "backend": "codex",
+      "executable": "/Users/joshrotenberg/.local/bin/codex",
+      "version": "0.157.1",
+      "authentication": "unknown",
+      "ready": false,
+      "hints": [
+        "The status probe could not establish authentication in this launch context. Check the installed plugin's environment; an unknown result is not evidence that credentials are missing.",
+        "macOS Keychain access can differ between a sandboxed child, the terminal, and the installed plugin host."
+      ]
+    }
+  ],
+  "ready": false,
+  "hints": [
+    "These status-only checks describe this launch context; they do not prove network access, model availability, or task success."
+  ]
+}

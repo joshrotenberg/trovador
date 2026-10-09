@@ -1,0 +1,19 @@
+{
+  "task_id": "d1656eb7-7111-4fc3-8756-72d34d1a5d9f",
+  "conversation_id": "fac8b6ab-6555-4c29-a67b-5bca5b709ff8",
+  "parent_task_id": "d5c8e27c-1a7a-4427-a9e8-8e4ce9793c46",
+  "backend": "claude",
+  "status": "running",
+  "cwd": "/private/var/folders/kr/h7p0086n6vd22zbkwc2gvhjw0000gn/T/tosi-rename-review-abwmzp9r",
+  "model": null,
+  "access": "read_only",
+  "timeout_secs": 300,
+  "started_at_ms": 1791505052160,
+  "finished_at_ms": null,
+  "result": null,
+  "structured_result": null,
+  "result_truncated": false,
+  "error": null,
+  "provider_session_id": null,
+  "usage": null
+}

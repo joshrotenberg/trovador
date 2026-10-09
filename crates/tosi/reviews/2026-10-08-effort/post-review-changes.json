@@ -1,0 +1,12 @@
+[
+  {
+    "path": "README.md",
+    "reviewed_sha256": "7a9d474994cfa179599e990848b190513b5cd72d8d2e2f6f26d3d23fa97b18de",
+    "final_sha256": "3b506d114c8254efbaab6723a24fb6eb6e13abaabd5333342be0693785e5d345"
+  },
+  {
+    "path": "ROADMAP.md",
+    "reviewed_sha256": "43fe3b25423e3f25edf704439b00f34a07fa9b56de67611697f6e232eca6961c",
+    "final_sha256": "2d9b3916d619048ecc354c47a16b80450ba3a119bdb0abaeba616da114554a08"
+  }
+]

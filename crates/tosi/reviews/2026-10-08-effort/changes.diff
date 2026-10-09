@@ -1,0 +1,1109 @@
+--- before/README.md
++++ after/README.md
+@@ -5,7 +5,7 @@
+ task records and CLI processes; a small skill describes how to delegate and
+ collect results. It uses `claude-wrapper`, `codex-wrapper`, and `tower-mcp`.
+ 
+-The source checkout's `ROADMAP.md` tracks planned effort controls, routing,
++The source checkout's `ROADMAP.md` tracks routing,
+ delegation guidance, dogfood reviews, distribution work, and a second-round
+ orchestration candidate covering workflows, debate, consensus, and pipelines.
+ Naming candidates and verified meanings are recorded in the source checkout's
+@@ -106,7 +106,7 @@
+ | Tool | Arguments | Behavior |
+ | --- | --- | --- |
+ | `check_environment` | Optional `backend`: `claude` or `codex`; omitted checks both | Report executable, environment, and authentication status without a model call. |
+-| `spawn_task` | `task`, absolute `cwd`; optional `backend`, `model`, `access`, `timeout_secs`, `output_schema` | Start one bounded turn and return its ID. |
++| `spawn_task` | `task`, absolute `cwd`; optional `backend`, `model`, `effort`, `access`, `timeout_secs`, `output_schema` | Start one bounded turn and return its ID. |
+ | `wait_tasks` | `task_ids`; optional `timeout_ms` | Return when any task finishes or the wait expires; `0` reads a snapshot. Default 30 seconds, maximum 55. |
+ | `continue_task` | `task_id`, `message` | Continue the newest successful turn in the same provider conversation; return a new task ID. |
+ | `cancel_task` | `task_id` | Cancel and wait up to 55 seconds for cleanup; return `cancelling` if cleanup is still running. |
+@@ -123,12 +123,63 @@
+ ```
+ 
+ The omitted backend defaults to Claude. `timeout_secs` defaults to 600 and has a
+-maximum of 3600. A follow-up inherits the original backend, model, directory,
++maximum of 3600. A follow-up inherits the original backend, model, effort, directory,
+ access, per-turn timeout, and output schema. Only the newest successful turn can
+ be continued, and only one turn runs per provider conversation. Failed or cancelled conversations do
+ not automatically retry. Remove finished IDs before the next `wait_tasks`
+ call, because any already finished task causes an immediate return. Ending a
+ wait does not cancel its workers.
++
++## Model and effort selection
++
++Pass `model` and optional `effort` to `spawn_task` when you want explicit execution
++settings. Honor the user's selections. If omitted, these options use the provider
++CLI's behavior, including applicable defaults and inherited environment in the
++server's isolated launch context. They do not inherit the calling chat's model
++or effort. The explicit effort value `none` is different from omission.
++
++| Backend | Exposed effort values | Provider option |
++| --- | --- | --- |
++| Claude | `low`, `medium`, `high`, `xhigh`, `max` | `--effort` |
++| Codex | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` | `model_reasoning_effort` |
++
++Support depends on the model. Invalid enum values, unsupported backend/value
++combinations, and known incompatible exact-model combinations are rejected before
++launch. The source checkout's `resources/model-capabilities.json` supplies the
++exact-model checks, including recognized dated/context forms; aliases and unknown
++model IDs are passed to the provider with compatibility unverified. Validation
++makes no CLI or API model request.
++Identical effort labels do not promise equal compute, cost, or quality across
++providers. Codex advertises automatic delegation for `ultra`; the delegation
++guidance reserves that choice for an explicit user request.
++
++Every task snapshot retains `backend`, `model`, and `effort`, plus this selection
++record. For example, a request omitting backend/model and asking for high effort
++with the default Claude backend produces:
++
++```json
++{
++  "selection": {
++    "requested": { "backend": null, "model": null, "effort": "high" },
++    "selected": { "backend": "claude", "model": null, "effort": "high" },
++    "reported": { "model": null, "effort": null }
++  }
++}
++```
++
++`requested` preserves caller omissions; `selected` records the resolved backend
++and model/effort options sent to the adapter. `reported` remains `null` because
++the wrappers do not provide reliable per-turn model/effort evidence. Usage totals
++and `modelUsage` do not establish those fields. The server does not downgrade,
++substitute, fall back, or retry, but provider CLIs can resolve aliases, apply caps,
++or use defaults; Task Runners cannot attest the effective settings.
++
++`continue_task` keeps the original backend/model/effort and schema without
++overrides. Start a fresh task to change them. Reusing an alias or an omitted
++setting does not freeze the provider's underlying model or defaults across turns.
++For selection guidance, read the source checkout's canonical
++[model and effort reference](resources/skills/delegate/references/model-effort.md),
++also exposed as `skill://task-runners/delegate/references/model-effort.md`.
+ 
+ ## Structured results
+ 
+@@ -231,9 +282,10 @@
+ ## Instructions from one source
+ 
+ The short core skill in `resources/skills/delegate/SKILL.md` covers the tool
+-contract and links to deeper patterns in its `references/` directory: parallel
+-tasks, implementation followed by review, and continued conversations. Load a
+-pattern only when it fits the task.
++contract and links to deeper references in its `references/` directory: parallel
++tasks, implementation followed by review, continued conversations, and model/effort
++selection. Load a reference only when it fits the task. The server exposes five
++Markdown resources in total.
+ 
+ The MCP server embeds that same text as readable resources, starting at
+ `skill://task-runners/delegate/SKILL.md`, so a client using only the executable
+--- before/resources/mcp/instructions.md
++++ after/resources/mcp/instructions.md
+@@ -4,8 +4,8 @@
+ launch a shell/Python stdio bridge for ordinary delegation.
+ Read skill://task-runners/delegate/SKILL.md using resources/read for general
+ guidance, then retrieve only the relevant linked pattern: parallel tasks,
+-implementation and review, or follow-up and cancellation. resources/list discovers
+-all four Markdown resources; they contain the same canonical skill and references
++implementation and review, follow-up and cancellation, or model and effort.
++resources/list discovers all five Markdown resources; they contain the same canonical skill and references
+ included in the plugin package.
+ 
+ check_environment checks executable, environment, and authentication status for
+@@ -20,6 +20,14 @@
+ and returns a new ID. cancel_task requests cancellation and reports whether
+ cleanup is complete.
+ 
++Honor explicit backend/model/effort choices. Omitted model and effort use provider
++CLI behavior, not the calling chat's settings. Effort values are provider/model
++dependent; read the model-effort reference when selecting them. Do not automatically
++select Codex ultra. Continuations retain the original settings and schema without
++overrides. selection distinguishes requested and selected settings; reported model
++and effort remain null because actual per-turn settings cannot be verified. Never
++infer them from usage totals. No server-side downgrading, fallback, or retry occurs.
++
+ Supply an absolute cwd and a self-contained brief with applicable repository
+ instructions; the parent conversation is not inherited. Default to read-only and
+ isolate parallel edits. Task IDs exist only for this server process. Hosts decide
+--- before/resources/mcp/tools/continue_task.md
++++ after/resources/mcp/tools/continue_task.md
+@@ -1,7 +1,9 @@
+ Give the latest successfully completed task a follow-up assignment. Starts a new
+ short-lived process resuming the same provider conversation, workspace, model,
+-access, per-turn timeout, and output_schema; returns a new task ID. The schema
+-cannot be overridden. One active turn per conversation. Failed/cancelled turns
++effort, access, per-turn timeout, and output_schema; returns a new task ID. These
++settings cannot be overridden. An alias or omitted setting does not freeze the
++provider's effective model or defaults; reported model/effort remain null.
++One active turn per conversation. Failed/cancelled turns
+ must be replaced by spawn_task.
+ 
+ If a schema was requested, read the locally validated JSON in structured_result;
+--- before/resources/mcp/tools/spawn_task.md
++++ after/resources/mcp/tools/spawn_task.md
+@@ -2,6 +2,17 @@
+ Returns immediately with a task ID. Provide an absolute cwd and all relevant
+ context/instructions; this chat is not automatically inherited. Defaults to
+ read-only. Use separate worktrees for concurrent edits.
++
++Optional backend, model, and effort select execution settings. Honor explicit user
++choices. Claude effort accepts low, medium, high, xhigh, max; Codex exposes none,
++minimal, low, medium, high, xhigh, max, ultra, depending on the model. Unsupported
++backend/value and known exact-model combinations reject before start; aliases
++and unknown models have unverified compatibility. Omitted model/effort use CLI
++defaults and applicable environment, not this chat's settings. Do not automatically
++select Codex ultra. Read skill://task-runners/delegate/references/model-effort.md
++for guidance. Task snapshots retain requested/selected settings; reported model
++and effort are null, not inferred from usage. The server does not downgrade,
++fall back, or retry; provider CLIs may resolve aliases or apply caps/defaults.
+ 
+ Optional output_schema requests a JSON result. Supply a self-contained JSON
+ Schema object with explicit root type "object", at most 64000 serialized UTF-8
+--- before/resources/mcp/tools/wait_tasks.md
++++ after/resources/mcp/tools/wait_tasks.md
+@@ -1,3 +1,6 @@
+ Collect task results. Returns when any requested task is terminal or the bounded
+ timeout expires. timeout_ms=0 reads status immediately. Remove completed IDs before
+ waiting again. Does not cancel workers when waiting ends.
++Each snapshot includes the original effort and selection metadata: requested
++versus selected settings, with reported model/effort null because actual per-turn
++settings cannot be verified.
+--- before/resources/model-capabilities.json
++++ after/resources/model-capabilities.json
+@@ -0,0 +1,23 @@
++{
++  "verified_on": "2026-10-08",
++  "sources": {
++    "claude": "https://platform.claude.com/docs/en/build-with-claude/effort",
++    "codex": "codex debug models --bundled, CLI 0.157.1; non-alias entries only"
++  },
++  "models": {
++    "claude": {
++      "claude-opus-4-6": ["low", "medium", "high", "max"],
++      "claude-sonnet-4-6": ["low", "medium", "high", "max"]
++    },
++    "codex": {
++      "gpt-6-astra": ["low", "medium", "high", "xhigh", "max", "ultra"],
++      "gpt-6-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
++      "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"],
++      "gpt-5.6-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
++      "gpt-5.6-terra": ["low", "medium", "high", "xhigh", "max", "ultra"],
++      "gpt-5.6-luna": ["low", "medium", "high", "xhigh", "max"],
++      "gpt-5.5": ["low", "medium", "high", "xhigh"],
++      "gpt-5.4": ["low", "medium", "high", "xhigh"]
++    }
++  }
++}
+--- before/resources/skills/delegate/SKILL.md
++++ after/resources/skills/delegate/SKILL.md
+@@ -9,8 +9,10 @@
+ Call this host's installed MCP tools, using tool discovery first if they are
+ deferred. If unavailable, diagnose the plugin connection or refresh the host
+ session; do not create a shell or Python stdio bridge for ordinary delegation.
+-Honor the user's backend and model choice. Otherwise omit `backend` to use the
+-configured default; do not invent provider specialties or a model-routing policy.
++Honor the user's backend, model, and effort choice. Otherwise omit `backend` to
++use the configured default. Omitted model/effort use provider CLI behavior, not
++the calling chat's settings. Read the model/effort reference when selecting them;
++do not invent routing rules or automatically select Codex `ultra`.
+ 
+ For executable or authentication failures, call `check_environment` with the
+ affected `backend` (omit it to check both). It reports nonsecret launch context
+@@ -30,6 +32,9 @@
+ `cancel_task` when work is no longer needed. Inspect returned states and verify
+ results and changed files before integrating them. Task IDs last only for this
+ server process; this is not a persistent autonomous team.
++Follow-ups retain the original backend, model, and effort without overrides.
++Selection metadata records the request and settings sent; `reported.model` and
++`reported.effort` remain `null`. Do not infer them from tokens or usage totals.
+ 
+ For a JSON result, pass `output_schema` to `spawn_task`. Use an explicit root
+ `"type": "object"`, object properties, all properties required, and
+@@ -63,3 +68,6 @@
+ - [Follow-up and cancellation](references/follow-up.md): conversation continuity,
+   waiting, result handling, and settled cancellation.
+   `skill://task-runners/delegate/references/follow-up.md`
++- [Model and effort](references/model-effort.md): user preferences, provider
++  support, omitted settings, and requested versus reported selection.
++  `skill://task-runners/delegate/references/model-effort.md`
+--- before/resources/skills/delegate/references/follow-up.md
++++ after/resources/skills/delegate/references/follow-up.md
+@@ -6,9 +6,11 @@
+ 
+ Call `continue_task` with the newest successful `task_id` and a self-contained
+ `message`. The server starts a new process with the same backend conversation,
+-working directory, model, access mode, per-turn timeout, and output schema,
+-returning a new task ID. There is no schema override on a follow-up; use
+-`spawn_task` when you need a different output shape. Only one turn
++working directory, model, effort, access mode, per-turn timeout, and output schema,
++returning a new task ID. These settings cannot be overridden on a follow-up; use
++`spawn_task` when you need different settings or an output shape. Retained aliases
++or omitted settings do not guarantee unchanged provider defaults; see the
++[model and effort reference](model-effort.md). Only one turn
+ may be active in a conversation. After it finishes, use the newest returned ID;
+ older turns cannot be forked or continued again. Failed or cancelled tasks must
+ be replaced with `spawn_task`, including the facts needed to restart the work.
+--- before/resources/skills/delegate/references/implementation-review.md
++++ after/resources/skills/delegate/references/implementation-review.md
+@@ -16,8 +16,8 @@
+    through a provider that supports it or through the parent host's tools.
+ 4. Start a separate `read_only` review with the relevant diff/files and original
+    requirements. Request actionable findings with file references and an
+-   explanation of impact. Use a user-specified backend/model when given; do not
+-   silently substitute one. Synthesize the review and make necessary corrections
++   explanation of impact. Use a user-specified backend/model/effort when given;
++   do not silently substitute one. Synthesize the review and make necessary corrections
+    within the authorized scope.
+ 
+ Provider access is deliberately different:
+--- before/resources/skills/delegate/references/model-effort.md
++++ after/resources/skills/delegate/references/model-effort.md
+@@ -0,0 +1,62 @@
++# Model and effort
++
++Use this reference when choosing `backend`, `model`, or optional `effort` for
++`spawn_task`. Honor explicit user choices. If a choice is unsupported, report
++the incompatibility instead of silently substituting a provider or setting.
++
++Omit `backend` to use the server's configured default. Omit `model` or `effort`
++to leave that option to the provider CLI, including applicable defaults and
++inherited environment. These omissions do not inherit the calling chat's model
++or effort. Worker configuration is isolated as described in the implementation
++reference; do not assume every saved CLI setting is loaded.
++
++| Backend | Exposed effort values | Forwarding |
++| --- | --- | --- |
++| Claude | `low`, `medium`, `high`, `xhigh`, `max` | Claude Code `--effort` |
++| Codex | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` | Codex `model_reasoning_effort` configuration |
++
++Values are model-dependent. Unknown enum values, unsupported backend/value
++combinations, and incompatible combinations for exact models in the maintained
++capability table are rejected before a worker starts, including recognized dated
++and context forms. Aliases and unknown model
++IDs are forwarded with compatibility unverified; provider acceptance still
++depends on the installed CLI, selected model, and account. The table is a dated
++compatibility check, not a universal catalog or guarantee of model availability.
++It lives at `resources/model-capabilities.json` in the source checkout and is
++embedded in the executable. Validation makes no CLI or API model request.
++
++When the user leaves the choice to you, prefer lower effort for bounded mechanical
++work with clear acceptance criteria. Consider higher effort for ambiguous
++investigations or difficult reviews where additional reasoning may help. Balance
++latency and usage against the task; identical labels do not represent equal
++compute, cost, or quality across providers. Task difficulty does not imply a
++particular model family. No task classification, routing rules, or round robin
++are implemented yet.
++
++Do not automatically select Codex `ultra`: the provider advertises it with
++automatic delegation behavior. Honor an explicit user choice when compatible,
++while retaining the authorized task scope and access restrictions. Effort is not
++a token or spending cap; `timeout_secs` bounds duration only.
++
++Task snapshots expose `backend`, `model`, and `effort`, plus `selection`:
++
++- `requested`: the caller's backend/model/effort; omissions remain `null`.
++- `selected`: the resolved backend and model/effort options sent to the adapter;
++  omitted model/effort remain `null`.
++- `reported`: model and effort remain `null`. The wrappers do not supply reliable
++  per-turn evidence for these fields; do not reconstruct them from `modelUsage`,
++  token counts, or result prose.
++
++The provider CLI may resolve aliases, apply defaults or caps, or otherwise change
++effective settings. Task Runners does not downgrade, substitute, fall back, or
++retry on its own, and cannot attest the effective settings. `continue_task`
++retains the original backend/model/effort and output schema, with no override.
++Start a fresh task to change them. Reusing an alias or an omitted setting does
++not freeze the provider's underlying model or defaults across turns.
++
++Compatibility evidence was checked on 2026-10-08 against Claude Code 2.1.293,
++`claude-wrapper` 0.14.4, and Codex CLI 0.157.1's
++`codex debug models --bundled` output. See
++[Claude Code model configuration](https://code.claude.com/docs/en/model-config)
++for provider-specific effort and model behavior. Refresh the maintained
++capability table when updating providers; do not guess support for a new model.
+--- before/scripts/smoke.py
++++ after/scripts/smoke.py
+@@ -169,9 +169,14 @@
+             skill_uri = "skill://task-runners/delegate/SKILL.md"
+             resources = client.rpc("resources/list")["resources"]
+             assert skill_uri in {resource["uri"] for resource in resources}
++            effort_uri = "skill://task-runners/delegate/references/model-effort.md"
++            assert len(resources) == 5, resources
++            assert effort_uri in {resource["uri"] for resource in resources}
+             assert skill_uri in client.initialization.get("instructions", "")
+             content = client.rpc("resources/read", {"uri": skill_uri})["contents"]
+             assert any("spawn_task" in item.get("text", "") for item in content)
++            effort_content = client.rpc("resources/read", {"uri": effort_uri})["contents"]
++            assert any("selection" in item.get("text", "") for item in effort_content)
+             print("PASS standalone skill resource discovery and read", flush=True)
+             if args.edit_only:
+                 if not args.live:
+--- before/src/backend.rs
++++ after/src/backend.rs
+@@ -19,7 +19,10 @@
+ use tokio::io::AsyncReadExt;
+ use tokio_util::sync::CancellationToken;
+ 
+-use crate::types::{AccessMode, Backend, RunOutput, RunSpec, Runner};
++use crate::{
++    selection,
++    types::{AccessMode, Backend, Effort, RunOutput, RunSpec, Runner},
++};
+ 
+ const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
+ const TERMINATION_GRACE: Duration = Duration::from_millis(250);
+@@ -114,6 +117,9 @@
+             .disable_slash_commands();
+         if let Some(model) = &spec.model {
+             command = command.model(model);
++        }
++        if let Some(effort) = spec.effort {
++            command = command.effort(claude_effort(effort)?);
+         }
+         if let Some(session_id) = &spec.session_id {
+             command = command.resume(session_id);
+@@ -189,6 +195,9 @@
+             if let Some(model) = &spec.model {
+                 command = command.model(model);
+             }
++            if let Some(effort) = spec.effort {
++                command = command.config(format!("model_reasoning_effort=\"{}\"", effort.as_str()));
++            }
+             if let Some(path) = &schema_arg {
+                 command = command.output_schema(path);
+             }
+@@ -208,6 +217,9 @@
+                 .output_last_message(&final_arg);
+             if let Some(model) = &spec.model {
+                 command = command.model(model);
++            }
++            if let Some(effort) = spec.effort {
++                command = command.config(format!("model_reasoning_effort=\"{}\"", effort.as_str()));
+             }
+             if let Some(path) = &schema_arg {
+                 command = command.output_schema(path);
+@@ -249,6 +261,20 @@
+     }
+ }
+ 
++fn claude_effort(effort: Effort) -> Result<claude_wrapper::Effort, String> {
++    match effort {
++        Effort::Low => Ok(claude_wrapper::Effort::Low),
++        Effort::Medium => Ok(claude_wrapper::Effort::Medium),
++        Effort::High => Ok(claude_wrapper::Effort::High),
++        Effort::Xhigh => Ok(claude_wrapper::Effort::Xhigh),
++        Effort::Max => Ok(claude_wrapper::Effort::Max),
++        Effort::None | Effort::Minimal | Effort::Ultra => Err(format!(
++            "Claude does not support effort {}",
++            effort.as_str()
++        )),
++    }
++}
++
+ fn claude_build_error(error: claude_wrapper::Error) -> String {
+     if matches!(error, claude_wrapper::Error::NotFound) {
+         missing_binary_error("Claude", "TASK_RUNNERS_CLAUDE_BIN")
+@@ -359,6 +385,7 @@
+         if !spec.cwd.is_absolute() || !spec.cwd.is_dir() {
+             return Err("cwd must be an existing absolute directory".into());
+         }
++        selection::validate(spec.backend, spec.model.as_deref(), spec.effort)?;
+         match spec.backend {
+             Backend::Claude => self.claude(spec, cancel).await,
+             Backend::Codex => self.codex(spec, cancel).await,
+--- before/src/lib.rs
++++ after/src/lib.rs
+@@ -2,5 +2,6 @@
+ pub mod diagnostics;
+ pub mod manager;
+ mod output;
++pub mod selection;
+ pub mod server;
+ pub mod types;
+--- before/src/manager.rs
++++ after/src/manager.rs
+@@ -11,7 +11,10 @@
+ use tokio_util::sync::CancellationToken;
+ use uuid::Uuid;
+ 
+-use crate::types::{AccessMode, Backend, RunOutput, RunSpec, Runner};
++use crate::types::{
++    AccessMode, Backend, Effort, ReportedSettings, RequestedSettings, RunOutput, RunSpec, Runner,
++    SelectedSettings, Selection,
++};
+ 
+ const MAX_TASKS: usize = 1024;
+ const MAX_TEXT_CHARS: usize = 64_000;
+@@ -27,6 +30,9 @@
+     /// Claude or Codex; omitted uses the server's configured default.
+     pub backend: Option<Backend>,
+     pub model: Option<String>,
++    /// Literal provider effort. Omitted leaves the CLI default; not inherited from this chat.
++    /// Claude: low/medium/high/xhigh/max. Codex also accepts none/minimal/ultra, model-dependent.
++    pub effort: Option<Effort>,
+     /// Optional self-contained JSON Schema with root type object, at most 64000 serialized bytes.
+     /// Completed output is validated and returned as structured_result. Follow-ups inherit this schema.
+     pub output_schema: Option<serde_json::Value>,
+@@ -85,6 +91,8 @@
+     pub status: Status,
+     pub cwd: PathBuf,
+     pub model: Option<String>,
++    pub effort: Option<Effort>,
++    pub selection: Selection,
+     pub access: AccessMode,
+     pub timeout_secs: u64,
+     pub started_at_ms: u64,
+@@ -161,11 +169,19 @@
+         if let Some(schema) = &input.output_schema {
+             crate::output::compile_schema(schema)?;
+         }
++        let backend = input.backend.unwrap_or(self.default_backend);
++        crate::selection::validate(backend, input.model.as_deref(), input.effort)?;
++        let requested = RequestedSettings {
++            backend: input.backend,
++            model: input.model.clone(),
++            effort: input.effort,
++        };
+         let spec = RunSpec {
+-            backend: input.backend.unwrap_or(self.default_backend),
++            backend,
+             task: input.task,
+             cwd,
+             model: input.model,
++            effort: input.effort,
+             output_schema: input.output_schema,
+             access: input.access.unwrap_or_default(),
+             session_id: None,
+@@ -174,7 +190,7 @@
+         let mut state = self.state.lock().await;
+         self.check_capacity(&state)?;
+         let conversation_id = Uuid::new_v4().to_string();
+-        let snapshot = self.insert(&mut state, conversation_id, None, spec);
++        let snapshot = self.insert(&mut state, conversation_id, None, spec, requested);
+         Ok(snapshot)
+     }
+ 
+@@ -206,9 +222,16 @@
+             .clone()
+             .ok_or("provider returned no resumable session ID")?;
+         let mut spec = prior.spec.clone();
++        let requested = prior.snapshot.selection.requested.clone();
+         spec.task = input.message;
+         spec.session_id = Some(session_id);
+-        let snapshot = self.insert(&mut state, conversation_id, Some(input.task_id), spec);
++        let snapshot = self.insert(
++            &mut state,
++            conversation_id,
++            Some(input.task_id),
++            spec,
++            requested,
++        );
+         Ok(snapshot)
+     }
+ 
+@@ -239,6 +262,7 @@
+         conversation_id: String,
+         parent_task_id: Option<String>,
+         spec: RunSpec,
++        requested: RequestedSettings,
+     ) -> TaskSnapshot {
+         let task_id = Uuid::new_v4().to_string();
+         let cancel = CancellationToken::new();
+@@ -250,6 +274,17 @@
+             status: Status::Running,
+             cwd: spec.cwd.clone(),
+             model: spec.model.clone(),
++            effort: spec.effort,
++            selection: Selection {
++                requested,
++                selected: SelectedSettings {
++                    backend: spec.backend,
++                    model: spec.model.clone(),
++                    effort: spec.effort,
++                },
++                // Neither adapter exposes reliable per-turn effective model/effort.
++                reported: ReportedSettings::default(),
++            },
+             access: spec.access,
+             timeout_secs: spec.timeout_secs,
+             started_at_ms: now_ms(),
+--- before/src/selection.rs
++++ after/src/selection.rs
+@@ -0,0 +1,94 @@
++//! Validate explicit settings without rewriting them or guessing CLI defaults.
++
++use crate::types::{Backend, Effort};
++use serde::Deserialize;
++use std::{collections::BTreeMap, sync::LazyLock};
++
++#[derive(Deserialize)]
++struct Capabilities {
++    models: BTreeMap<String, BTreeMap<String, Vec<Effort>>>,
++}
++
++static CAPABILITIES: LazyLock<Capabilities> = LazyLock::new(|| {
++    serde_json::from_str(include_str!("../resources/model-capabilities.json"))
++        .expect("embedded model capability table must be valid")
++});
++
++/// Check backend values and a small, dated table of known models.
++/// Aliases, unknown IDs and omitted models defer compatibility to the provider;
++/// validation is not proof of account/model availability or effective settings.
++pub fn validate(
++    backend: Backend,
++    model: Option<&str>,
++    effort: Option<Effort>,
++) -> Result<(), String> {
++    let Some(effort) = effort else {
++        return Ok(());
++    };
++    if backend == Backend::Claude
++        && matches!(effort, Effort::None | Effort::Minimal | Effort::Ultra)
++    {
++        return Err(format!(
++            "Claude effort {} is unsupported; choose low, medium, high, xhigh, or max",
++            effort.as_str()
++        ));
++    }
++    let Some(model) = model else {
++        return Ok(());
++    };
++    let provider = match backend {
++        Backend::Claude => "claude",
++        Backend::Codex => "codex",
++    };
++    let models = &CAPABILITIES.models[provider];
++    // Match only known generations, not substrings of aliases/deployment names.
++    let canonical = if backend == Backend::Claude {
++        let base = model.strip_suffix("[1m]").unwrap_or(model);
++        if let Some((base, date)) = base.rsplit_once('-')
++            && date.len() == 8
++            && date.bytes().all(|b| b.is_ascii_digit())
++        {
++            base
++        } else {
++            base
++        }
++    } else {
++        model
++    };
++    if let Some(supported) = models.get(canonical)
++        && !supported.contains(&effort)
++    {
++        return Err(format!(
++            "effort {} is unsupported for known {provider} model {model}; supported: {}. Choose supported settings explicitly; no fallback was started",
++            effort.as_str(),
++            supported
++                .iter()
++                .map(|e| e.as_str())
++                .collect::<Vec<_>>()
++                .join(", ")
++        ));
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn rejects_known_incompatibilities_without_guessing_aliases() {
++        for model in ["claude-opus-4-6", "claude-sonnet-4-6-20260217[1m]"] {
++            assert!(validate(Backend::Claude, Some(model), Some(Effort::Xhigh)).is_err());
++            assert!(validate(Backend::Claude, Some(model), Some(Effort::Max)).is_ok());
++        }
++        assert!(validate(Backend::Codex, Some("gpt-5.4"), Some(Effort::Max)).is_err());
++        assert!(validate(Backend::Codex, Some("gpt-6-luna"), Some(Effort::Ultra)).is_err());
++        assert!(validate(Backend::Codex, Some("gpt-6-sol"), Some(Effort::None)).is_err());
++        assert!(validate(Backend::Codex, Some("gpt-6-sol"), Some(Effort::Ultra)).is_ok());
++        for model in [None, Some("opus"), Some("my-custom-deployment")] {
++            assert!(validate(Backend::Claude, model, Some(Effort::Xhigh)).is_ok());
++            assert!(validate(Backend::Claude, model, Some(Effort::Minimal)).is_err());
++        }
++        assert!(validate(Backend::Codex, Some("future-model"), Some(Effort::Max)).is_ok());
++        assert!(validate(Backend::Codex, Some("gpt-5.4"), None).is_ok());
++    }
++}
+--- before/src/server.rs
++++ after/src/server.rs
+@@ -81,7 +81,7 @@
+         .tool(check)
+ }
+ 
+-fn skill_resources() -> [Resource; 4] {
++fn skill_resources() -> [Resource; 5] {
+     [
+         ResourceBuilder::new(DELEGATION_SKILL_URI)
+             .name("delegate")
+@@ -103,6 +103,11 @@
+             .description("Read when continuing or stopping work: latest-turn continuity, wait timeouts, settled cancellation, truncated results, and server lifetime. Also included as a reference in the plugin package.")
+             .mime_type("text/markdown")
+             .text(include_str!("../resources/skills/delegate/references/follow-up.md")),
++        ResourceBuilder::new("skill://task-runners/delegate/references/model-effort.md")
++            .name("model-effort")
++            .description("Read when selecting backend, model, or effort: user preferences, provider support, omitted settings, continuation, and requested versus reported selection. Also included as a reference in the plugin package.")
++            .mime_type("text/markdown")
++            .text(include_str!("../resources/skills/delegate/references/model-effort.md")),
+     ]
+ }
+ 
+--- before/src/types.rs
++++ after/src/types.rs
+@@ -23,12 +23,70 @@
+     WorkspaceWrite,
+ }
+ 
++/// Literal provider levels, not a normalized amount of compute across backends.
++#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
++#[serde(rename_all = "snake_case")]
++pub enum Effort {
++    None,
++    Minimal,
++    Low,
++    Medium,
++    High,
++    Xhigh,
++    Max,
++    Ultra,
++}
++
++impl Effort {
++    pub fn as_str(self) -> &'static str {
++        match self {
++            Self::None => "none",
++            Self::Minimal => "minimal",
++            Self::Low => "low",
++            Self::Medium => "medium",
++            Self::High => "high",
++            Self::Xhigh => "xhigh",
++            Self::Max => "max",
++            Self::Ultra => "ultra",
++        }
++    }
++}
++
++#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
++pub struct RequestedSettings {
++    pub backend: Option<Backend>,
++    pub model: Option<String>,
++    pub effort: Option<Effort>,
++}
++
++#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
++pub struct SelectedSettings {
++    pub backend: Backend,
++    pub model: Option<String>,
++    pub effort: Option<Effort>,
++}
++
++/// Unknown without authoritative per-turn evidence, absent from current adapters.
++#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
++pub struct ReportedSettings {
++    pub model: Option<String>,
++    pub effort: Option<Effort>,
++}
++
++#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
++pub struct Selection {
++    pub requested: RequestedSettings,
++    pub selected: SelectedSettings,
++    pub reported: ReportedSettings,
++}
++
+ #[derive(Clone, Debug)]
+ pub struct RunSpec {
+     pub backend: Backend,
+     pub task: String,
+     pub cwd: PathBuf,
+     pub model: Option<String>,
++    pub effort: Option<Effort>,
+     pub output_schema: Option<serde_json::Value>,
+     pub session_id: Option<String>,
+     pub timeout_secs: u64,
+--- before/tests/backend.rs
++++ after/tests/backend.rs
+@@ -5,7 +5,7 @@
+ use serde_json::{Value, json};
+ use task_runners::{
+     backend::CliRunner,
+-    types::{AccessMode, Backend, RunSpec, Runner},
++    types::{AccessMode, Backend, Effort, RunSpec, Runner},
+ };
+ use tempfile::TempDir;
+ use tokio_util::sync::CancellationToken;
+@@ -83,6 +83,7 @@
+             task: "Inspect the repo; literal $(echo do-not-run)".into(),
+             cwd: self.dir.path().canonicalize().unwrap(),
+             model: Some("test-model".into()),
++            effort: None,
+             session_id: None,
+             output_schema: None,
+             timeout_secs: 10,
+@@ -201,6 +202,147 @@
+             .unwrap_err();
+         assert!(error.contains(stderr), "{error}");
+         assert!(!error.contains("authentication is unavailable"), "{error}");
++    }
++}
++
++#[tokio::test]
++async fn explicit_effort_is_passed_unchanged_on_fresh_and_resumed_workers() {
++    let claude_efforts = [
++        Effort::Low,
++        Effort::Medium,
++        Effort::High,
++        Effort::Xhigh,
++        Effort::Max,
++    ];
++    let codex_efforts = [
++        Effort::None,
++        Effort::Minimal,
++        Effort::Low,
++        Effort::Medium,
++        Effort::High,
++        Effort::Xhigh,
++        Effort::Max,
++        Effort::Ultra,
++    ];
++    for (backend, response, efforts) in [
++        (Backend::Claude, CLAUDE_SUCCESS, claude_efforts.as_slice()),
++        (Backend::Codex, CODEX_SUCCESS, codex_efforts.as_slice()),
++    ] {
++        for &effort in efforts {
++            for resume in [false, true] {
++                let fake = FakeCli::new(backend, response, false);
++                let mut spec = fake.spec(backend);
++                spec.effort = Some(effort);
++                spec.session_id = resume.then(|| "prior-session".into());
++                let output = fake
++                    .runner
++                    .run(spec, CancellationToken::new())
++                    .await
++                    .unwrap();
++                assert_eq!(output.text, "done");
++                let args = fake.args();
++                assert!(has_pair(&args, "--model", "test-model"));
++                assert_eq!(args.iter().any(|arg| arg == "prior-session"), resume);
++                match backend {
++                    Backend::Claude => {
++                        assert!(has_pair(&args, "--effort", effort.as_str()));
++                        assert_eq!(args.iter().filter(|arg| *arg == "--effort").count(), 1);
++                        assert_eq!(args.iter().any(|arg| arg == "--resume"), resume);
++                    }
++                    Backend::Codex => {
++                        assert!(has_pair(
++                            &args,
++                            "-c",
++                            &format!("model_reasoning_effort=\"{}\"", effort.as_str())
++                        ));
++                        assert_eq!(
++                            args.iter()
++                                .filter(|arg| arg.starts_with("model_reasoning_effort="))
++                                .count(),
++                            1
++                        );
++                        assert_eq!(args.iter().any(|arg| arg == "resume"), resume);
++                    }
++                }
++            }
++        }
++    }
++}
++
++#[tokio::test]
++async fn omitted_model_and_effort_add_no_cli_overrides_on_start_or_resume() {
++    for (backend, response) in [
++        (Backend::Claude, CLAUDE_SUCCESS),
++        (Backend::Codex, CODEX_SUCCESS),
++    ] {
++        for resume in [false, true] {
++            let fake = FakeCli::new(backend, response, false);
++            let mut spec = fake.spec(backend);
++            spec.model = None;
++            spec.effort = None;
++            spec.session_id = resume.then(|| "prior-session".into());
++            fake.runner
++                .run(spec, CancellationToken::new())
++                .await
++                .unwrap();
++            let args = fake.args();
++            assert!(!args.iter().any(|arg| arg == "--model" || arg == "--effort"));
++            assert!(
++                !args
++                    .iter()
++                    .any(|arg| arg.starts_with("model_reasoning_effort="))
++            );
++        }
++    }
++}
++
++#[tokio::test]
++async fn unsupported_claude_effort_is_rejected_before_start_or_resume_launches() {
++    for effort in [Effort::None, Effort::Minimal, Effort::Ultra] {
++        for resume in [false, true] {
++            let fake = FakeCli::new(Backend::Claude, CLAUDE_SUCCESS, false);
++            let mut spec = fake.spec(Backend::Claude);
++            spec.effort = Some(effort);
++            spec.session_id = resume.then(|| "prior-session".into());
++            let error = fake
++                .runner
++                .run(spec, CancellationToken::new())
++                .await
++                .unwrap_err();
++            assert!(error.contains(effort.as_str()), "{error}");
++            assert!(!fake.dir.path().join("args").exists());
++            assert!(!fake.dir.path().join("pid").exists());
++        }
++    }
++}
++
++#[tokio::test]
++async fn known_model_effort_mismatches_are_rejected_before_worker_launch() {
++    for (backend, model, effort, response) in [
++        (
++            Backend::Claude,
++            "claude-opus-4-6",
++            Effort::Xhigh,
++            CLAUDE_SUCCESS,
++        ),
++        (Backend::Codex, "gpt-5.4", Effort::Max, CODEX_SUCCESS),
++    ] {
++        for resume in [false, true] {
++            let fake = FakeCli::new(backend, response, false);
++            let mut spec = fake.spec(backend);
++            spec.model = Some(model.into());
++            spec.effort = Some(effort);
++            spec.session_id = resume.then(|| "prior-session".into());
++            let error = fake
++                .runner
++                .run(spec, CancellationToken::new())
++                .await
++                .unwrap_err();
++            assert!(error.contains(model), "{error}");
++            assert!(error.contains(effort.as_str()), "{error}");
++            assert!(!fake.dir.path().join("args").exists());
++            assert!(!fake.dir.path().join("pid").exists());
++        }
+     }
+ }
+ 
+--- before/tests/lifecycle.rs
++++ after/tests/lifecycle.rs
+@@ -4,7 +4,7 @@
+ use serde_json::{Value, json};
+ use task_runners::{
+     manager::{CancelTask, ContinueTask, Manager, SpawnTask, Status, WaitTasks},
+-    types::{Backend, RunOutput, RunSpec, Runner},
++    types::{Backend, Effort, RunOutput, RunSpec, Runner},
+ };
+ use tokio::sync::Mutex;
+ use tokio_util::sync::CancellationToken;
+@@ -50,6 +50,7 @@
+             .into_owned(),
+         backend: None,
+         model: None,
++        effort: None,
+         access: None,
+         timeout_secs: None,
+         output_schema: None,
+@@ -66,6 +67,107 @@
+         .unwrap()
+         .tasks
+         .remove(0)
++}
++
++#[tokio::test]
++async fn selection_distinguishes_requested_defaults_and_keeps_explicit_settings_on_resume() {
++    for backend in [Backend::Claude, Backend::Codex] {
++        let runner = Arc::new(FakeRunner::default());
++        let manager = Manager::new(runner.clone(), backend, 1);
++        let omitted = manager.spawn_task(request("omitted")).await.unwrap();
++        assert_eq!(omitted.selection.requested.backend, None);
++        assert_eq!(omitted.selection.selected.backend, backend);
++        assert_eq!(omitted.effort, None);
++        assert_eq!(omitted.selection.selected.effort, None);
++        assert_eq!(omitted.selection.reported.model, None);
++        assert_eq!(omitted.selection.reported.effort, None);
++        let omitted = wait(&manager, &omitted.task_id).await;
++        assert_eq!(omitted.selection.requested.model, None);
++        assert_eq!(omitted.selection.selected.model, None);
++        let mut input = request("explicit");
++        input.backend = Some(backend);
++        input.model = Some("test-model".into());
++        input.effort = Some(Effort::High);
++        let first = manager.spawn_task(input).await.unwrap();
++        assert_eq!(first.selection.requested.backend, Some(backend));
++        assert_eq!(
++            first.selection.requested.model.as_deref(),
++            Some("test-model")
++        );
++        assert_eq!(first.selection.requested.effort, Some(Effort::High));
++        let first = wait(&manager, &first.task_id).await;
++        let next = manager
++            .continue_task(ContinueTask {
++                task_id: first.task_id.clone(),
++                message: "follow-up".into(),
++            })
++            .await
++            .unwrap();
++        let next = wait(&manager, &next.task_id).await;
++        assert_eq!(first.selection, next.selection);
++        assert_eq!(next.effort, Some(Effort::High));
++        assert_eq!(next.model.as_deref(), Some("test-model"));
++        let calls = runner.calls.lock().await;
++        assert_eq!(calls.len(), 3);
++        assert_eq!(calls[2].model, calls[1].model);
++        assert_eq!(calls[2].effort, calls[1].effort);
++        assert_eq!(calls[2].backend, calls[1].backend);
++    }
++}
++
++#[tokio::test]
++async fn invalid_effort_is_rejected_before_admission_or_runner_invocation() {
++    let runner = Arc::new(FakeRunner::default());
++    let manager = Manager::new(runner.clone(), Backend::Claude, 1);
++    for (backend, model, effort) in [
++        (Backend::Claude, "opus", Effort::Minimal),
++        (Backend::Claude, "claude-opus-4-6", Effort::Xhigh),
++        (Backend::Codex, "gpt-5.4", Effort::Max),
++    ] {
++        let mut input = request("should not run");
++        input.backend = Some(backend);
++        input.model = Some(model.into());
++        input.effort = Some(effort);
++        assert!(
++            manager
++                .spawn_task(input)
++                .await
++                .unwrap_err()
++                .contains("unsupported")
++        );
++    }
++    assert!(runner.calls.lock().await.is_empty());
++    let valid = manager
++        .spawn_task(request("still have capacity"))
++        .await
++        .unwrap();
++    assert_eq!(
++        wait(&manager, &valid.task_id).await.status,
++        Status::Completed
++    );
++}
++
++#[test]
++fn effort_json_distinguishes_null_from_none_and_rejects_unknown_values() {
++    for (value, expected) in [
++        (Value::Null, None),
++        (json!("none"), Some(Effort::None)),
++        (json!("xhigh"), Some(Effort::Xhigh)),
++    ] {
++        let input: SpawnTask =
++            serde_json::from_value(json!({"task":"a", "cwd":"/tmp", "effort":value})).unwrap();
++        assert_eq!(input.effort, expected);
++    }
++    assert!(
++        serde_json::from_value::<SpawnTask>(json!({"task":"a", "cwd":"/tmp", "effort":"typo"}))
++            .is_err()
++    );
++    assert!(
++        serde_json::from_value::<ContinueTask>(
++            json!({"task_id":"x", "message":"a", "effort":"high"})
++        )
++        .is_err()
++    );
+ }
+ 
+ #[tokio::test]
+--- before/tests/live.rs
++++ after/tests/live.rs
+@@ -89,6 +89,10 @@
+             .is_some(),
+         "spawn_task does not expose output_schema",
+     )?;
++    check(
++        spawn["inputSchema"]["properties"].get("effort").is_some(),
++        "spawn_task does not expose effort",
++    )?;
+     let read = client
+         .rpc(
+             "resources/read",
+@@ -116,11 +120,32 @@
+         "additionalProperties": false
+     });
+     let first = client.tool("spawn_task", json!({
+-        "backend": backend, "cwd": cwd, "access": "read_only", "timeout_secs": 120,
++        "backend": backend, "cwd": cwd, "access": "read_only", "timeout_secs": 120, "effort": "low",
+         "task": "Read context.txt in the current directory. Return the file's complete token and phase initial using the requested output schema. Remember the token for a follow-up. Do not edit files.",
+         "output_schema": schema
+     })).await?;
+     let first = completed(client, &first).await?;
++    check(first["effort"] == "low", "lost requested effort")?;
++    check(
++        first["selection"]["requested"]["backend"] == backend,
++        "lost requested backend",
++    )?;
++    check(
++        first["selection"]["requested"]["effort"] == "low",
++        "lost requested selection",
++    )?;
++    check(
++        first["selection"]["selected"]["effort"] == "low",
++        "lost selected effort",
++    )?;
++    check(
++        first["selection"]["selected"]["model"].is_null(),
++        "invented default model",
++    )?;
++    check(
++        first["selection"]["reported"] == json!({"model":null,"effort":null}),
++        "invented provider-reported settings",
++    )?;
+     check(
+         first["structured_result"] == json!({"token": token, "phase": "initial"}),
+         format!("wrong initial structured result: {first}"),
+@@ -133,6 +158,10 @@
+     })).await?;
+     let next = completed(client, &next).await?;
+     check(
++        next["effort"] == "low" && next["selection"] == first["selection"],
++        "continuation changed selection",
++    )?;
++    check(
+         next["structured_result"] == json!({"token": token, "phase": "follow_up"}),
+         format!("wrong continued structured result: {next}"),
+     )?;
+@@ -160,7 +189,9 @@
+         next["error"].is_null(),
+         "completed structured task has an error",
+     )?;
+-    eprintln!("LIVE {backend}: schema output and continued provider session verified");
++    eprintln!(
++        "LIVE {backend}: explicit low effort accepted, schema output and continued provider session verified; effective model/effort unreported"
++    );
+     Ok(())
+ }
+ 
+--- before/tests/resources.rs
++++ after/tests/resources.rs
+@@ -30,7 +30,7 @@
+     assert!(instructions.contains("resources/read"));
+ 
+     let resources = client.list_resources().await;
+-    assert_eq!(resources.len(), 4);
++    assert_eq!(resources.len(), 5);
+     let canonical_skill = include_str!("../resources/skills/delegate/SKILL.md");
+     let expected = [
+         (
+@@ -56,6 +56,12 @@
+             "skill://task-runners/delegate/references/follow-up.md",
+             include_str!("../resources/skills/delegate/references/follow-up.md"),
+             Some("references/follow-up.md"),
++        ),
++        (
++            "model-effort",
++            "skill://task-runners/delegate/references/model-effort.md",
++            include_str!("../resources/skills/delegate/references/model-effort.md"),
++            Some("references/model-effort.md"),
+         ),
+     ];
+     for (name, uri, canonical_content, local_reference) in expected {
