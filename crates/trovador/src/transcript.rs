@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 /// Bumped whenever the projection changes what it emits, which invalidates every index row.
-pub const PROJECTION_VERSION: i64 = 7;
+pub const PROJECTION_VERSION: i64 = 8;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -743,6 +743,8 @@ fn search_queries(action: &Value, outer: &Value) -> String {
 pub struct ProjectionState {
     /// Bytes consumed, always at a line boundary.
     pub offset: u64,
+    /// Issue #35: a known byte boundary survives index resumes without rescanning history.
+    pub codex_inherited_end: Option<u64>,
     pub next_index: usize,
     /// Issue #36: retain typed titles across resumes without rereading the old transcript.
     pub custom_title: Option<String>,
@@ -774,6 +776,8 @@ fn is_turn(k: RecordKind) -> bool {
 pub struct Projection {
     reader: BufReader<File>,
     backend: Backend,
+    inherited_end: u64,
+    scan_limit: Option<u64>,
     limits: Limits,
     state: ProjectionState,
     pending: std::collections::VecDeque<Draft>,
@@ -807,7 +811,7 @@ impl Projection {
         for_index: bool,
     ) -> std::io::Result<Self> {
         let mut file = File::open(&e.file)?;
-        let state = match resume {
+        let mut state = match resume {
             Some(s) => {
                 use std::io::{Seek, SeekFrom};
                 file.seek(SeekFrom::Start(s.offset))?;
@@ -820,9 +824,36 @@ impl Projection {
             // the last emitted turn instead.
             None => ProjectionState::default(),
         };
+        use std::io::{Seek, SeekFrom};
+        let mut scan_limit = None;
+        let inherited_end = if e.backend == Backend::Codex {
+            if let Some(end) = state.codex_inherited_end {
+                end
+            } else {
+                file.seek(SeekFrom::Start(0))?;
+                let boundary =
+                    crate::codex::fork_boundary(&mut BufReader::new(&mut file), e.archived, true)?;
+                // Issue #35: terminal events before the start ordinal belong to
+                // copied history. Display may fall back, but indexing must wait
+                // for the real boundary and never persist the parent's completion.
+                state.codex_inherited_end = boundary.end.filter(|_| !boundary.display_fallback);
+                let end = boundary
+                    .end
+                    .filter(|_| !for_index || !boundary.display_fallback);
+                if end.is_none() {
+                    scan_limit = Some(boundary.scanned);
+                }
+                end.unwrap_or(boundary.scanned)
+            }
+        } else {
+            0
+        };
+        file.seek(SeekFrom::Start(state.offset))?;
         Ok(Self {
             reader: BufReader::new(file),
             backend: e.backend,
+            inherited_end,
+            scan_limit,
             limits: limits.clone(),
             state,
             pending: Default::default(),
@@ -839,6 +870,15 @@ impl Projection {
 
     fn fill(&mut self) {
         while self.pending.is_empty() && !self.done {
+            // Issue #35: bytes appended after an incomplete boundary scan belong to
+            // the next pass, which can determine whether they are child-owned.
+            if self
+                .scan_limit
+                .is_some_and(|limit| self.state.offset >= limit)
+            {
+                self.done = true;
+                break;
+            }
             self.line.clear();
             let n = match self.reader.read_until(b'\n', &mut self.line) {
                 Ok(0) | Err(_) => {
@@ -853,7 +893,12 @@ impl Projection {
                 self.done = true;
                 break;
             }
+            let line_start = self.state.offset;
             self.state.offset += n as u64;
+            if line_start > 0 && line_start < self.inherited_end {
+                self.pending.push_back(Draft::omitted("forked_history"));
+                continue;
+            }
             if self.line.iter().all(|b| b.is_ascii_whitespace()) {
                 continue;
             }

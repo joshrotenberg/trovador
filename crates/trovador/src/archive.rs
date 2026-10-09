@@ -377,7 +377,7 @@ fn read_meta_inner(e: &ArchiveEntry, limits: &Limits, scan_titles: bool) -> Sess
         };
         meta = match e.backend {
             Backend::Claude => parse_claude_head(&head),
-            Backend::Codex => parse_codex_head(&head),
+            Backend::Codex => parse_codex_head(&head, e.archived, step as u64 >= e.size_bytes),
         };
         covered = step as u64;
         if meta.cwd.is_some() && meta.snippet.is_some() {
@@ -591,11 +591,27 @@ fn push_unique(list: &mut Vec<String>, item: Option<&str>) {
 /// `item_completed` event carrying a `UserMessage` item; older versions emit
 /// `event_msg/user_message`; both also write the model-facing `response_item/message`,
 /// which includes injected context. The first two are what the user typed, so they win.
-fn parse_codex_head(text: &str) -> SessionMeta {
+fn parse_codex_head(text: &str, archived: bool, complete: bool) -> SessionMeta {
     let mut meta = SessionMeta::default();
     let (mut from_item, mut from_event, mut from_response) = (None, None, None);
     let mut seen_meta = false;
-    for r in records(text) {
+    let boundary = crate::codex::fork_boundary(&mut std::io::Cursor::new(text), archived, complete)
+        .expect("reading an in-memory head");
+    let inherited_end = boundary.end.unwrap_or(boundary.scanned);
+    let mut fork_snippet = None;
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        let line_start = offset;
+        offset += line.len() as u64;
+        if line_start > 0 && boundary.end.is_none() && line_start >= boundary.scanned {
+            break;
+        }
+        if line_start > 0 && line_start < inherited_end {
+            continue;
+        }
+        let Ok(r) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         let p = r.get("payload").unwrap_or(&Value::Null);
         match (str_at(&r, "type"), str_at(p, "type")) {
             // Only the first session_meta describes this file. In 510 of 3,746 local files
@@ -608,6 +624,13 @@ fn parse_codex_head(text: &str) -> SessionMeta {
                 meta.cwd = str_at(p, "cwd").map(str::to_string);
                 meta.originator = str_at(p, "originator").map(str::to_string);
                 apply_codex_source(&mut meta, p);
+            }
+            // Issue #35: a fork's initial assignment is an inter-agent message,
+            // not a user turn. It still describes the child's work in session lists.
+            (Some("response_item"), Some("agent_message"))
+                if inherited_end > 0 && fork_snippet.is_none() =>
+            {
+                fork_snippet = typed_snippet(p.get("content").unwrap_or(&Value::Null));
             }
             (_, Some("item_completed")) if from_item.is_none() => {
                 let item = p.get("item").unwrap_or(&Value::Null);
@@ -632,7 +655,7 @@ fn parse_codex_head(text: &str) -> SessionMeta {
             _ => {}
         }
     }
-    meta.snippet = from_item.or(from_event).or(from_response);
+    meta.snippet = fork_snippet.or(from_item).or(from_event).or(from_response);
     meta
 }
 

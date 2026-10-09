@@ -277,6 +277,14 @@ impl Index {
                     "ALTER TABLE sessions ADD COLUMN title_offset INTEGER NOT NULL DEFAULT -1;",
                 )?;
             }
+            // Issue #35: preserve a known fork boundary across index opens without
+            // rebuilding unrelated sessions just to add the checkpoint column.
+            if tx
+                .prepare("SELECT codex_inherited_end FROM sessions")
+                .is_err()
+            {
+                tx.execute_batch("ALTER TABLE sessions ADD COLUMN codex_inherited_end INTEGER;")?;
+            }
             tx.commit()?;
             return Ok(());
         }
@@ -310,6 +318,7 @@ impl Index {
                  title_metadata_version INTEGER NOT NULL DEFAULT 0,
                  custom_title TEXT,
                  title_offset INTEGER NOT NULL DEFAULT -1,
+                 codex_inherited_end INTEGER,
                  UNIQUE (backend, session_id)
              );
              CREATE VIRTUAL TABLE records USING fts5(
@@ -618,7 +627,7 @@ impl Index {
         let mut stmt = self.conn.prepare(
             "SELECT id, backend, session_id, file, size, mtime_ns, text_indexed,
                     projection_version, offset, next_index, codex_mode, head_hash, tail_hash,
-                    run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset
+                    run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end
              FROM sessions",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -644,6 +653,7 @@ impl Index {
                     hashes: (r.get(11)?, r.get(12)?),
                     state: ProjectionState {
                         offset: r.get::<_, i64>(8)? as u64,
+                        codex_inherited_end: r.get::<_, Option<i64>>(20)?.map(|n| n as u64),
                         next_index: r.get::<_, i64>(9)? as usize,
                         custom_title: r.get(18)?,
                         mode: CodexMode::from_i64(r.get(10)?),
@@ -912,8 +922,8 @@ impl Index {
         let id: i64 = tx.query_row(
             "INSERT INTO sessions (backend, session_id, file, size, mtime_ns, meta, paths, origin,
                  subagent, text_indexed, projection_version, offset, next_index, codex_mode,
-                 head_hash, tail_hash, run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+                 head_hash, tail_hash, run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
              ON CONFLICT (backend, session_id) DO UPDATE SET
                  file = excluded.file, size = excluded.size, mtime_ns = excluded.mtime_ns,
                  meta = excluded.meta, paths = excluded.paths, origin = excluded.origin,
@@ -926,7 +936,8 @@ impl Index {
                  last_hash = excluded.last_hash,
                  title_metadata_version = excluded.title_metadata_version,
                  custom_title = excluded.custom_title,
-                 title_offset = excluded.title_offset
+                 title_offset = excluded.title_offset,
+                 codex_inherited_end = excluded.codex_inherited_end
              RETURNING id",
             params![
                 k.0.as_str(),
@@ -952,6 +963,7 @@ impl Index {
                 TITLE_METADATA_VERSION,
                 s.custom_title,
                 s.offset as i64,
+                s.codex_inherited_end.map(|n| n as i64),
             ],
             |r| r.get(0),
         )?;

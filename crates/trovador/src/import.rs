@@ -27,7 +27,7 @@ pub struct ImportReport {
     pub decisions_ignored: usize,
     pub summaries_imported: usize,
     pub summaries_present: usize,
-    /// The session changed after spike summarized it, or is gone.
+    /// The session changed, is gone, or is a forked Codex child with inherited context.
     pub summaries_stale: usize,
     pub summaries_unreadable: usize,
     /// Everything else spike kept, by kind, with entry counts. Not imported.
@@ -150,6 +150,8 @@ enum Outcome {
 
 #[derive(Deserialize)]
 struct SpikeSummary {
+    #[serde(default)]
+    fork_aware: bool,
     session_id: String,
     backend: Backend,
     project: Option<String>,
@@ -174,6 +176,11 @@ fn import_summary(ctx: &Ctx, path: &Path, dry_run: bool) -> Option<Outcome> {
     if summary::cached(ctx, &e).is_some() {
         return Some(Outcome::Present);
     }
+    // Issue #35: stamping spike's old projection with today's prompt version would
+    // make inherited parent turns look current. Keep normal imports reusable.
+    if !s.fork_aware && crate::codex::is_forked_child(&e) {
+        return Some(Outcome::Stale);
+    }
     // spike treated a summary as current while the file had not been written since; the
     // same test here, at millisecond resolution because that is what spike stored.
     let now_ms = summary::mtime_ns(e.mtime) / 1_000_000;
@@ -196,6 +203,7 @@ fn import_summary(ctx: &Ctx, path: &Path, dry_run: bool) -> Option<Outcome> {
             source_size: e.size_bytes,
             source_mtime_ns: summary::mtime_ns(e.mtime),
             prompt_version: summary::PROMPT_VERSION,
+            fork_aware: s.fork_aware,
             truncated: None,
         };
         summary::store(ctx, &imported).ok()?;

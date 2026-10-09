@@ -247,7 +247,7 @@ $ trovador doctor
 | Field | Source |
 |---|---|
 | `project` | Where a resume runs from: Claude's latest `relocated` cwd, else the first `cwd` |
-| `snippet` | The first block the user typed, skipping injected `<...>` context and AGENTS.md |
+| `snippet` | The first block the user typed, skipping injected `<...>` context and AGENTS.md; a forked Codex child uses its own first message, including an inter-agent assignment |
 | `title`, `title_source` | Claude `custom-title` (typed) over `ai-title` (generated); latest wins |
 | `origin` | Claude `entrypoint` (`cli`, `claude-desktop`, `sdk-cli`); Codex `source` (`cli`, `vscode`, `exec`, `guardian`, `thread_spawn`) |
 | `subagent`, `parent_session_id` | Codex sessions started by another session |
@@ -273,6 +273,10 @@ sessions were subagents, 1,694 of them Codex `guardian` approval reviewers.
 
 Records are `user`, `assistant`, `tool_call`, `tool_result`, `attachment`, `system`, `reasoning`,
 or `omitted` with a category. `reasoning` appears only when the provider kept readable text.
+Forked Codex children collapse copied parent history into an `omitted` record named
+`forked_history`; it does not contribute turns, indexed text, or summary content. An
+impossible boundary in an archived file preserves the original transcript. A terminal-event
+fallback in an unarchived file is for display only; indexing waits for a known boundary.
 Consecutive omitted records of one category collapse into one
 with a `count`. Text is capped per record (4,000 chars, 600 for tool calls and results) and
 per page (100,000 chars); a page says when it stopped early and where to continue.
@@ -357,6 +361,8 @@ the source file's size and mtime; a cache hit costs nothing and says `cached: tr
 `model` parameter (`--model` in the CLI) regenerates the summary if it differs from the
 cached model. A matching or omitted model reuses a current cached summary; `force=true`
 (`--force` in the CLI) always regenerates it. Each session keeps only the latest summary.
+Summaries made before fork-aware projection, including spike imports, are stale only for
+forked Codex children with a recorded history boundary. Other sessions keep their cached summaries.
 The `session://{backend}/{id}/summary` resource returns only a cached summary and never makes one.
 A summary longer than `TROVADOR_RESPONSE_MAX_CHARS` is returned in parts, each marked
 `truncated`; `offset` (`--offset` in the CLI) reads the next part from the cache.

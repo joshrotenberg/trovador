@@ -3,6 +3,7 @@
 //! answer.
 
 pub mod archive;
+mod codex;
 pub mod doctor;
 pub mod gc;
 pub mod hook;

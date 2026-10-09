@@ -44,6 +44,9 @@ pub struct Summary {
     pub source_size: u64,
     pub source_mtime_ns: i64,
     pub prompt_version: u32,
+    /// Issue #35: old summaries are stale only for forked Codex children.
+    #[serde(default)]
+    pub fork_aware: bool,
     /// Set when `summary` is one part of a summary longer than `response_max_chars`. The
     /// cache always holds the whole text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,7 +87,8 @@ pub fn cached(ctx: &Ctx, e: &ArchiveEntry) -> Option<Summary> {
     let s: Summary = serde_json::from_str(&raw).ok()?;
     let fresh = s.source_size == e.size_bytes
         && s.source_mtime_ns == mtime_ns(e.mtime)
-        && s.prompt_version == PROMPT_VERSION;
+        && s.prompt_version == PROMPT_VERSION
+        && (s.fork_aware || !crate::codex::is_forked_child(e));
     fresh.then_some(Summary {
         cached: true,
         cost_usd: 0.0,
@@ -278,6 +282,7 @@ pub async fn summarize(
         source_size: e.size_bytes,
         source_mtime_ns: mtime_ns(e.mtime),
         prompt_version: PROMPT_VERSION,
+        fork_aware: true,
         truncated: None,
     };
     // A summary that cannot be cached is still returned; it just costs again next time.
