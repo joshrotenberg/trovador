@@ -101,6 +101,10 @@ trovador doctor                              # providers, archives, index, prove
 trovador serve                               # MCP over stdio
 ```
 
+The `--since` and `--until` filters accept RFC 3339 times with `Z` or numeric offsets
+(for example, `2026-10-01T09:00:00-07:00`, equivalent to `2026-10-01T16:00:00Z`),
+dates at midnight UTC, and durations back from now. Times without a zone use UTC.
+
 `gc --older-than` defaults to `90d`. Durations reaching before 1970-01-01 UTC
 use that date as the age cutoff. Stale summaries and summaries for deleted sessions
 are still eligible for removal regardless of age.

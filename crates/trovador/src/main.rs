@@ -64,7 +64,7 @@ enum Command {
         /// Leave out this session id.
         #[arg(long)]
         exclude_session: Option<String>,
-        /// Only sessions last written at or after this: 2026-10-01, an RFC 3339 time, or 2d.
+        /// Only sessions last written at or after this: 2026-10-01, an RFC 3339 time (Z or numeric offset), or 2d.
         #[arg(long)]
         since: Option<String>,
         /// Only sessions last written before this, in the same forms.
@@ -165,7 +165,7 @@ enum SessionsCmd {
         /// Include claude -p and codex exec sessions trovador did not start.
         #[arg(long)]
         include_automated: bool,
-        /// Only sessions last written at or after this: 2026-10-01, an RFC 3339 time, or 2d.
+        /// Only sessions last written at or after this: 2026-10-01, an RFC 3339 time (Z or numeric offset), or 2d.
         #[arg(long)]
         since: Option<String>,
         /// Only sessions last written before this, in the same forms.
