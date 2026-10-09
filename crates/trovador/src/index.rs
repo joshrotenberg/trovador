@@ -285,6 +285,23 @@ impl Index {
             {
                 tx.execute_batch("ALTER TABLE sessions ADD COLUMN codex_inherited_end INTEGER;")?;
             }
+            // Issues #19 and #34: copy recognition must survive append-only resumes.
+            if tx
+                .prepare("SELECT last_user_filtered_hash FROM sessions")
+                .is_err()
+            {
+                tx.execute_batch(
+                    "ALTER TABLE sessions ADD COLUMN last_user_filtered_hash INTEGER;",
+                )?;
+            }
+            if tx
+                .prepare("SELECT last_user_streams FROM sessions")
+                .is_err()
+            {
+                tx.execute_batch(
+                    "ALTER TABLE sessions ADD COLUMN last_user_streams INTEGER NOT NULL DEFAULT 0;",
+                )?;
+            }
             tx.commit()?;
             return Ok(());
         }
@@ -315,6 +332,8 @@ impl Index {
                  run_count INTEGER,
                  last_kind TEXT,
                  last_hash INTEGER,
+                 last_user_filtered_hash INTEGER,
+                 last_user_streams INTEGER NOT NULL DEFAULT 0,
                  title_metadata_version INTEGER NOT NULL DEFAULT 0,
                  custom_title TEXT,
                  title_offset INTEGER NOT NULL DEFAULT -1,
@@ -627,7 +646,7 @@ impl Index {
         let mut stmt = self.conn.prepare(
             "SELECT id, backend, session_id, file, size, mtime_ns, text_indexed,
                     projection_version, offset, next_index, codex_mode, head_hash, tail_hash,
-                    run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end
+                    run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end, last_user_filtered_hash, last_user_streams
              FROM sessions",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -658,6 +677,8 @@ impl Index {
                         custom_title: r.get(18)?,
                         mode: CodexMode::from_i64(r.get(10)?),
                         run,
+                        last_user_streams: r.get(22)?,
+                        last_user_filtered_hash: r.get::<_, Option<i64>>(21)?.map(|h| h as u64),
                         last_turn: match (
                             r.get::<_, Option<String>>(15)?,
                             r.get::<_, Option<i64>>(16)?,
@@ -922,8 +943,8 @@ impl Index {
         let id: i64 = tx.query_row(
             "INSERT INTO sessions (backend, session_id, file, size, mtime_ns, meta, paths, origin,
                  subagent, text_indexed, projection_version, offset, next_index, codex_mode,
-                 head_hash, tail_hash, run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+                 head_hash, tail_hash, run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end, last_user_filtered_hash, last_user_streams)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
              ON CONFLICT (backend, session_id) DO UPDATE SET
                  file = excluded.file, size = excluded.size, mtime_ns = excluded.mtime_ns,
                  meta = excluded.meta, paths = excluded.paths, origin = excluded.origin,
@@ -937,7 +958,9 @@ impl Index {
                  title_metadata_version = excluded.title_metadata_version,
                  custom_title = excluded.custom_title,
                  title_offset = excluded.title_offset,
-                 codex_inherited_end = excluded.codex_inherited_end
+                 codex_inherited_end = excluded.codex_inherited_end,
+                 last_user_filtered_hash = excluded.last_user_filtered_hash,
+                 last_user_streams = excluded.last_user_streams
              RETURNING id",
             params![
                 k.0.as_str(),
@@ -964,6 +987,8 @@ impl Index {
                 s.custom_title,
                 s.offset as i64,
                 s.codex_inherited_end.map(|n| n as i64),
+                s.last_user_filtered_hash.map(|h| h as i64),
+                s.last_user_streams,
             ],
             |r| r.get(0),
         )?;

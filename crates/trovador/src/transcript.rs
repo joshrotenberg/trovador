@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 /// Bumped whenever the projection changes what it emits, which invalidates every index row.
-pub const PROJECTION_VERSION: i64 = 8;
+pub const PROJECTION_VERSION: i64 = 9;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -282,7 +282,9 @@ pub(crate) fn project_codex(r: &Value, mode: CodexMode, limits: &Limits, out: &m
             }
         }
         (_, Some("message")) => {
-            if mode != CodexMode::Responses {
+            if mode != CodexMode::Responses
+                && !(mode == CodexMode::Items && str_at(p, "role") == Some("user"))
+            {
                 return;
             }
             let content = p.get("content").unwrap_or(&Value::Null);
@@ -295,6 +297,8 @@ pub(crate) fn project_codex(r: &Value, mode: CodexMode, limits: &Limits, out: &m
                 if typed.trim().is_empty() {
                     if !block_text(content).trim().is_empty() {
                         out.push(Draft::omitted("injected_context"));
+                    } else {
+                        out.push(Draft::omitted("message"));
                     }
                 } else {
                     out.push(Draft::new(RecordKind::User, cap(&typed, rc)));
@@ -712,7 +716,7 @@ fn typed_text(content: &Value) -> String {
             .filter(|t| !t.trim().is_empty())
             .filter_map(user_text)
             .collect::<Vec<_>>()
-            .join(" "),
+            .concat(),
         Value::String(s) => user_text(s).unwrap_or_default(),
         _ => String::new(),
     }
@@ -752,9 +756,13 @@ pub struct ProjectionState {
     /// An omitted run still open at `offset`. A full read would merge records appended
     /// after it into the same run, so it is carried rather than flushed.
     pub run: Option<(String, usize)>,
-    /// The last user or assistant record emitted, as its kind and a hash of its text, so a
-    /// copy of it arriving at a Codex stream switch can be recognised after a resume too.
+    /// The last turn eligible for a different-stream copy, with a hash of concatenated source
+    /// text for users and projected text for assistants. Persisted across index resumes.
     pub last_turn: Option<(RecordKind, u64)>,
+    /// Clients may add injected blocks to just one copy, so retain its filtered hash too.
+    pub last_user_filtered_hash: Option<u64>,
+    /// Each stream can contribute one copy, including across an index resume.
+    pub last_user_streams: u8,
 }
 
 /// FNV-1a, 64-bit. Stable across Rust versions and platforms, unlike the std hasher,
@@ -766,6 +774,49 @@ pub fn text_hash(s: &str) -> u64 {
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
     h
+}
+
+fn codex_user_hash(r: &Value, filtered: bool) -> Option<u64> {
+    let p = r.get("payload").unwrap_or(r);
+    let content = match str_at(p, "type") {
+        Some("message") if str_at(p, "role") == Some("user") => p.get("content")?,
+        Some("item_completed")
+            if p.pointer("/item/type").and_then(Value::as_str) == Some("UserMessage") =>
+        {
+            p.pointer("/item/content")?
+        }
+        Some("user_message") => {
+            let text = str_at(p, "message")?;
+            return Some(text_hash(&if filtered {
+                user_text(text).unwrap_or_default()
+            } else {
+                text.to_owned()
+            }));
+        }
+        _ => return None,
+    };
+    let text = match content {
+        Value::String(s) => {
+            if filtered {
+                user_text(s).unwrap_or_default()
+            } else {
+                s.clone()
+            }
+        }
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|b| str_at(b, "text"))
+            .filter_map(|text| {
+                if filtered {
+                    user_text(text)
+                } else {
+                    Some(text.to_owned())
+                }
+            })
+            .collect::<String>(),
+        _ => return None,
+    };
+    Some(text_hash(&text))
 }
 
 fn is_turn(k: RecordKind) -> bool {
@@ -926,28 +977,75 @@ impl Projection {
                 Backend::Codex => {
                     // A stream seen later than the pre-scan reached still takes over from
                     // that point on.
+                    // A new task cannot be a copy of the preceding task's identical user.
+                    if matches!(
+                        r.pointer("/payload/type").and_then(Value::as_str),
+                        Some("task_started" | "task_complete")
+                    ) && self
+                        .state
+                        .last_turn
+                        .is_some_and(|(kind, _)| kind == RecordKind::User)
+                    {
+                        self.state.last_turn = None;
+                        self.state.last_user_filtered_hash = None;
+                        self.state.last_user_streams = 0;
+                    }
                     let before = self.state.mode;
                     if let Some(m) = codex_mode_signal(&r) {
                         self.state.mode = self.state.mode.max(m);
                     }
                     project_codex(&r, self.state.mode, &self.limits, &mut drafts);
-                    // Codex writes a turn to the lower stream and then to the higher one.
-                    // When the pre-scan stopped before the higher stream appeared (a 477 KB
-                    // pasted prompt carried it past its window), the turn that triggers the
-                    // switch is a copy of the one just emitted.
-                    if self.state.mode > before
+                    // Issues #19 and #34: copies may span all three streams. Remember
+                    // which streams matched instead of consuming eligibility at the first
+                    // switch. A repeated stream starts a new turn, so consecutive identical
+                    // user messages survive even without a task boundary.
+                    // Exact concatenation preserves the real flattened item copy. The
+                    // filtered hash also allows injected blocks added to only one copy;
+                    // neither hash ignores whitespace or compares a truncated prefix.
+                    let source_hash = codex_user_hash(&r, false);
+                    let filtered_hash = codex_user_hash(&r, true);
+                    let stream = if r.pointer("/payload/item/type").and_then(Value::as_str)
+                        == Some("UserMessage")
+                    {
+                        4
+                    } else if r.pointer("/payload/type").and_then(Value::as_str)
+                        == Some("user_message")
+                    {
+                        2
+                    } else if source_hash.is_some() {
+                        1
+                    } else {
+                        0
+                    };
+                    let user_copy = stream != 0
+                        && self.state.last_user_streams & stream == 0
+                        && self.state.last_turn.is_some_and(|(kind, hash)| {
+                            kind == RecordKind::User
+                                && (source_hash == Some(hash)
+                                    || (filtered_hash.is_some()
+                                        && filtered_hash == self.state.last_user_filtered_hash))
+                        });
+                    if user_copy {
+                        drafts.retain(|d| d.kind != RecordKind::User);
+                        self.state.last_user_streams |= stream;
+                    } else if self.state.mode > before
                         && let Some(last) = self.state.last_turn
                         && let Some(i) = drafts.iter().position(|d| {
-                            is_turn(d.kind)
+                            d.kind == RecordKind::Assistant
                                 && (d.kind, text_hash(d.text.as_deref().unwrap_or(""))) == last
                         })
                     {
                         drafts.remove(i);
+                    } else if let Some(d) = drafts.iter().rev().find(|d| is_turn(d.kind)) {
+                        self.state.last_user_filtered_hash = filtered_hash;
+                        self.state.last_user_streams = stream;
+                        self.state.last_turn = Some((
+                            d.kind,
+                            source_hash
+                                .unwrap_or_else(|| text_hash(d.text.as_deref().unwrap_or(""))),
+                        ));
                     }
                 }
-            }
-            if let Some(d) = drafts.iter().rev().find(|d| is_turn(d.kind)) {
-                self.state.last_turn = Some((d.kind, text_hash(d.text.as_deref().unwrap_or(""))));
             }
             self.pending.extend(drafts);
         }

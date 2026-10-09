@@ -283,7 +283,12 @@ per page (100,000 chars); a page says when it stopped early and where to continu
 
 Codex writes each turn to more than one stream. trovador projects the one the user saw:
 `item_completed` events in current versions, `user_message` and `agent_message` events in
-older ones, and `response_item` records only in files that have nothing else.
+older ones, and `response_item` records in the oldest files. In Items mode, user turns
+that exist only as response items are also retained, including guardian review turns.
+Copies across response, user-message event, and UserMessage item streams are projected
+once even when their text blocks were flattened. Response user blocks concatenate
+without adding separators. Separate identical turns remain separate. Injected response
+blocks stay excluded from the displayed user text.
 
 Files are streamed. A page from a 377 MB Codex session took 0.30 s and 6.8 MB of resident
 memory (release build, `/usr/bin/time -l`, 2026-10-07).
