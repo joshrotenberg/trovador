@@ -832,7 +832,7 @@ pub struct SearchOpts {
     #[serde(default)]
     pub regex: bool,
     pub backend: Option<Backend>,
-    /// Only sessions whose project path contains this text.
+    /// Only sessions whose project path contains this text (ASCII case-insensitive).
     pub project: Option<String>,
     /// Only sessions with this origin.
     pub origin: Option<String>,

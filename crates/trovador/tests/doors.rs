@@ -168,6 +168,47 @@ fn without_timing(mut v: Value) -> Value {
 }
 
 #[tokio::test]
+async fn project_filter_is_ascii_case_insensitive_in_list_and_search_through_both_doors() {
+    let f = Fixture::new();
+    f.claude(
+        "-w-MyProj",
+        ID_A,
+        &[claude_user("/w/MyProj/É", "alpha")],
+        20,
+    );
+    // Issue #31: listing before searching must not hide a project that search finds.
+    let cold = cli(&f, &["sessions", "list", "--project", "myproj"]);
+    assert_eq!(cold["returned"], 1);
+    assert_eq!(
+        mcp(&f, json!({"action": "list", "project": "myproj"})).await,
+        cold
+    );
+    sessions::reindex(&f.ctx(), false).unwrap();
+    for (project, expected) in [
+        ("myproj", 1),
+        ("MYPROJ", 1),
+        ("MyProj/É", 1),
+        ("myproj/é", 0),
+        ("missing", 0),
+    ] {
+        let listed = cli(&f, &["sessions", "list", "--project", project]);
+        assert_eq!(listed["returned"], expected, "{project}");
+        assert_eq!(
+            mcp(&f, json!({"action": "list", "project": project})).await,
+            listed
+        );
+        let searched = without_timing(cli(&f, &["search", "alpha", "--project", project]));
+        assert_eq!(searched["sessions_matched"], expected, "{project}");
+        assert_eq!(
+            without_timing(
+                mcp_tool(&f, "search", json!({"query": "alpha", "project": project})).await
+            ),
+            searched
+        );
+    }
+}
+
+#[tokio::test]
 async fn search_is_identical_from_the_library_the_cli_and_the_mcp_tool() {
     let f = fixture();
     // Index once so every door sees the same unchanged archive.

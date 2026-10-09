@@ -89,7 +89,7 @@ pub fn row(e: &ArchiveEntry, meta: SessionMeta, limits: &Limits) -> SessionRow {
 pub struct ListOpts {
     /// Only this backend.
     pub backend: Option<Backend>,
-    /// Only sessions whose project path contains this text.
+    /// Only sessions whose project path contains this text (ASCII case-insensitive).
     pub project: Option<String>,
     /// How many to return, newest first.
     pub limit: Option<usize>,
@@ -176,7 +176,12 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
         Default::default()
     };
     let mut hidden_automated = 0;
-    let needle = opts.project.as_deref().filter(|p| !p.is_empty());
+    // Issue #31: match search's SQLite LIKE semantics, which fold ASCII case only.
+    let needle = opts
+        .project
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .map(str::to_ascii_lowercase);
     let mut sessions = Vec::new();
     let mut examined = 0;
     let mut truncated = false;
@@ -208,11 +213,11 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
             hidden_automated += 1;
             continue;
         }
-        if let Some(n) = needle {
+        if let Some(n) = needle.as_deref() {
             let hit = [meta.cwd.as_deref(), meta.relocated_cwd.as_deref()]
                 .into_iter()
                 .flatten()
-                .any(|p| p.contains(n));
+                .any(|p| p.to_ascii_lowercase().contains(n));
             if !hit {
                 continue;
             }

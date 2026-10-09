@@ -48,7 +48,7 @@ enum Command {
         regex: bool,
         #[arg(long)]
         backend: Option<Backend>,
-        /// Only sessions whose project path contains this text.
+        /// Only sessions whose project path contains this text (ASCII case-insensitive).
         #[arg(long)]
         project: Option<String>,
         #[arg(long)]
@@ -147,7 +147,7 @@ enum SessionsCmd {
     List {
         #[arg(long)]
         backend: Option<Backend>,
-        /// Only sessions whose project path contains this text.
+        /// Only sessions whose project path contains this text (ASCII case-insensitive).
         #[arg(long)]
         project: Option<String>,
         #[arg(long)]

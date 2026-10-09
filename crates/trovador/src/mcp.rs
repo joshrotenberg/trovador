@@ -103,7 +103,7 @@ struct SessionsInput {
     session_id: Option<String>,
     /// Restrict to one backend.
     backend: Option<Backend>,
-    /// For list: only sessions whose project path contains this text.
+    /// For list: only sessions whose project path contains this text (ASCII case-insensitive).
     project: Option<String>,
     /// For list: only sessions with this origin (cli, claude-desktop, sdk-cli, exec, vscode).
     origin: Option<String>,

@@ -75,9 +75,12 @@ local transcripts held 28 calls to spike's MCP tools across 6 sessions, all to `
 
 ## Use
 
+The `--project` filter for listing and searching matches path substrings ignoring ASCII
+case. Non-ASCII case remains significant. The MCP `project` parameters behave identically.
+
 ```sh
 trovador sessions list                       # newest first, top-level sessions only
-trovador sessions list --project trovador    # project path contains this text
+trovador sessions list --project trovador    # project path contains this text (ASCII case-insensitive)
 trovador sessions list --origin cli          # how it was started
 trovador sessions list --include-subagents   # also sessions started by other sessions
 trovador sessions list --since 1d            # last written in the past day (also 36h, 1w, 2026-10-01)
