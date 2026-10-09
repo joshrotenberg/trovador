@@ -9,7 +9,21 @@ MCP.
 What is on disk is what the providers kept. Claude Code removes old transcripts according
 to its `cleanupPeriodDays` setting, and Codex moves archived threads to
 `~/.codex/archived_sessions`, which trovador also reads. A transcript the provider deleted is
-gone from trovador's list and index on the next refresh.
+gone from trovador's list; its index rows are removed on the next refresh that can read
+its configured root.
+
+Search only considers rows under its currently configured archive roots. It keeps rows
+outside those roots in the shared index, so CLI and MCP processes with different archive
+settings can search without deleting each other's rows. `trovador index` removes rows
+outside the configured roots only when every configured root is readable or does not
+exist, and reports the number removed. Otherwise its report includes
+`cleanup_skipped_reason`, naming the roots that blocked cleanup and their read errors.
+Refresh removes missing sessions under readable configured roots;
+rows under an unavailable configured root are retained and search reports that root as
+unavailable. If a configured root cannot be read and the index contains out-of-root rows
+that could use another spelling of that root, search reports the root as unavailable
+and does not claim absence proof. Missing roots without indexed rows under their spelling
+do not prevent absence proof.
 
 It only reads: past sessions are history. New work is tosi's (`crates/tosi`), and going
 back into a session is a person's `claude --resume` or `codex resume`, which `sessions

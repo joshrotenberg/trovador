@@ -126,6 +126,8 @@ pub const AUTOMATED_ORIGINS: &[&str] = &["sdk-cli", "exec", "sdk-ts"];
 /// What a search leaves out by default, beyond the caller's own filters.
 #[derive(Clone, Debug, Default)]
 pub struct Visibility {
+    /// Configured archive roots. Rows outside these are out of scope, not hidden.
+    pub archive_roots: Option<Vec<String>>,
     /// The caller's time window: last written at or after, and before. Not defaults, so
     /// what they leave out is not counted as hidden.
     pub since_ns: Option<i64>,
@@ -230,6 +232,17 @@ impl Index {
         self.conn
             .execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
         register_regexp(&self.conn)?;
+        self.conn.create_scalar_function(
+            "under_archive_root",
+            2,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8
+                | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+            |ctx| {
+                let file: String = ctx.get(0)?;
+                let root: String = ctx.get(1)?;
+                Ok(std::path::Path::new(&file).starts_with(root))
+            },
+        )?;
         Ok(())
     }
 
@@ -441,6 +454,7 @@ pub struct IndexStatus {
 #[derive(Clone, Debug, Default)]
 pub struct RefreshOpts {
     /// Stop starting new files after this long. Files already started finish.
+    /// Without a budget, also prune out-of-root rows if every root is readable or missing.
     pub budget: Option<Duration>,
 }
 
@@ -462,11 +476,15 @@ pub struct RefreshReport {
     pub removed: usize,
     /// Files that could not be read.
     pub failed: usize,
-    /// Archive roots that could not be read although the index holds sessions from them.
+    /// Archive roots that could not be read although the index holds sessions that
+    /// could belong to them, including out-of-root rows with a different spelling (#29).
     /// Their rows are kept, since an unreadable root says nothing about whether its
     /// sessions still exist, but nothing in them can be checked or returned (#27).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unavailable_roots: Vec<String>,
+    /// Why explicit out-of-root cleanup was skipped, including the blocking roots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup_skipped_reason: Option<String>,
     pub ms: u64,
 }
 
@@ -717,49 +735,88 @@ impl Index {
             });
         }
 
-        // Rows whose file is gone, but only for an archive root that could be read: an
-        // unmounted or unreadable root says nothing about whether its sessions still exist.
+        // Issue #29: search processes can share an index with different archive settings,
+        // so only an explicit, unbudgeted index run may discard out-of-root rows. Paths
+        // are compared as spelled (case-sensitive and lossy), so require every root to
+        // be readable or missing before discarding rows that might use another spelling
+        // of one. A missing provider archive must not block single-provider cleanup.
         let live: std::collections::HashSet<(Backend, String)> = entries
             .iter()
             .map(|e| key(e.backend, &e.session_id))
             .collect();
-        let roots: Vec<(&std::path::Path, bool)> = [
+        let roots: Vec<(&std::path::Path, bool, Option<String>)> = [
             &paths.claude_archive,
             &paths.codex_archive,
             &paths.codex_archived,
         ]
         .into_iter()
-        .map(|r| (r.as_path(), std::fs::read_dir(r).is_ok()))
+        .map(|r| match std::fs::read_dir(r) {
+            Ok(_) => (r.as_path(), true, None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (r.as_path(), false, None),
+            Err(e) => (r.as_path(), false, Some(e.to_string())),
+        })
         .collect();
-        let root_readable = |file: &str| {
+        let blocking_roots: Vec<String> = roots
+            .iter()
+            .filter_map(|(root, _, error)| {
+                error
+                    .as_ref()
+                    .map(|error| format!("{}: {error}", root.display()))
+            })
+            .collect();
+        let remove_out_of_root = opts.budget.is_none() && blocking_roots.is_empty();
+        if opts.budget.is_none() && !blocking_roots.is_empty() {
+            report.cleanup_skipped_reason = Some(format!(
+                "out-of-root cleanup skipped because configured roots could not be read: {}",
+                blocking_roots.join(", ")
+            ));
+        }
+        let has_out_of_root_rows = stored.values().any(|s| {
+            !roots
+                .iter()
+                .any(|(root, _, _)| std::path::Path::new(&s.file).starts_with(root))
+        });
+        let can_remove = |file: &str| {
             roots
                 .iter()
-                .find(|(root, _)| std::path::Path::new(file).starts_with(root))
-                .is_some_and(|(_, ok)| *ok)
+                .find(|(root, _, _)| std::path::Path::new(file).starts_with(root))
+                .map_or(remove_out_of_root, |(_, ok, _)| *ok)
         };
         report.unavailable_roots = roots
             .iter()
-            .filter(|(root, ok)| {
-                !*ok && stored
-                    .values()
-                    .any(|s| std::path::Path::new(&s.file).starts_with(root))
+            .filter(|(root, ok, error)| {
+                // Issue #29: an unreadable root may own out-of-root rows indexed under
+                // another spelling, so search cannot prove absence by filtering them out.
+                !*ok && ((error.is_some() && has_out_of_root_rows)
+                    || stored
+                        .values()
+                        .any(|s| std::path::Path::new(&s.file).starts_with(root)))
             })
-            .map(|(root, _)| root.display().to_string())
+            .map(|(root, _, _)| root.display().to_string())
             .collect();
-        let gone: Vec<i64> = stored
+        let gone: Vec<(i64, &str)> = stored
             .iter()
             .filter(|(k, _)| !live.contains(*k))
-            .filter(|(_, s)| root_readable(&s.file))
-            .map(|(_, s)| s.id)
+            .filter(|(_, s)| can_remove(&s.file))
+            .map(|(_, s)| (s.id, s.file.as_str()))
             .collect();
         if !gone.is_empty() {
-            let tx = self.conn.transaction()?;
-            for id in &gone {
-                delete_records(&tx, *id)?;
-                tx.execute("DELETE FROM sessions WHERE id = ?1", [id])?;
+            let tx = self
+                .conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            for (id, file) in &gone {
+                // Issue #29: the scan's snapshot can precede another process relocating
+                // this row. Delete its records only if its file still matches that snapshot.
+                let removed = tx.execute(
+                    "DELETE FROM sessions WHERE id = ?1 AND file = ?2",
+                    params![id, file],
+                )?;
+                if removed > 0 {
+                    delete_records(&tx, *id)?;
+                    report.removed += removed;
+                }
             }
             tx.commit()?;
-            report.removed = gone.len();
         }
 
         let deadline = opts.budget.map(|b| started + b);
@@ -1223,6 +1280,20 @@ impl Index {
 
         let mut filters = vec!["s.text_indexed = 1".to_string()];
         let mut args: Vec<rusqlite::types::Value> = vec![expression.clone().into()];
+        // Issue #29: scope before counting matches or hidden defaults, so another
+        // process's archive rows cannot invalidate this process's absence proof.
+        if let Some(roots) = &vis.archive_roots {
+            let mut scoped = Vec::new();
+            for root in roots {
+                args.push(root.clone().into());
+                scoped.push(format!("under_archive_root(s.file, ?{})", args.len()));
+            }
+            filters.push(if scoped.is_empty() {
+                "0".into()
+            } else {
+                format!("({})", scoped.join(" OR "))
+            });
+        }
         if let Some(b) = opts.backend {
             args.push(b.as_str().to_string().into());
             filters.push(format!("s.backend = ?{}", args.len()));

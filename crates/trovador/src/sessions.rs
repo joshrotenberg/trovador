@@ -390,6 +390,16 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         .unwrap_or(ctx.limits.per_session_default)
         .max(1);
     let vis = Visibility {
+        archive_roots: Some(
+            [
+                &ctx.paths.claude_archive,
+                &ctx.paths.codex_archive,
+                &ctx.paths.codex_archived,
+            ]
+            .into_iter()
+            .map(|root| root.display().to_string())
+            .collect(),
+        ),
         since_ns: since.map(crate::timespec::ns),
         until_ns: until.map(crate::timespec::ns),
         active_since_ns: (!opts.include_active && ctx.limits.active_window_s > 0).then(|| {
