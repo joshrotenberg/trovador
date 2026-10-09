@@ -125,7 +125,11 @@ async fn memory_cap_evicts_persisted_terminal_tasks_and_resumes_evicted_owner_ta
         .unwrap();
     assert_eq!(cancelled.status, Status::Completed);
     assert!(!cancelled.result.unwrap().contains(SECRET));
-    let listed = manager.list_tasks(ListTasks::default()).await.unwrap();
+    let listed = manager
+        .list_tasks(ListTasks::default())
+        .await
+        .unwrap()
+        .tasks;
     assert_eq!(listed.len(), 2);
     assert_eq!(
         listed

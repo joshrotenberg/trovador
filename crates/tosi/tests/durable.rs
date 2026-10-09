@@ -71,10 +71,17 @@ impl Server {
             .await;
         let text = v["content"][0]["text"].as_str().unwrap();
         if v["isError"] == true {
-            Err(text.into())
-        } else {
-            Ok(serde_json::from_str(text).unwrap())
+            return Err(text.into());
         }
+        // MCP defines structuredContent as an object. list_tasks once returned a bare
+        // array, which every host rejected and this helper accepted.
+        let structured = &v["structuredContent"];
+        assert!(
+            structured.is_object(),
+            "{name} structuredContent is not an object: {v}"
+        );
+        assert_eq!(serde_json::from_str::<Value>(text).unwrap(), *structured);
+        Ok(structured.clone())
     }
     async fn spawn(&mut self, root: &Path) -> String {
         self.tool(
@@ -146,8 +153,8 @@ async fn shared_servers_wait_refuse_nonowners_resume_and_match_cli() {
     child_pid(root).await;
     let mut reader = Server::start(root).await;
     let listed = reader.tool("list_tasks", json!({})).await.unwrap();
-    assert_eq!(listed[0]["task_id"], id);
-    assert!(listed[0]["result"].is_null());
+    assert_eq!(listed["tasks"][0]["task_id"], id);
+    assert!(listed["tasks"][0]["result"].is_null());
     for (name, args) in [
         ("cancel_task", json!({"task_id":id})),
         ("continue_task", json!({"task_id":id,"message":"follow up"})),
@@ -224,9 +231,9 @@ async fn shared_servers_wait_refuse_nonowners_resume_and_match_cli() {
         )
         .await
         .unwrap();
-    assert_eq!(compact.as_array().unwrap().len(), 1);
-    assert_eq!(compact[0]["task_id"], next["task_id"]);
-    assert!(compact[0]["result"].is_null());
+    assert_eq!(compact["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(compact["tasks"][0]["task_id"], next["task_id"]);
+    assert!(compact["tasks"][0]["result"].is_null());
     let mut observer = Server::start(root).await;
     let listed = observer
         .tool(
@@ -335,8 +342,7 @@ async fn reused_identity_future_versions_and_concurrent_retention() {
             .exists()
     );
     assert!(
-        serde_json::from_slice::<Value>(&future.stdout)
-            .unwrap()
+        serde_json::from_slice::<Value>(&future.stdout).unwrap()["tasks"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -394,7 +400,7 @@ async fn reused_identity_future_versions_and_concurrent_retention() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let tasks: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let tasks = serde_json::from_slice::<Value>(&output.stdout).unwrap()["tasks"].take();
         assert_eq!(tasks.as_array().unwrap().len(), 1);
         assert_eq!(tasks[0]["task_id"], active);
     }
@@ -406,7 +412,7 @@ async fn reused_identity_future_versions_and_concurrent_retention() {
     });
     assert!(record_path(root, &active).exists());
     assert!(!path.exists());
-    let tasks = a.list(ListTasks::default()).unwrap();
+    let tasks = a.list(ListTasks::default()).unwrap().tasks;
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].task_id, active);
     live["status"] = json!("completed");
@@ -458,8 +464,8 @@ async fn unreadable_neighbors_are_quarantined_and_do_not_prevent_cancellation() 
             .exists()
     );
     let listed = reader.tool("list_tasks", json!({})).await.unwrap();
-    assert_eq!(listed.as_array().unwrap().len(), 1);
-    assert_eq!(listed[0]["task_id"], task);
+    assert_eq!(listed["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["tasks"][0]["task_id"], task);
     let unknown = uuid::Uuid::new_v4().to_string();
     let mixed = reader
         .tool(
@@ -500,7 +506,7 @@ async fn unreadable_neighbors_are_quarantined_and_do_not_prevent_cancellation() 
             .success()
     );
     let listed = reader.tool("list_tasks", json!({})).await.unwrap();
-    assert_eq!(listed[0]["status"], "cancelled");
+    assert_eq!(listed["tasks"][0]["status"], "cancelled");
     assert!(
         prepared
             .tosi
@@ -596,9 +602,32 @@ async fn opt_out_structured_results_are_validated_in_memory_and_redacted_for_oth
         .tool("list_tasks", json!({"full_result":true}))
         .await
         .unwrap();
-    assert_eq!(listed[0]["structured_result"]["answer"], SECRET);
+    assert_eq!(listed["tasks"][0]["structured_result"]["answer"], SECRET);
     reader.stop().await;
     owner.stop().await;
+}
+
+#[tokio::test]
+async fn list_tasks_is_an_object_in_both_doors_so_hosts_accept_it() {
+    let root = fixture();
+    let root = root.path();
+    let mut server = Server::start(root).await;
+    // Bypass the helper's own check: this is the raw reply a host validates.
+    let raw = server
+        .rpc("tools/call", json!({"name":"list_tasks","arguments":{}}))
+        .await;
+    assert_eq!(raw["structuredContent"], json!({"tasks": []}), "{raw}");
+    let output = state::server_command(env!("CARGO_BIN_EXE_tosi"), root)
+        .arg("tasks")
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+        raw["structuredContent"]
+    );
+    server.stop().await;
 }
 
 #[tokio::test]
@@ -631,7 +660,7 @@ async fn unreadable_or_unparseable_owner_identity_uses_the_live_lease() {
     fs::set_permissions(&marker, fs::Permissions::from_mode(0o000)).unwrap();
     let store = Registry::open_with_retention(&layout(root), 500, 30).unwrap();
     assert_eq!(
-        store.list(ListTasks::default()).unwrap()[0].status,
+        store.list(ListTasks::default()).unwrap().tasks[0].status,
         tosi::manager::Status::Running
     );
     assert!(record_path(root, &task).exists());
@@ -643,21 +672,21 @@ async fn unreadable_or_unparseable_owner_identity_uses_the_live_lease() {
         tosi::manager::Status::Running
     );
     assert_eq!(
-        store.list(ListTasks::default()).unwrap()[0].status,
+        store.list(ListTasks::default()).unwrap().tasks[0].status,
         tosi::manager::Status::Running
     );
     assert!(marker.exists());
     assert!(!root.join(".bottega/tosi/tasks/quarantine").exists());
     fs::remove_file(&marker).unwrap();
     assert_eq!(
-        store.list(ListTasks::default()).unwrap()[0].status,
+        store.list(ListTasks::default()).unwrap().tasks[0].status,
         tosi::manager::Status::Running
     );
     fs::write(&marker, &original).unwrap();
     let lease = marker.with_extension("");
     fs::set_permissions(&lease, fs::Permissions::from_mode(0o000)).unwrap();
     assert_eq!(
-        store.list(ListTasks::default()).unwrap()[0].status,
+        store.list(ListTasks::default()).unwrap().tasks[0].status,
         tosi::manager::Status::Running
     );
     assert!(record_path(root, &task).exists());
@@ -766,7 +795,7 @@ async fn future_formats_are_untouched_and_excluded_from_retention() {
     let store = Registry::open_with_retention(&layout(root), 1, 30).unwrap();
     for _ in 0..2 {
         store.prune().unwrap();
-        let listed = store.list(ListTasks::default()).unwrap();
+        let listed = store.list(ListTasks::default()).unwrap().tasks;
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].task_id, task);
         assert!(

@@ -291,7 +291,8 @@ Task records are private, versioned JSON files under `~/.bottega/tosi/tasks`
 (or `<BOTTEGA_HOME>/tosi/tasks`). Results are redacted before storage. State must be on a local filesystem,
 not NFS or another remote filesystem. Several
 host servers share this history. Use `list_tasks` or `tosi tasks` after a restart,
-then `wait_tasks` to retrieve full results. Listing defaults to 50 compact
+then `wait_tasks` to retrieve full results. Both return `{"tasks": [...]}`: MCP
+requires `structuredContent` to be an object, not an array. Listing defaults to 50 compact
 snapshots, newest first, with `status`, `since` (Unix milliseconds), `limit`, and
 `full_result` filters/options. CLI options use `--status`, `--since`, `--limit`,
 and `--full-result`.

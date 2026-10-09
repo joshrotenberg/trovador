@@ -83,7 +83,14 @@ pub struct ListTasks {
     pub limit: Option<usize>,
     pub full_result: Option<bool>,
 }
-pub fn filter(mut tasks: Vec<TaskSnapshot>, input: ListTasks) -> Result<Vec<TaskSnapshot>, String> {
+/// MCP defines `structuredContent` as a JSON object, and Claude Code rejected the bare array
+/// `list_tasks` first returned before any task data reached the caller. The wrapper is applied
+/// here, where the listing is produced, so `tosi tasks` and the tool cannot disagree on it.
+#[derive(Debug, Serialize)]
+pub struct TaskList {
+    pub tasks: Vec<TaskSnapshot>,
+}
+pub fn filter(mut tasks: Vec<TaskSnapshot>, input: ListTasks) -> Result<TaskList, String> {
     let limit = input.limit.unwrap_or(50);
     if !(1..=10000).contains(&limit) {
         return Err("limit must be between 1 and 10000".into());
@@ -104,7 +111,7 @@ pub fn filter(mut tasks: Vec<TaskSnapshot>, input: ListTasks) -> Result<Vec<Task
             task.structured_result = None;
         }
     }
-    Ok(tasks)
+    Ok(TaskList { tasks })
 }
 pub struct Registry {
     dir: PathBuf,
@@ -446,7 +453,7 @@ impl Registry {
         }
         Ok(out)
     }
-    pub fn list(&self, input: ListTasks) -> Result<Vec<TaskSnapshot>, String> {
+    pub fn list(&self, input: ListTasks) -> Result<TaskList, String> {
         let limit = input.limit.unwrap_or(50);
         if !(1..=10000).contains(&limit) {
             return Err("limit must be between 1 and 10000".into());

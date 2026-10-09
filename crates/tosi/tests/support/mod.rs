@@ -127,6 +127,13 @@ impl Client {
             return Err(self.diagnostic(format!("tool {name} failed: {result}")));
         }
         if let Some(value) = result.get("structuredContent") {
+            // MCP defines structuredContent as an object. list_tasks once returned a bare
+            // array, which every host rejected and this helper accepted.
+            if !value.is_object() {
+                return Err(self.diagnostic(format!(
+                    "tool {name} returned structuredContent that is not an object: {value}"
+                )));
+            }
             return Ok(value.clone());
         }
         let text = result

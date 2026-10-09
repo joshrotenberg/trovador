@@ -272,7 +272,7 @@ impl Manager {
     pub async fn list_tasks(
         &self,
         input: crate::registry::ListTasks,
-    ) -> Result<Vec<TaskSnapshot>, String> {
+    ) -> Result<crate::registry::TaskList, String> {
         self.ensure_maintenance();
         if let Some(store) = &self.store {
             Self::retry_dirty_entries(&self.state, &self.persistence, store).await;
@@ -284,6 +284,7 @@ impl Manager {
             tokio::task::spawn_blocking(move || store.list(disk_input))
                 .await
                 .map_err(|e| e.to_string())??
+                .tasks
         } else {
             Vec::new()
         };
