@@ -12,13 +12,12 @@ use tower_mcp::{CallToolResult, McpRouter, ResourceTemplateBuilder, TaskSupportM
 
 use crate::archive::Backend;
 use crate::index::SearchOpts;
-use crate::run::{self, AskOpts};
 use crate::sessions::{self, Ctx, ListOpts};
 
 /// How the server is started. Neither setting can be changed by a connected client.
 #[derive(Clone, Copy, Debug)]
 pub struct ServeOpts {
-    /// Register only the tools that read: no `ask`, no `summarize`.
+    /// Register only the tools that read: no `summarize`.
     pub read_only: bool,
     /// Replace secrets in every response. Off only with `serve --no-redact`.
     pub redact: bool,
@@ -58,11 +57,9 @@ const RUNS: &str = "
 summarize returns a summary of a session, from the cache when the session has not \
 changed; a miss costs tokens. session://{backend}/{id}/summary returns only a cached one.
 
-ask runs a turn and costs real model tokens. Without session it starts a new session; with \
-session it continues that one, if consent allows. Sessions trovador starts may always be \
-continued. Keep the session_id it returns: it is the handle to that conversation, and a run \
-that timed out still returns it. Consent is changed only by a person at the CLI, never \
-through this server.";
+trovador only reads sessions. Starting, continuing, or forking one is tosi's spawn_task, \
+under the consent shown by sessions(action=show); consent is changed only by a person at \
+the trovador CLI.";
 
 const READ_ONLY: &str = "
 
@@ -96,13 +93,11 @@ enum SessionsAction {
     List,
     Show,
     Transcript,
-    Output,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SessionsInput {
     /// list: find sessions. show: one session's metadata. transcript: one page of records.
-    /// output: the rest of an ask reply that was longer than the response budget.
     action: SessionsAction,
     /// For show and transcript: a session id or an unambiguous prefix.
     session_id: Option<String>,
@@ -126,11 +121,8 @@ struct SessionsInput {
     until: Option<String>,
     /// For list: sessions to return. For transcript: records per page.
     limit: Option<usize>,
-    /// For transcript: the record index to start from. For output: the character to start
-    /// from.
+    /// For transcript: the record index to start from.
     offset: Option<usize>,
-    /// For output: the run_id of the ask whose reply was truncated.
-    run_id: Option<String>,
 }
 
 /// Serializes a response the way the CLI does, so both doors return the same JSON.
@@ -202,15 +194,6 @@ fn sessions_call(
             .map(|t| json_result(&t, opts))
             .map_err(|e| e.to_string())
         }),
-        SessionsAction::Output => input
-            .run_id
-            .as_deref()
-            .ok_or_else(|| "run_id is required for output".to_string())
-            .and_then(|id| {
-                crate::output::read(ctx, id, input.offset.unwrap_or(0))
-                    .map(|o| json_result(&o, opts))
-                    .map_err(|e| e.to_string())
-            }),
     };
     // A lookup miss is the caller's to fix, so it comes back as a tool error they can read
     // rather than a protocol error.
@@ -273,9 +256,8 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
         .description(format!(
             "List, inspect, and read local Claude Code and Codex sessions. action=list finds \
              sessions newest first; action=show gives one session's metadata and resume \
-             command; action=transcript pages through its records (follow next_offset); \
-             action=output reads the rest of an ask reply that was truncated, by run_id and \
-             offset. Reads only; costs no model tokens.{UNTRUSTED}"
+             command; action=transcript pages through its records (follow next_offset). \
+             Reads only; costs no model tokens.{UNTRUSTED}"
         ))
         .read_only_safe()
         .handler(move |input: SessionsInput| {
@@ -305,35 +287,6 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
                     Err(e) => error_result(e, opts),
                 })
                 .await?
-            }
-        })
-        .build();
-
-    let c = ctx.clone();
-    let ask_tool = ToolBuilder::new("ask")
-        .title("Ask a session")
-        .description(
-            "Run one turn on claude or codex. Costs real model tokens. Without session, \
-             starts a new session (claude unless backend says otherwise). With session (an \
-             id or unambiguous prefix), continues it, if consent allows; sessions trovador \
-             started are always allowed, others need a person to approve them at the CLI. \
-             fork=true resumes a claude session's context into a new one. Returns the reply, \
-             the session_id to continue with, and whether it can be continued. A run that \
-             times out still returns its session_id. about=<session> consults instead: it \
-             summarizes that session and asks a new session on the other backend, which \
-             works for sessions too large to resume. Supports task execution: a turn can \
-             take many minutes, and as a task it returns a task id at once.",
-        )
-        // A turn can run for many minutes. A client that negotiated tasks gets a task
-        // handle at once and polls it; any other client gets the result as before.
-        .task_support(TaskSupportMode::Optional)
-        .handler(move |input: AskOpts| {
-            let ctx = c.clone();
-            async move {
-                match run::ask(&ctx, &input).await {
-                    Ok(r) => json_result(&r, opts),
-                    Err(e) => error_result(e, opts),
-                }
             }
         })
         .build();
@@ -444,16 +397,15 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
         .tool(search_tool);
     if !opts.read_only {
         // A task expires its TTL after creation, and an expired task's run is killed, so
-        // the default outlives the longest provider timeout and leaves an hour to collect
+        // the default outlives a summary's provider timeout and leaves an hour to collect
         // the result. tower-mcp's own default of five minutes killed Claude turns at 300 s
         // of their 600 s timeout.
-        let longest = limits.claude_timeout_s.max(limits.codex_timeout_s) as u64;
+        let longest = limits.claude_timeout_s as u64;
         let store = tower_mcp::async_task::MemoryTaskStore::with_config(
             tower_mcp::async_task::MemoryTaskStoreConfig::default()
                 .default_ttl(Duration::from_secs(longest + TASK_RETENTION_S)),
         );
         router = router
-            .tool(ask_tool)
             .tool(summarize_tool)
             .with_tasks()
             .task_store(Arc::new(store));

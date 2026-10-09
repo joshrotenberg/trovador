@@ -130,7 +130,7 @@ pub async fn report(ctx: &Ctx) -> Report {
                 severity: Severity::Warn,
                 what: format!("{}: {e}", pr.backend),
                 fix: format!(
-                    "ask and summarize need {0}; install it, or set TROVADOR_{1}_BIN. Reading and search work without it",
+                    "{0} runs tosi workers, and claude also runs summaries; install it, or set TROVADOR_{1}_BIN. Reading and search work without it",
                     pr.backend,
                     pr.backend.as_str().to_uppercase()
                 ),

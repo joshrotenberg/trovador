@@ -151,7 +151,7 @@ fn pick(n: usize, max: usize) -> Vec<usize> {
 }
 
 /// One part of a summary, at most `response_max_chars` of it from character `offset`. What
-/// both doors return; consult uses the whole summary from [`summarize`].
+/// both doors return. Callers that need the whole text use [`summarize`].
 pub fn part(s: Summary, offset: usize, limits: &crate::limits::Limits) -> Summary {
     let id = s.session_id.clone();
     let backend = s.backend;
@@ -199,7 +199,7 @@ pub async fn summarize(
 
     let summary = if picked.len() <= 1 {
         let body = chunks.first().copied().unwrap_or("(empty session)");
-        let (s, c) = crate::run::oneshot(
+        let (s, c) = oneshot(
             ctx,
             &format!("Summarize this agent session transcript. {FINAL_SHAPE}\n\n---\n{body}"),
             &model,
@@ -229,7 +229,7 @@ pub async fn summarize(
                     chunks[i]
                 );
                 let model = model.clone();
-                async move { crate::run::oneshot(ctx, &prompt, &model, timeout).await }
+                async move { oneshot(ctx, &prompt, &model, timeout).await }
             });
             for r in futures::future::join_all(runs).await {
                 let (s, c) = r.map_err(SummaryError::Provider)?;
@@ -243,7 +243,7 @@ pub async fn summarize(
             .map(|(p, i)| format!("PART {}:\n{p}", i + 1))
             .collect::<Vec<_>>()
             .join("\n\n");
-        let (s, c) = crate::run::oneshot(
+        let (s, c) = oneshot(
             ctx,
             &format!(
                 "These are sequential partial summaries of one agent session.{} Merge them into a single summary. {FINAL_SHAPE}\n\n---\n{merged}",
@@ -279,6 +279,104 @@ pub async fn summarize(
     // A summary that cannot be cached is still returned; it just costs again next time.
     let _ = store(ctx, &s);
     Ok(s)
+}
+
+fn depth() -> usize {
+    std::env::var("TROVADOR_DEPTH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Writes the end record of a summary run whose future is dropped before it writes its own:
+/// a cancelled or expired MCP task, or a client that went away. Dropping the future kills
+/// the provider, and without this the log showed a start with no end.
+struct Unfinished<'a> {
+    ctx: &'a Ctx,
+    record: Option<serde_json::Value>,
+    started: std::time::Instant,
+}
+
+impl Unfinished<'_> {
+    fn finish(mut self) {
+        self.record = None;
+    }
+}
+
+impl Drop for Unfinished<'_> {
+    fn drop(&mut self) {
+        if let Some(mut record) = self.record.take() {
+            record["ms"] = serde_json::json!(self.started.elapsed().as_millis() as u64);
+            crate::runlog::append(&self.ctx.paths, record);
+        }
+    }
+}
+
+/// One Claude call whose session is not kept: no transcript is written, so it never shows
+/// up in the archive or as something to continue.
+async fn oneshot(
+    ctx: &Ctx,
+    prompt: &str,
+    model: &str,
+    timeout: Duration,
+) -> Result<(String, f64), String> {
+    use claude_wrapper::{Claude, QueryCommand};
+    use serde_json::json;
+
+    let depth = depth();
+    if depth >= ctx.limits.max_depth {
+        return Err(format!(
+            "spawn depth {depth} has reached TROVADOR_MAX_DEPTH={}",
+            ctx.limits.max_depth
+        ));
+    }
+    let mut builder = Claude::builder()
+        .timeout(timeout)
+        .process_group(true)
+        .env("TROVADOR_DEPTH", (depth + 1).to_string());
+    if let Some(bin) = &ctx.paths.claude_bin {
+        builder = builder.binary(bin);
+    }
+    let claude = builder.build().map_err(|e| e.to_string())?;
+    let cmd = QueryCommand::new(prompt.to_string())
+        .prompt_via_stdin(true)
+        .model(model)
+        .no_session_persistence()
+        .hermetic()
+        // Reading the transcript in the prompt is the whole job; no tools are needed.
+        .max_turns(1);
+    let started = std::time::Instant::now();
+    let run_id = uuid::Uuid::new_v4().to_string();
+    crate::runlog::append(
+        &ctx.paths,
+        json!({"phase": "start", "run_id": run_id, "backend": "claude", "verb": "summarize"}),
+    );
+    let unfinished = Unfinished {
+        ctx,
+        record: Some(
+            json!({"phase": "end", "run_id": run_id, "backend": "claude",
+            "verb": "summarize", "outcome": "cancelled"}),
+        ),
+        started,
+    };
+    let result = cmd.execute_json(&claude).await;
+    unfinished.finish();
+    let outcome = match &result {
+        Ok(r) if !r.is_error => "ok",
+        Ok(_) => "error",
+        Err(claude_wrapper::Error::Timeout { .. }) => "timeout",
+        Err(_) => "failed",
+    };
+    crate::runlog::append(
+        &ctx.paths,
+        json!({"phase": "end", "run_id": run_id, "backend": "claude", "verb": "summarize",
+        "outcome": outcome, "ms": started.elapsed().as_millis() as u64}),
+    );
+    match result {
+        Ok(r) if r.is_error => Err(r.result),
+        Ok(r) => Ok((r.result, r.cost_usd.unwrap_or(0.0))),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[cfg(test)]

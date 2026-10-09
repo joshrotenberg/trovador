@@ -5,7 +5,6 @@ use serde::Serialize;
 use serde_json::json;
 use trovador::consent::{self, Decision, Level};
 use trovador::index::{Order, SearchOpts};
-use trovador::run::{self, AskOpts};
 use trovador::sessions::{self, Ctx, ListOpts};
 use trovador::summary;
 use trovador::{Backend, archive};
@@ -86,48 +85,6 @@ enum Command {
         /// Discard the index and build it again.
         #[arg(long)]
         rebuild: bool,
-    },
-    /// Run one turn: start a session, or continue or fork one. Costs model tokens.
-    Ask {
-        /// The prompt, or - to read it from stdin.
-        prompt: String,
-        #[arg(long)]
-        backend: Option<Backend>,
-        /// Continue this session (id or unambiguous prefix).
-        #[arg(long)]
-        session: Option<String>,
-        /// With --session, resume its context into a new session (claude only).
-        #[arg(long, requires = "session")]
-        fork: bool,
-        /// Consult about this session: summarize it and ask a new session, on the other
-        /// backend unless --backend says otherwise.
-        #[arg(long, conflicts_with_all = ["session", "fork"])]
-        about: Option<String>,
-        #[arg(long)]
-        cwd: Option<String>,
-        #[arg(long = "add-dir")]
-        add_dirs: Vec<String>,
-        #[arg(long)]
-        model: Option<String>,
-        #[arg(long)]
-        effort: Option<String>,
-        #[arg(long = "allowed-tool")]
-        allowed_tools: Vec<String>,
-        #[arg(long = "disallowed-tool")]
-        disallowed_tools: Vec<String>,
-        #[arg(long)]
-        permission_mode: Option<String>,
-        #[arg(long)]
-        append_system_prompt: Option<String>,
-        #[arg(long)]
-        max_turns: Option<u32>,
-        #[arg(long)]
-        timeout_s: Option<u64>,
-        #[arg(long)]
-        hermetic: bool,
-        /// codex sandbox: read-only (default) or workspace-write.
-        #[arg(long)]
-        sandbox: Option<String>,
     },
     /// Summarize a session: cached until the session changes. Costs tokens on a miss.
     Summarize {
@@ -266,14 +223,6 @@ enum SessionsCmd {
         #[arg(long)]
         limit: Option<usize>,
     },
-    /// The rest of an ask reply that was longer than the response budget.
-    Output {
-        /// The run_id from the ask result.
-        run_id: String,
-        /// The character to start from.
-        #[arg(long, default_value_t = 0)]
-        offset: usize,
-    },
 }
 
 /// Whether output is redacted, set once from the command line before anything prints.
@@ -368,12 +317,6 @@ fn main() -> ExitCode {
                 Ok(t) => print(&t),
                 Err(e) => fail(e),
             },
-            SessionsCmd::Output { run_id, offset } => {
-                match trovador::output::read(&ctx, &run_id, offset) {
-                    Ok(o) => print(&o),
-                    Err(e) => fail(e),
-                }
-            }
         },
         Command::Search {
             query,
@@ -422,62 +365,6 @@ fn main() -> ExitCode {
             Ok(r) => print(&json!({ "refresh": r, "index": sessions::index_status(&ctx) })),
             Err(e) => fail(e),
         },
-        Command::Ask {
-            prompt,
-            backend,
-            session,
-            fork,
-            about,
-            cwd,
-            add_dirs,
-            model,
-            effort,
-            allowed_tools,
-            disallowed_tools,
-            permission_mode,
-            append_system_prompt,
-            max_turns,
-            timeout_s,
-            hermetic,
-            sandbox,
-        } => {
-            let prompt = if prompt == "-" {
-                let mut s = String::new();
-                if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut s) {
-                    return fail(e);
-                }
-                s
-            } else {
-                prompt
-            };
-            let opts = AskOpts {
-                prompt,
-                backend,
-                session,
-                fork,
-                about,
-                cwd,
-                add_dirs,
-                model,
-                effort,
-                allowed_tools,
-                disallowed_tools,
-                permission_mode,
-                append_system_prompt,
-                max_turns,
-                timeout_s,
-                hermetic,
-                sandbox,
-            };
-            let runtime = match tokio::runtime::Runtime::new() {
-                Ok(r) => r,
-                Err(e) => return fail(e),
-            };
-            match runtime.block_on(run::ask(&ctx, &opts)) {
-                Ok(r) => print(&r),
-                Err(e) => fail(e),
-            }
-        }
         Command::Consent { action } => consent_cmd(&ctx, action),
         Command::Gc { older_than, apply } => match humantime::parse_duration(&older_than) {
             Ok(d) => match trovador::gc::gc(&ctx, d, apply) {

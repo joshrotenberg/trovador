@@ -145,6 +145,8 @@ case "$first" in
   *) reply="echo: $safe";;
 esac
 if [ "$fmt" = "json" ]; then
+  # A summary of a session that mentions SLOW-SUMMARY sleeps past any test timeout.
+  case "$prompt" in *SLOW-SUMMARY*) sleep 30;; esac
   printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","session_id":"%s","total_cost_usd":0.001,"num_turns":1}\n' "$reply" "$id"
   exit 0
 fi

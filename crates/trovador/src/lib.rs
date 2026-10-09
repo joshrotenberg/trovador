@@ -14,7 +14,6 @@ pub mod mcp;
 pub mod output;
 pub mod paths;
 pub mod redact;
-pub mod run;
 pub mod runlog;
 pub mod sessions;
 pub mod summary;

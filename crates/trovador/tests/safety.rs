@@ -263,22 +263,11 @@ async fn everything_trovador_writes_is_private_to_the_user() {
     trovador::summary::summarize(&ctx, ID_A, None, false, None)
         .await
         .unwrap();
-    let r = trovador::run::ask(
-        &ctx,
-        &trovador::run::AskOpts {
-            prompt: "a reply longer than eight characters".into(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert!(r.result_truncated.is_some());
+    trovador::consent::record_spawned(&ctx.paths, trovador::Backend::Claude, ID_B).unwrap();
     trovador::gc::gc(&ctx, std::time::Duration::from_secs(86_400 * 365), true).unwrap();
 
     assert_eq!(mode(&home), 0o700, "home");
-    for dir in ["summaries", "outputs"] {
-        assert_eq!(mode(&home.join(dir)), 0o700, "{dir}");
-    }
+    assert_eq!(mode(&home.join("summaries")), 0o700, "summaries");
     let mut files = 0;
     let mut stack = vec![home.clone()];
     while let Some(d) = stack.pop() {
@@ -291,6 +280,6 @@ async fn everything_trovador_writes_is_private_to_the_user() {
             }
         }
     }
-    // index.db, consent.json, runs.jsonl, runs.lock, a summary, a saved reply, at least.
+    // index.db, consent.json, consent.lock, runs.jsonl, runs.lock, and a summary, at least.
     assert!(files >= 6, "{files} files");
 }

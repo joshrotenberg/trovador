@@ -550,7 +550,7 @@ pub fn resumability(e: &ArchiveEntry, limits: &Limits) -> Resumability {
         resumable,
         reason: (!resumable).then(|| {
             format!(
-                "transcript is {}KB, over the ~{}KB practical resume ceiling; to carry the work on, ask with about set to this session and the same backend, which starts a new session seeded with its summary",
+                "transcript is {}KB, over the ~{}KB practical resume ceiling; to carry the work on, summarize it and start a new session with the summary (tosi's spawn_task; see its consult reference)",
                 e.size_bytes / 1024,
                 limits.resume_limit_bytes / 1024
             )

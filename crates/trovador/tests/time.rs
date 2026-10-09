@@ -124,5 +124,8 @@ fn an_oversized_session_names_the_call_that_continues_its_work() {
     f.claude("-w", ID_A, &[claude_user("/", &"z".repeat(950_000))], 0);
     let d = sessions::show(&f.ctx(), ID_A, None).unwrap();
     let reason = d.resume_blocked_by.unwrap();
-    assert!(reason.contains("ask with about"), "{reason}");
+    assert!(
+        reason.contains("summarize it and start a new session"),
+        "{reason}"
+    );
 }

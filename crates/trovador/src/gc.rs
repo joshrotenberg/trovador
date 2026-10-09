@@ -21,7 +21,8 @@ pub struct GcReport {
     pub dry_run: bool,
     pub older_than: String,
     pub summaries: SummaryCounts,
-    /// Whole ask replies saved because they exceeded the response budget.
+    /// Whole ask replies saved under `outputs/` before `ask` moved to tosi. Nothing writes
+    /// there any more; gc removes them by age like everything else.
     pub outputs: OutputCounts,
     pub runs: RunCounts,
 }
@@ -98,7 +99,7 @@ pub fn gc(ctx: &Ctx, older_than: Duration, apply: bool) -> std::io::Result<GcRep
         }
     }
 
-    for item in std::fs::read_dir(crate::output::dir(&ctx.paths))
+    for item in std::fs::read_dir(ctx.paths.home.join("outputs"))
         .into_iter()
         .flatten()
         .flatten()

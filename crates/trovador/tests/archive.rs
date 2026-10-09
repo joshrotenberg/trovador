@@ -281,7 +281,11 @@ fn a_session_over_the_resume_ceiling_says_why_it_cannot_resume() {
     f.claude("-w", ID_A, &[claude_user("/w", &"z".repeat(950_000))], 0);
     let d = sessions::show(&f.ctx(), ID_A, None).unwrap();
     assert!(!d.row.resumable);
-    assert!(d.resume_blocked_by.unwrap().contains("ask with about"));
+    assert!(
+        d.resume_blocked_by
+            .unwrap()
+            .contains("summarize it and start a new session")
+    );
 }
 
 // --- transcripts -----------------------------------------------------------

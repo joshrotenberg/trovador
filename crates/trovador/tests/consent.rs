@@ -106,3 +106,82 @@ fn a_dry_run_reports_what_the_import_then_does() {
         Some(Decision::Approved)
     );
 }
+
+// --- moved from tests/ask.rs when ask left trovador; continuing a session is tosi's, and
+// --- tosi decides with consent::check, so the rules are tested here directly.
+
+#[test]
+fn a_session_trovador_did_not_start_needs_a_person_to_approve_it() {
+    let f = Fixture::new();
+    let allowed = || consent::check(&f.paths, Backend::Claude, ID_A);
+    let first = allowed();
+    assert!(!first.allowed);
+    assert_eq!(first.level, Level::Spawned);
+    assert!(
+        first
+            .next_steps
+            .iter()
+            .any(|s| s.contains("trovador consent approve"))
+    );
+
+    consent::set_decision(&f.paths, Backend::Claude, ID_A, Some(Decision::Approved)).unwrap();
+    assert!(!allowed().allowed, "approval needs level approved");
+    consent::set_level(&f.paths, Level::Approved).unwrap();
+    assert!(allowed().allowed);
+
+    // An explicit denial wins over every level.
+    consent::set_decision(&f.paths, Backend::Claude, ID_A, Some(Decision::Denied)).unwrap();
+    consent::set_level(&f.paths, Level::All).unwrap();
+    assert!(!allowed().allowed);
+    consent::set_decision(&f.paths, Backend::Claude, ID_A, None).unwrap();
+    assert!(allowed().allowed);
+}
+
+#[test]
+fn invalid_consent_state_denies_everything_and_is_never_overwritten() {
+    let f = Fixture::new();
+    consent::record_spawned(&f.paths, Backend::Claude, ID_A).unwrap();
+    let path = consent::path(&f.paths);
+    std::fs::write(&path, "{ not json").unwrap();
+
+    let check = consent::check(&f.paths, Backend::Claude, ID_A);
+    assert!(!check.allowed, "even a session the toolkit started");
+    assert_eq!(check.source, Source::Invalid);
+    assert!(consent::set_level(&f.paths, Level::All).is_err());
+    assert!(consent::record_spawned(&f.paths, Backend::Claude, ID_B).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_consent_file_is_private_to_the_user() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    consent::record_spawned(&f.paths, Backend::Claude, ID_A).unwrap();
+    let mode = std::fs::metadata(consent::path(&f.paths))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[test]
+fn show_reports_whether_a_session_may_be_continued() {
+    let f = Fixture::new();
+    let ctx = f.ctx();
+    f.claude("-w", ID_A, &[claude_user("/", "mine")], 0);
+    f.claude("-w", ID_B, &[claude_user("/", "theirs")], 0);
+    consent::record_spawned(&ctx.paths, Backend::Claude, ID_A).unwrap();
+    assert!(
+        trovador::sessions::show(&ctx, ID_A, None)
+            .unwrap()
+            .consent
+            .allowed
+    );
+    assert!(
+        !trovador::sessions::show(&ctx, ID_B, None)
+            .unwrap()
+            .consent
+            .allowed
+    );
+}
