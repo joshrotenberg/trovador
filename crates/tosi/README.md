@@ -10,96 +10,24 @@ delegation guidance, dogfood reviews, distribution work, and a second-round
 orchestration candidate covering workflows, debate, consensus, and pipelines.
 `NAMING.md` records the choice of Tosi and the earlier naming research.
 
-Tosi is intended for personal use on a home machine and laptop under the Bottega
-marketplace. Bottega is a separate marketplace-only repository; Tosi and trovador
-keep their own repositories and executables. The generated `tosi-local` catalog
-is a transitional standalone installation path, and this rename does not integrate
-it into Bottega. A public GitHub repository is optional and is separate from
-publishing to crates.io or a public plugin directory.
+Tosi is intended for personal use on a home machine and laptop. It is one crate in
+the bottega workspace, next to trovador, which it links for session lookup and
+consent; bottega's marketplace installs both as plugins.
 
-## Build and package
+## Build and install
 
-On each machine, install Rust 1.90 or newer, `tar`, and the provider CLIs you want
-to use. Packaging supports macOS and Linux. Authenticate those CLIs normally. The plugin
-does not bundle CLIs, credentials, or model access. You only need Claude installed
-if you run Claude tasks, and Codex installed if you run Codex tasks.
-
-From this source checkout:
+tosi lives in the [bottega](../../README.md) workspace, which also packages it as a
+plugin for Claude Code and Codex (`plugins/tosi`). Install the binary, then the
+plugin from the bottega marketplace:
 
 ```sh
-cargo test --locked --workspace
-cargo xtask package                       # both hosts
-cargo xtask package --host codex          # Codex only
-cargo xtask package --host claude         # Claude Code only
+CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install --locked --git https://github.com/joshrotenberg/bottega tosi
 ```
 
-`cargo xtask package` runs a locked release build and generates the plugin in
-`plugin/tosi/`, including its executable, manifests, skills, and local
-marketplace. It writes a single-directory archive to
-`dist/tosi-VERSION-HOST-OS-ARCH.tar.gz`. The default host is `both`.
-The selected host controls plugin packaging; every binary still supports both
-Claude and Codex workers. No host configuration changes occur.
-
-The generator reads name, version, and description from the root `Cargo.toml`
-through Cargo metadata, and copies the canonical `resources/skills/` tree.
-Changing host regenerates the entire plugin directory, so obsolete manifests
-cannot remain. Do not edit generated `plugin/`, `dist/`, or the checkout's
-`.claude-plugin/marketplace.json`. An explicit xtask keeps package generation
-out of ordinary compilation; a `build.rs` would run packaging as a build side
-effect.
-
-For packaging changes that do not require recompilation, use
-`cargo xtask package --host both --skip-build --binary /path/to/tosi`.
-These two options must be supplied together. The binary must be an existing
-native executable; you are responsible for its freshness and architecture.
-Relative binary paths resolve from your current working directory. The normal
-build uses the executable path reported by Cargo, including target-specific
-directories. The old `scripts/package.sh` is a thin alias that forwards these options.
-
-Build separately on machines with different operating systems or CPU
-architectures. A matching archive can be copied to the other machine; it contains
-the executable and plugin files, not the Rust sources.
-
-## Install locally
-
-Package for the intended host, or use the default `both`, before installation.
-The generated source checkout catalog and extracted archive each provide a local marketplace.
-Use the absolute path to the source checkout, or to the extracted `tosi`
-directory, as `PLUGIN_SOURCE`. This is a local catalog, not publication to a
-remote marketplace.
-
-Codex:
-
-```sh
-PLUGIN_SOURCE=/absolute/path/to/tosi
-codex plugin marketplace add "$PLUGIN_SOURCE"
-codex plugin add tosi@tosi-local
-```
-
-Claude Code:
-
-```sh
-PLUGIN_SOURCE=/absolute/path/to/tosi
-claude plugin marketplace add "$PLUGIN_SOURCE"
-claude plugin install tosi@tosi-local
-```
-
-Restart the host or start a new session after installation. A Claude Code session
-can also load the built plugin directly without installing it:
-
-```sh
-claude --plugin-dir /absolute/path/to/tosi/plugin/tosi
-```
-
-For an extracted archive, pass its root `tosi` directory to `--plugin-dir`.
-The Codex package has a portable `plugin.json` and `mcp.json`. The Claude package
-has `.claude-plugin/plugin.json` and `.mcp.json`. The `both` package includes both
-formats, each launching the same bundled executable directly. These instructions target local desktop/CLI hosts;
-the archive does not provide a remotely hosted service for web or mobile clients.
-
-After changes, rebuild the package and refresh/reinstall the local plugin through
-the host. Edit this source directory, not the host's cached copy. Bump only the
-root Cargo package version; manifests and catalog versions are generated together.
+On each machine, install the provider CLIs you want to use and authenticate them
+normally. The plugin does not bundle CLIs, credentials, or model access. You only need
+Claude installed if you run Claude tasks, and Codex installed if you run Codex tasks.
+Restart the host or start a new session after installing or updating.
 
 For ordinary delegation, call the installed tools through the host, using its
 tool discovery if they are deferred. If they are unavailable, check the plugin
@@ -122,9 +50,8 @@ claude plugin uninstall task-runners@task-runners-local --scope user --keep-data
 claude plugin marketplace remove task-runners-local --scope user
 ```
 
-Then use the install commands above to register the renamed checkout and install
-`tosi@tosi-local`. This avoids loading both servers and preserves Claude's plugin
-data. Refresh the host session and rediscover the tools;
+Then install `tosi@bottega` as above. Removing the old plugin first avoids loading
+both servers and preserves Claude's plugin data. Refresh the host session and rediscover the tools;
 existing host caches do not rename themselves. MCP resource URIs now start with
 `skill://tosi/`.
 
@@ -139,7 +66,7 @@ old identity and paths as evidence of the versions they reviewed.
 | Tool | Arguments | Behavior |
 | --- | --- | --- |
 | `check_environment` | Optional `backend`: `claude` or `codex`; omitted checks both | Report executable, environment, and authentication status without a model call. |
-| `spawn_task` | `task`, absolute `cwd`; optional `backend`, `model`, `effort`, `access`, `timeout_secs`, `output_schema` | Start one bounded turn and return its ID. |
+| `spawn_task` | `task`, absolute `cwd` (optional with `session_id`); optional `backend`, `model`, `effort`, `access`, `timeout_secs`, `output_schema`, `session_id`, `fork` | Start one bounded turn and return its ID. With `session_id`, continue (or with `fork`, branch) an existing Claude Code or Codex session, subject to trovador consent. |
 | `wait_tasks` | `task_ids`; optional `timeout_ms` | Return when any task finishes or the wait expires; `0` reads a snapshot. Default 30 seconds, maximum 55. |
 | `continue_task` | `task_id`, `message` | Continue the newest successful turn in the same provider conversation; return a new task ID. |
 | `cancel_task` | `task_id` | Cancel and wait up to 55 seconds for cleanup; return `cancelling` if cleanup is still running. |
@@ -376,21 +303,9 @@ work. A `cancelling` task should be checked until it reaches a terminal state.
 
 ## Package layout
 
-```text
-tosi/                    # generated --host both package
-  plugin.json
-  mcp.json
-  .claude-plugin/plugin.json
-  .claude-plugin/marketplace.json
-  .mcp.json
-  bin/tosi
-  skills/delegate/SKILL.md
-  skills/delegate/references/
-  README.md
-```
-
-Plugin formats: [Agent Plugins packaging](https://developers.openai.com/plugins/build/plugins)
-and [Claude Code plugin reference](https://code.claude.com/docs/en/plugins-reference).
+The plugin is `plugins/tosi` in the bottega repository: both hosts' manifests, the
+`delegate` skill copied from `resources/skills/` by `scripts/sync-skills.sh`, and a
+`bin/tosi` shim that runs the installed binary.
 
 ## Verification
 
@@ -409,8 +324,6 @@ python3 scripts/smoke.py
 The default tests use fake provider executables and check parallel execution,
 continuation ordering, failures, cancellation, timeouts, process cleanup, and shutdown during
 an outstanding wait. Resource tests read the embedded instructions through MCP.
-The xtask tests cover host-specific manifests, switching hosts without stale
-files, nested skill references, version consistency, and archive contents.
 The Python 3 smoke script exercises the actual stdio MCP protocol.
 
 Rust live integration tests are disabled by default. Enable them explicitly:

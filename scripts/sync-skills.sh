@@ -1,15 +1,14 @@
 #!/bin/sh
-# Copies skills from each tool's own repository into its plugin, so a tool that also
-# serves its skills as MCP resources has one source. A plugin whose tool has no
-# resources/skills directory keeps the skills written here.
+# Copies skills from each tool's crate into its plugin, so a tool that also serves its
+# skills as MCP resources has one source. A plugin whose crate has no resources/skills
+# directory keeps the skills written in the plugin.
 #
 #   scripts/sync-skills.sh            every plugin
 #   scripts/sync-skills.sh tosi       one plugin
 #
-# Tool checkouts are found under $TOOLS_ROOT (default ~/Code/github.com/joshrotenberg).
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-tools=${TOOLS_ROOT:-$HOME/Code/github.com/joshrotenberg}
+tools="$root/crates"
 
 plugins=${*:-$(ls "$root/plugins")}
 for name in $plugins; do

@@ -10,5 +10,5 @@ done
 if command -v trovador >/dev/null 2>&1; then
   exec trovador "$@"
 fi
-echo "bottega: trovador is not installed; run: cargo install --locked --git https://github.com/joshrotenberg/trovador" >&2
+echo "bottega: trovador is not installed; run: cargo install --locked --git https://github.com/joshrotenberg/bottega trovador" >&2
 exit 127
