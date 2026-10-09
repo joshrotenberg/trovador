@@ -3,9 +3,8 @@
   "mcpServers": {
     "tosi": {
       "type": "stdio",
-      "command": "${PLUGIN_ROOT}/bin/tosi",
-      "args": [],
-      "cwd": "${PLUGIN_ROOT}"
+      "command": "./bin/tosi",
+      "args": []
     }
   }
 }

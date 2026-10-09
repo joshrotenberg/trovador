@@ -13,6 +13,8 @@ installed with `cargo install`.
 - Every plugin directory has both hosts' files: `.claude-plugin/plugin.json` and
   `.mcp.json` for Claude Code, `plugin.json` and `mcp.json` (Agent Plugins 1.0) for
   Codex. A change to one host's manifest needs the matching change to the other.
+- In Codex `mcp.json`, use a relative `./bin/<tool>` command. With `${PLUGIN_ROOT}` in
+  `command`, Codex installs the plugin but never starts the server.
 - Keep hooks out of `hooks/hooks.json`: Codex reads that path too. Claude hooks go in a
   file the Claude manifest names; Codex hooks go in `extensions["com.openai"].hooks`.
 - Skills a tool serves itself (its `resources/skills/`) are copied here with

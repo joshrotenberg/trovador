@@ -26,15 +26,23 @@ Each plugin directory carries both hosts' files side by side:
 | | Claude Code | Codex |
 |---|---|---|
 | Manifest | `.claude-plugin/plugin.json` | `plugin.json` (Agent Plugins 1.0) |
-| MCP servers | `.mcp.json`, paths from `${CLAUDE_PLUGIN_ROOT}` | `mcp.json`, paths from `${PLUGIN_ROOT}` |
+| MCP servers | `.mcp.json`, paths from `${CLAUDE_PLUGIN_ROOT}` | `mcp.json`, a `./bin/<tool>` command relative to the plugin |
 | Hooks | `hooks/claude.json`, named in the manifest | `extensions["com.openai"].hooks` in `plugin.json` |
 | Skills | `skills/<name>/SKILL.md` | the same files |
 
 Hooks stay out of the default `hooks/hooks.json` path because Codex also reads that
 file; a shared file would run the Claude hook in Codex sessions.
 
-Plugins carry no `version`. Claude Code then uses the git commit, so every commit is
-an update.
+Plugins carry no `version`. Claude Code then uses the git commit and reads the plugin
+straight from this checkout, so every commit is an update. Codex copies each plugin into
+`~/.codex/plugins/cache/` as version 1.0.0; adding it again copies the current files.
+
+Codex accepts `${PLUGIN_ROOT}` in an MCP server's `command` without error but does not
+start the server; a relative `./bin/<tool>` command works.
+
+Codex runs a plugin's hooks only after you trust them: open `codex`, run `/hooks`, and
+trust the plugin's hooks. Until then trovador's SessionStart hook is skipped and search
+falls back to leaving out every recently written session.
 
 ## Set up a machine
 
