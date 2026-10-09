@@ -3,9 +3,11 @@ Environment:
   TOSI_MAX_CONCURRENCY  1..32 (default 4)
   TOSI_CLAUDE_BIN       Claude CLI path
   TOSI_CODEX_BIN        Codex CLI path
+  TOSI_NO_REDACT        1 returns worker results without redacting secrets
   RUST_LOG              stderr log filter
 
-Legacy TASK_RUNNERS_* configuration names remain fallbacks; TOSI_* takes precedence.
+Legacy TASK_RUNNERS_* configuration names remain fallbacks, except for TOSI_NO_REDACT;
+TOSI_* takes precedence.
 
 Tools: check_environment, spawn_task, wait_tasks, continue_task, cancel_task
 Diagnostics: tosi doctor [--backend claude|codex]

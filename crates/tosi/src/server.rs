@@ -81,7 +81,7 @@ pub fn router(manager: Manager, runner: Arc<CliRunner>) -> McpRouter {
         .tool(check)
 }
 
-fn skill_resources() -> [Resource; 5] {
+fn skill_resources() -> [Resource; 6] {
     [
         ResourceBuilder::new(DELEGATION_SKILL_URI)
             .name("delegate")
@@ -108,6 +108,11 @@ fn skill_resources() -> [Resource; 5] {
             .description("Read when selecting backend, model, or effort: user preferences, provider support, omitted settings, continuation, and requested versus reported selection. Also included as a reference in the plugin package.")
             .mime_type("text/markdown")
             .text(include_str!("../resources/skills/delegate/references/model-effort.md")),
+        ResourceBuilder::new("skill://tosi/delegate/references/consult.md")
+            .name("consult")
+            .description("Read when asking a fresh worker about an earlier Claude Code or Codex session: its trovador summary, the brief, backend and cwd. Also included as a reference in the plugin package.")
+            .mime_type("text/markdown")
+            .text(include_str!("../resources/skills/delegate/references/consult.md")),
     ]
 }
 

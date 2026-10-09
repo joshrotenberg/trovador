@@ -188,6 +188,7 @@ pub struct Manager {
     default_backend: Backend,
     max_concurrency: usize,
     sessions: Option<Sessions>,
+    redact: bool,
 }
 
 impl Manager {
@@ -200,7 +201,17 @@ impl Manager {
             default_backend,
             max_concurrency,
             sessions: None,
+            redact: true,
         }
+    }
+
+    /// Whether secrets in worker results and errors are replaced with `[redacted:<kind>]`.
+    /// On by default. A worker that read a repository can quote its keys and tokens, and the
+    /// text goes straight into the calling agent's context. Set only from the server's
+    /// environment, never from a tool argument.
+    pub fn with_redaction(mut self, redact: bool) -> Self {
+        self.redact = redact;
+        self
     }
 
     /// Enables session_id on spawn_task, and records the sessions this server starts.
@@ -447,14 +458,11 @@ impl Manager {
         let manager = self.clone();
         // The monitor owns the execution handle. Dropping an MCP request must not abort provider cleanup.
         tokio::spawn(async move {
-            let schema = spec.output_schema.clone();
             let run = tokio::spawn(async move { runner.run(spec, cancel).await });
             let outcome = match run.await {
                 Ok(outcome) => outcome,
                 Err(e) => Err(format!("worker panicked or stopped: {e}")),
             };
-            let outcome =
-                outcome.and_then(|output| crate::output::validate_result(schema.as_ref(), output));
             manager.finish(&task_id, outcome).await;
         });
         self.changed.send_modify(|v| *v = v.wrapping_add(1));
@@ -484,21 +492,52 @@ impl Manager {
                     Ok(output)
                 }
             });
+            // Redaction runs before validation, so the structured result a caller receives is the
+            // one checked against output_schema (found in review: redacting after validation
+            // could complete with a result that no longer matched it). The session id is kept
+            // either way, so a turn that fails validation can still be resumed by session_id.
+            let mut session_id = None;
+            let outcome = outcome.and_then(|output| {
+                session_id = output.session_id.clone();
+                let original = output.structured_result.clone();
+                let (output, changed) = self.redact_output(output);
+                let schema = entry.spec.output_schema.as_ref();
+                crate::output::validate_result(schema, output).map_err(|e| {
+                    let passed_before = changed
+                        && crate::output::validate_result(
+                            schema,
+                            RunOutput {
+                                text: String::new(),
+                                structured_result: original,
+                                session_id: None,
+                                usage: serde_json::Value::Null,
+                            },
+                        )
+                        .is_ok();
+                    if passed_before {
+                        format!("structured_result held secrets, and with them redacted it no longer matches output_schema: {e}")
+                    } else {
+                        e
+                    }
+                })
+            });
+            // A session this server created (new or forked) is recorded as started by the
+            // toolkit, so it can be continued after a restart and search includes it.
+            if (entry.spec.session_id.is_none() || entry.spec.fork)
+                && let (Some(sessions), Some(id)) = (&self.sessions, &session_id)
+                && let Err(e) = trovador::consent::record_spawned(
+                    &sessions.paths,
+                    to_trovador(entry.spec.backend),
+                    id,
+                )
+            {
+                tracing::warn!("recording {id} as started by tosi failed: {e}");
+            }
             match outcome {
                 Ok(output) => {
-                    // A session this server created (new or forked) is recorded as started by
-                    // the toolkit, so it can be continued after a restart and search includes it.
-                    if (entry.spec.session_id.is_none() || entry.spec.fork)
-                        && let (Some(sessions), Some(id)) = (&self.sessions, &output.session_id)
-                        && let Err(e) = trovador::consent::record_spawned(
-                            &sessions.paths,
-                            to_trovador(entry.spec.backend),
-                            id,
-                        )
-                    {
-                        tracing::warn!("recording {id} as started by tosi failed: {e}");
-                    }
                     entry.snapshot.status = Status::Completed;
+                    // Already redacted whole by redact_output, before this cut, so a cut cannot
+                    // split a secret into pieces no rule matches (trovador#43).
                     let (text, truncated) = bounded_text(&output.text);
                     entry.snapshot.result = Some(text);
                     entry.snapshot.structured_result = output.structured_result;
@@ -508,7 +547,8 @@ impl Manager {
                 }
                 Err(error) => {
                     entry.snapshot.status = Status::Failed;
-                    entry.snapshot.error = Some(bounded_text(&error).0);
+                    entry.snapshot.provider_session_id = session_id;
+                    entry.snapshot.error = Some(bounded_text(&self.redacted(&error)).0);
                 }
             }
         }
@@ -629,6 +669,31 @@ fn validate_prompt(prompt: &str) -> Result<(), String> {
         return Err("task/message exceeds 128000 bytes".into());
     }
     Ok(())
+}
+
+impl Manager {
+    /// The output with secrets redacted, and whether structured_result changed.
+    fn redact_output(&self, mut output: RunOutput) -> (RunOutput, bool) {
+        if !self.redact {
+            return (output, false);
+        }
+        output.text = trovador::redact::redact_str(&output.text).into_owned();
+        let mut changed = false;
+        if let Some(value) = output.structured_result.as_mut() {
+            let before = value.clone();
+            trovador::redact::redact_value(value);
+            changed = *value != before;
+        }
+        (output, changed)
+    }
+
+    fn redacted<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
+        if self.redact {
+            trovador::redact::redact_str(text)
+        } else {
+            std::borrow::Cow::Borrowed(text)
+        }
+    }
 }
 
 fn bounded_text(text: &str) -> (String, bool) {

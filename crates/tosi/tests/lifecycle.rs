@@ -472,3 +472,100 @@ async fn missing_mismatched_or_oversized_structured_results_fail_without_truncat
         );
     }
 }
+
+#[tokio::test]
+async fn secrets_in_worker_results_are_redacted_even_at_the_truncation_boundary() {
+    const KEY: &str = "sk-ant-api03-AAAAAAAAAAbbbbbbbbbbCCCCCCCCCCdddddddddd";
+    // The fake echoes its task, so the task is the worker's reply. The key straddles the
+    // 64000-character limit, where cutting first would leave an unredacted fragment.
+    let long = format!("{}{KEY} tail", "x".repeat(64_000 - 20));
+    for (redact, task) in [
+        (true, format!("use {KEY} now")),
+        (true, long),
+        (false, format!("use {KEY} now")),
+    ] {
+        let manager = Manager::new(Arc::new(FakeRunner::default()), Backend::Claude, 1)
+            .with_redaction(redact);
+        let t = manager.spawn_task(request(&task)).await.unwrap();
+        let done = wait(&manager, &t.task_id).await;
+        assert_eq!(done.status, Status::Completed);
+        let result = done.result.unwrap();
+        if redact {
+            for piece in ["AAAA", "bbbb", "CCCC", "dddd", "api03"] {
+                assert!(
+                    !result.contains(piece),
+                    "{piece} in {}",
+                    &result[result.len().saturating_sub(80)..]
+                );
+            }
+        } else {
+            assert!(result.contains(KEY));
+        }
+    }
+}
+
+/// Returns a fixed structured result, as a worker answering with output_schema would.
+struct FixedStructured(Value);
+
+#[async_trait]
+impl Runner for FixedStructured {
+    async fn run(&self, _spec: RunSpec, _cancel: CancellationToken) -> Result<RunOutput, String> {
+        Ok(RunOutput {
+            text: self.0.to_string(),
+            structured_result: Some(self.0.clone()),
+            session_id: Some("provider-session".into()),
+            usage: json!({}),
+        })
+    }
+}
+
+#[tokio::test]
+async fn structured_results_are_redacted_by_field_name_and_revalidated() {
+    // Review of result redaction: {"DB_PASSWORD": "..."} passed through, and redacting after
+    // validation could return a result that no longer matched output_schema.
+    let reply = json!({"env": {"DB_PASSWORD": "hunter2hunter2", "PORT": "5432"}});
+    let manager = Manager::new(Arc::new(FixedStructured(reply.clone())), Backend::Claude, 1);
+    let mut req = request("list the settings");
+    req.output_schema = Some(json!({"type": "object", "properties": {"env": {"type": "object"}}}));
+    let t = manager.spawn_task(req).await.unwrap();
+    let done = wait(&manager, &t.task_id).await;
+    assert_eq!(done.status, Status::Completed);
+    let structured = done.structured_result.unwrap();
+    assert_eq!(structured["env"]["DB_PASSWORD"], "[redacted:assignment]");
+    assert_eq!(structured["env"]["PORT"], "5432");
+    assert!(!done.result.unwrap().contains("hunter2"));
+
+    // A schema that only the secret satisfies: the task fails and says why.
+    let manager = Manager::new(Arc::new(FixedStructured(reply)), Backend::Claude, 1);
+    let mut req = request("list the settings");
+    req.output_schema = Some(
+        json!({"type": "object", "properties": {"env": {"type": "object",
+        "properties": {"DB_PASSWORD": {"type": "string", "pattern": "^hunter"}}}}}),
+    );
+    let t = manager.spawn_task(req).await.unwrap();
+    let done = wait(&manager, &t.task_id).await;
+    assert_eq!(done.status, Status::Failed);
+    let error = done.error.unwrap();
+    assert!(error.contains("with them redacted"), "{error}");
+    assert!(!error.contains("hunter2"), "{error}");
+    // The session survives a failed validation, so it can be resumed by session_id.
+    assert_eq!(
+        done.provider_session_id.as_deref(),
+        Some("provider-session")
+    );
+
+    // A result that fails its schema anyway is not blamed on redaction.
+    let manager = Manager::new(
+        Arc::new(FixedStructured(
+            json!({"env": {"DB_PASSWORD": "hunter2hunter2"}}),
+        )),
+        Backend::Claude,
+        1,
+    );
+    let mut req = request("list the settings");
+    req.output_schema = Some(json!({"type": "object", "required": ["answer"]}));
+    let t = manager.spawn_task(req).await.unwrap();
+    let error = wait(&manager, &t.task_id).await.error.unwrap();
+    assert!(!error.contains("with them redacted"), "{error}");
+    assert!(error.contains("does not match output_schema"), "{error}");
+}

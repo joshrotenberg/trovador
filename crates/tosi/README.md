@@ -192,9 +192,12 @@ it does not load a login shell, aliases, or shell initialization files.
 | `TOSI_MAX_CONCURRENCY` | `4` | Maximum active tasks in this server process, from 1 to 32. Starts at capacity are rejected, not queued. |
 | `TOSI_CLAUDE_BIN` | `claude` on `PATH` | Claude executable path. |
 | `TOSI_CODEX_BIN` | `codex` on `PATH` | Codex executable path. |
+| `TOSI_NO_REDACT` | unset | `1` returns worker results, structured results, and errors without replacing secrets (API keys, tokens, private keys, `NAME=secret` assignments) with `[redacted:<kind>]`. No tool argument can turn redaction off. |
 
 Legacy `TASK_RUNNERS_*` counterparts are accepted when the corresponding `TOSI_*`
 variable is absent. Prefer `TOSI_*`; the new name takes precedence when both exist.
+`TOSI_NO_REDACT` has no legacy counterpart: a second, undocumented name for a switch
+that turns off redaction is one nobody auditing the environment would look for.
 
 If executable discovery differs between hosts, configure absolute
 `TOSI_CLAUDE_BIN` and `TOSI_CODEX_BIN` paths. Keep `HOME`,

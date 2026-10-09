@@ -31,7 +31,7 @@ async fn standalone_server_lists_and_reads_the_canonical_plugin_skill() {
     assert!(instructions.contains("resources/read"));
 
     let resources = client.list_resources().await;
-    assert_eq!(resources.len(), 5);
+    assert_eq!(resources.len(), 6);
     let canonical_skill = include_str!("../resources/skills/delegate/SKILL.md");
     let expected = [
         (
@@ -63,6 +63,12 @@ async fn standalone_server_lists_and_reads_the_canonical_plugin_skill() {
             "skill://tosi/delegate/references/model-effort.md",
             include_str!("../resources/skills/delegate/references/model-effort.md"),
             Some("references/model-effort.md"),
+        ),
+        (
+            "consult",
+            "skill://tosi/delegate/references/consult.md",
+            include_str!("../resources/skills/delegate/references/consult.md"),
+            Some("references/consult.md"),
         ),
     ];
     for (name, uri, canonical_content, local_reference) in expected {

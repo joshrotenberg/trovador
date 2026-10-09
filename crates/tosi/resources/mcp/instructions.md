@@ -4,8 +4,9 @@ are unavailable, diagnose the connection or refresh the host session; do not
 launch a shell/Python stdio bridge for ordinary delegation.
 Read skill://tosi/delegate/SKILL.md using resources/read for general
 guidance, then retrieve only the relevant linked pattern: parallel tasks,
-implementation and review, follow-up and cancellation, or model and effort.
-resources/list discovers all five Markdown resources; they contain the same canonical skill and references
+implementation and review, follow-up and cancellation, model and effort, or
+consulting an earlier session.
+resources/list discovers all six Markdown resources; they contain the same canonical skill and references
 included in the plugin package.
 
 check_environment checks executable, environment, and authentication status for

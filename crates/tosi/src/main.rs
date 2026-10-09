@@ -98,7 +98,10 @@ async fn run() -> Result<(), tower_mcp::BoxError> {
     }
     let runner = Arc::new(CliRunner::default());
     let manager = Manager::new(runner.clone(), default_backend, max_concurrency)
-        .with_sessions(tosi::manager::Sessions::from_env());
+        .with_sessions(tosi::manager::Sessions::from_env())
+        // Only the new name: a legacy TASK_RUNNERS_ alias for a security control would be a
+        // switch nobody auditing the environment looks for (found in review).
+        .with_redaction(std::env::var("TOSI_NO_REDACT").as_deref() != Ok("1"));
     let mut transport = StdioTransport::new(router(manager.clone(), runner));
     let handle = transport.handle();
     let run = transport.run();

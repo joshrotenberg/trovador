@@ -79,3 +79,6 @@ with `resources/read` at the corresponding URI:
 - [Model and effort](references/model-effort.md): user preferences, provider
   support, omitted settings, and requested versus reported selection.
   `skill://tosi/delegate/references/model-effort.md`
+- [Consult an earlier session](references/consult.md): a fresh worker's view on a
+  past session, from its trovador summary.
+  `skill://tosi/delegate/references/consult.md`
