@@ -71,54 +71,95 @@ impl ArchiveEntry {
 /// deeper under `<session>/subagents/` and are deliberately not listed as sessions: they
 /// cannot be resumed on their own.
 pub fn scan_claude(root: &Path) -> Vec<ArchiveEntry> {
-    let mut out = Vec::new();
-    let Ok(projects) = fs::read_dir(root) else {
-        return out;
-    };
-    for project in projects.flatten() {
-        let Ok(files) = fs::read_dir(project.path()) else {
-            continue;
-        };
-        for f in files.flatten() {
-            let path = f.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            let Some(id) = name.strip_suffix(".jsonl") else {
-                continue;
-            };
-            if let Some(e) = entry(Backend::Claude, id, &path, false) {
-                out.push(e);
-            }
-        }
-    }
-    out
+    scan_root(root, Backend::Claude, false, &mut Vec::new())
 }
 
-/// Codex nests by date, `<root>/YYYY/MM/DD/rollout-<timestamp>-<uuid>.jsonl`, and moves an
-/// archived thread to a flat `archived_sessions` directory under the same name. The id is
-/// the trailing UUID, which is what `codex resume` accepts.
+/// Codex nests active sessions by date and keeps archived sessions in a flat directory.
 pub fn scan_codex(root: &Path, archived: bool) -> Vec<ArchiveEntry> {
+    scan_root(root, Backend::Codex, archived, &mut Vec::new())
+}
+
+pub(crate) struct ScanFailure {
+    pub backend: Backend,
+    pub path: PathBuf,
+    pub kind: std::io::ErrorKind,
+}
+
+fn scan_root(
+    root: &Path,
+    backend: Backend,
+    archived: bool,
+    failures: &mut Vec<ScanFailure>,
+) -> Vec<ArchiveEntry> {
     let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(items) = fs::read_dir(&dir) else {
-            continue;
+    let mut stack = vec![(root.to_path_buf(), 0)];
+    while let Some((dir, depth)) = stack.pop() {
+        let items = match fs::read_dir(&dir) {
+            Ok(items) => items,
+            Err(error) => {
+                failures.push(ScanFailure {
+                    backend,
+                    path: dir,
+                    kind: error.kind(),
+                });
+                continue;
+            }
         };
-        for item in items.flatten() {
+        for item in items {
+            let item = match item {
+                Ok(item) => item,
+                Err(error) => {
+                    failures.push(ScanFailure {
+                        backend,
+                        path: dir.clone(),
+                        kind: error.kind(),
+                    });
+                    continue;
+                }
+            };
             let path = item.path();
-            let Ok(ft) = item.file_type() else { continue };
-            if ft.is_dir() {
-                stack.push(path);
+            let ft = match item.file_type() {
+                Ok(ft) => ft,
+                Err(error) => {
+                    failures.push(ScanFailure {
+                        backend,
+                        path,
+                        kind: error.kind(),
+                    });
+                    continue;
+                }
+            };
+            // Issue #8: a dangling project link is not an archive directory and must
+            // not prevent cleanup of sessions that were actually deleted.
+            if backend == Backend::Claude && depth == 0 && ft.is_symlink() && !path.is_dir() {
+                continue;
+            }
+            if (backend == Backend::Claude && depth == 0 && (ft.is_dir() || ft.is_symlink()))
+                || (backend == Backend::Codex && ft.is_dir())
+            {
+                stack.push((path, depth + 1));
+                continue;
+            }
+            if backend == Backend::Claude && depth != 1 {
                 continue;
             }
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if let Some(id) = trailing_uuid(name)
-                && let Some(e) = entry(Backend::Codex, id, &path, archived)
-            {
-                out.push(e);
+            let id = match backend {
+                Backend::Claude => name.strip_suffix(".jsonl"),
+                Backend::Codex => trailing_uuid(name),
+            };
+            if let Some(id) = id {
+                match entry(backend, id, &path, archived, failures) {
+                    Ok(Some(e)) => out.push(e),
+                    Ok(None) => {}
+                    Err(error) => failures.push(ScanFailure {
+                        backend,
+                        path,
+                        kind: error.kind(),
+                    }),
+                }
             }
         }
     }
@@ -135,19 +176,33 @@ fn trailing_uuid(name: &str) -> Option<&str> {
     shape_ok.then_some(id)
 }
 
-fn entry(backend: Backend, id: &str, path: &Path, archived: bool) -> Option<ArchiveEntry> {
-    let md = fs::metadata(path).ok()?;
+fn entry(
+    backend: Backend,
+    id: &str,
+    path: &Path,
+    archived: bool,
+    failures: &mut Vec<ScanFailure>,
+) -> std::io::Result<Option<ArchiveEntry>> {
+    let md = fs::metadata(path)?;
     if !md.is_file() {
-        return None;
+        return Ok(None);
     }
-    Some(ArchiveEntry {
+    let mtime = md.modified().unwrap_or_else(|error| {
+        failures.push(ScanFailure {
+            backend,
+            path: path.to_path_buf(),
+            kind: error.kind(),
+        });
+        SystemTime::UNIX_EPOCH
+    });
+    Ok(Some(ArchiveEntry {
         backend,
         session_id: id.to_string(),
         file: path.to_path_buf(),
         size_bytes: md.len(),
-        mtime: md.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+        mtime,
         archived,
-    })
+    }))
 }
 
 /// Every session in both archives, newest first, one file per session.
@@ -157,13 +212,37 @@ fn entry(backend: Backend, id: &str, path: &Path, archived: bool) -> Option<Arch
 /// all describe the same file; when only the index chose, a list showed the session twice,
 /// every prefix was ambiguous, and search returned a row mixing the two files (#28).
 pub fn scan_all(paths: &Paths) -> Vec<ArchiveEntry> {
-    let mut all = scan_claude(&paths.claude_archive);
-    all.extend(scan_codex(&paths.codex_archive, false));
-    all.extend(scan_codex(&paths.codex_archived, true));
+    scan_all_with_failures(paths).0
+}
+
+// Issue #8: GC needs failures from the same traversal as entries before deleting paid summaries.
+pub(crate) fn scan_all_with_failures(paths: &Paths) -> (Vec<ArchiveEntry>, Vec<ScanFailure>) {
+    let mut failures = Vec::new();
+    let mut all = scan_root(&paths.claude_archive, Backend::Claude, false, &mut failures);
+    all.extend(scan_root(
+        &paths.codex_archive,
+        Backend::Codex,
+        false,
+        &mut failures,
+    ));
+    all.extend(scan_root(
+        &paths.codex_archived,
+        Backend::Codex,
+        true,
+        &mut failures,
+    ));
+    // Issue #8: archived_sessions is optional, but only an accessible active root
+    // lets GC distinguish a never-created archive from unavailable Codex storage.
+    let active_unavailable = failures.iter().any(|f| f.path == paths.codex_archive);
+    failures.retain(|f| {
+        active_unavailable
+            || f.path != paths.codex_archived
+            || f.kind != std::io::ErrorKind::NotFound
+    });
     all.sort_by(|a, b| b.mtime.cmp(&a.mtime).then(a.session_id.cmp(&b.session_id)));
     let mut seen = std::collections::HashSet::new();
     all.retain(|e| seen.insert((e.backend, e.session_id.clone())));
-    all
+    (all, failures)
 }
 
 // --- lookup ----------------------------------------------------------------

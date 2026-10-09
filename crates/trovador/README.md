@@ -121,7 +121,19 @@ dates at midnight UTC, and durations back from now. Times without a zone use UTC
 
 `gc --older-than` defaults to `90d`. Durations reaching before 1970-01-01 UTC
 use that date as the age cutoff. Stale summaries and summaries for deleted sessions
-are still eligible for removal regardless of age.
+are still eligible for removal regardless of age. If scanning a root, subdirectory, directory entry,
+file metadata, or modification time fails, GC keeps summaries for sessions missing
+from that backend's scan and lists failed paths in `unavailable_roots`. Summaries for
+found sessions remain eligible for age and staleness cleanup. Claude project symlinks
+that do not resolve to directories are skipped.
+If a backend has cached summaries but its scan finds no sessions, GC also keeps them
+and reports the backend in `empty_backends`, since an empty mount cannot prove deletion.
+A missing Codex `archived_sessions` root is treated as empty when the active root can
+be read. Other errors remain failures. Either Codex root's failures protect summaries
+for missing Codex sessions because summaries do not record source paths.
+If `unavailable_roots` or `empty_backends` reports a backend whose missing sessions
+you really removed, delete the corresponding files under `<home>/summaries` by hand
+to reclaim them (`<home>` defaults to `~/.trovador`).
 
 Every command prints one JSON document. The MCP `sessions` tool takes the same inputs as an
 `action` of `list`, `show`, `transcript`, or `output`, and the `search` tool takes the same inputs as
