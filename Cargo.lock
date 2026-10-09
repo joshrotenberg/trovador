@@ -1400,6 +1400,7 @@ dependencies = [
  "codex-wrapper",
  "futures",
  "humantime",
+ "memchr",
  "regex",
  "rusqlite",
  "schemars",

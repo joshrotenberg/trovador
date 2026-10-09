@@ -22,6 +22,8 @@ use crate::paths::Paths;
 use crate::transcript::{CodexMode, PROJECTION_VERSION, Projection, ProjectionState, RecordKind};
 
 const SCHEMA_VERSION: i64 = 3;
+// Issue #36: title state needs one backfill, but projected text and record indexes agree.
+const TITLE_METADATA_VERSION: i64 = 1;
 const TOKENIZER: &str = "unicode61 remove_diacritics 2";
 
 /// Origins whose text is not indexed. A Codex `guardian` session is an approval reviewer
@@ -239,6 +241,27 @@ impl Index {
             })
             .optional()?;
         if version == Some(SCHEMA_VERSION) {
+            // Issue #36: an additive migration preserves FTS records during title backfill.
+            // Serialize the column check with the upgrade because CLI and MCP can open together.
+            let tx = rusqlite::Transaction::new_unchecked(
+                &self.conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            if tx
+                .prepare("SELECT title_metadata_version FROM sessions")
+                .is_err()
+            {
+                tx.execute_batch(
+                    "ALTER TABLE sessions ADD COLUMN title_metadata_version INTEGER NOT NULL DEFAULT 0;
+                     ALTER TABLE sessions ADD COLUMN custom_title TEXT;",
+                )?;
+            }
+            if tx.prepare("SELECT title_offset FROM sessions").is_err() {
+                tx.execute_batch(
+                    "ALTER TABLE sessions ADD COLUMN title_offset INTEGER NOT NULL DEFAULT -1;",
+                )?;
+            }
+            tx.commit()?;
             return Ok(());
         }
         // Everything here is derived from the archives, so an unknown schema is rebuilt
@@ -268,6 +291,9 @@ impl Index {
                  run_count INTEGER,
                  last_kind TEXT,
                  last_hash INTEGER,
+                 title_metadata_version INTEGER NOT NULL DEFAULT 0,
+                 custom_title TEXT,
+                 title_offset INTEGER NOT NULL DEFAULT -1,
                  UNIQUE (backend, session_id)
              );
              CREATE VIRTUAL TABLE records USING fts5(
@@ -290,6 +316,55 @@ impl Index {
         Ok(())
     }
 
+    pub(crate) fn read_meta_entry(&self, e: &ArchiveEntry, limits: &Limits) -> Option<SessionMeta> {
+        let stored = self
+            .conn
+            .query_row(
+                "SELECT file, size, mtime_ns, meta, offset, head_hash, tail_hash, custom_title
+             FROM sessions WHERE backend = ?1 AND session_id = ?2 AND title_metadata_version = ?3 AND title_offset = offset",
+                params![e.backend.as_str(), e.session_id, TITLE_METADATA_VERSION],
+                |r| {
+                    Ok(IndexedTitle {
+                        file: r.get(0)?,
+                        size: r.get::<_, i64>(1)? as u64,
+                        mtime: r.get(2)?,
+                        json: r.get(3)?,
+                        offset: r.get::<_, i64>(4)? as u64,
+                        hashes: (r.get(5)?, r.get(6)?),
+                        custom_title: r.get(7)?,
+                    })
+                },
+            )
+            .ok()?;
+        if std::path::Path::new(&stored.file) != e.file {
+            return None;
+        }
+        let mut meta = if stored.size == e.size_bytes && stored.mtime == mtime_ns(e.mtime) {
+            serde_json::from_str(&stored.json).ok()?
+        } else {
+            // Issue #36: an indexed append needs only its new bytes, even before refresh.
+            if stored.size >= e.size_bytes
+                || region_hashes(&e.file, stored.offset) != Some(stored.hashes)
+            {
+                return None;
+            }
+            archive::read_meta_windows(e, limits)
+        };
+        if e.backend == Backend::Claude {
+            let mut title = stored.custom_title;
+            // Issue #36: pending appends and final records without a newline share the
+            // display budget; their titles must not change the persisted checkpoint.
+            if stored.offset < e.size_bytes
+                && e.size_bytes - stored.offset <= limits.title_scan_max_bytes as u64
+            {
+                archive::scan_custom_titles(&e.file, stored.offset, e.size_bytes, &mut title)
+                    .ok()?;
+            }
+            archive::apply_custom_title(&mut meta, title);
+        }
+        Some(meta)
+    }
+
     pub fn path(&self) -> &std::path::Path {
         &self.path
     }
@@ -300,11 +375,11 @@ impl Index {
         let mut out = HashMap::new();
         let Ok(mut stmt) = self
             .conn
-            .prepare("SELECT backend, session_id, size, mtime_ns, meta FROM sessions")
+            .prepare("SELECT backend, session_id, size, mtime_ns, meta FROM sessions WHERE title_metadata_version = ?1 AND title_offset = offset AND (backend != 'claude' OR offset = size)")
         else {
             return out;
         };
-        let rows = stmt.query_map([], |r| {
+        let rows = stmt.query_map([TITLE_METADATA_VERSION], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
@@ -376,6 +451,8 @@ pub struct RefreshReport {
     pub appended: usize,
     /// Files indexed from the start: new, rewritten, moved, or from an older projection.
     pub reindexed: usize,
+    /// Files whose title state was backfilled without rebuilding existing text (issue #36).
+    pub metadata_refreshed: usize,
     /// Files the budget ran out before reaching. The index is stale for these.
     pub pending: usize,
     /// Index rows dropped because their file is gone.
@@ -390,6 +467,16 @@ pub struct RefreshReport {
     pub ms: u64,
 }
 
+struct IndexedTitle {
+    file: String,
+    size: u64,
+    mtime: i64,
+    json: String,
+    offset: u64,
+    hashes: (i64, i64),
+    custom_title: Option<String>,
+}
+
 struct StoredRow {
     id: i64,
     hashes: (i64, i64),
@@ -398,12 +485,15 @@ struct StoredRow {
     mtime_ns: i64,
     text_indexed: bool,
     projection_version: i64,
+    title_metadata_version: i64,
+    title_offset: i64,
     state: ProjectionState,
 }
 
 enum Work {
     Full,
     Resume(i64, ProjectionState),
+    Metadata(i64, ProjectionState),
 }
 
 struct Job {
@@ -415,6 +505,7 @@ struct Done {
     entry: ArchiveEntry,
     meta: SessionMeta,
     text: bool,
+    metadata_refresh: bool,
     /// Where this pass started, to detect another process indexing the same file meanwhile.
     resumed_from: Option<(i64, u64)>,
     records: Vec<(usize, RecordKind, Option<String>, String)>,
@@ -444,16 +535,31 @@ fn kind_str(k: RecordKind) -> &'static str {
 }
 
 fn project(job: Job, limits: &Limits) -> Option<Done> {
-    let meta = archive::read_meta(&job.entry, limits);
+    // Issue #36: projection already reads new lines, so metadata must not scan them again.
+    let mut meta = archive::read_meta_windows(&job.entry, limits);
     let text = text_eligible(&meta);
+    let metadata_refresh = matches!(job.work, Work::Metadata(..));
     let (resume, resumed_from) = match job.work {
-        Work::Resume(id, s) => {
+        Work::Resume(id, s) | Work::Metadata(id, s) => {
             let from = (id, s.offset);
             (Some(s), Some(from))
         }
         Work::Full => (None, None),
     };
     let mut records = Vec::new();
+    let resume = if metadata_refresh {
+        let mut state = resume?;
+        // Issue #36: an old binary can rewrite a file while retaining its previous title.
+        // Backfill from an empty title so a rewrite without custom-title clears that name.
+        state.custom_title = None;
+        if job.entry.backend == Backend::Claude {
+            archive::scan_custom_titles(&job.entry.file, 0, state.offset, &mut state.custom_title)
+                .ok()?;
+        }
+        Some(state)
+    } else {
+        resume
+    };
     let state = if text {
         let mut proj = Projection::for_index(&job.entry, limits, resume).ok()?;
         for r in proj.by_ref() {
@@ -472,11 +578,13 @@ fn project(job: Job, limits: &Limits) -> Option<Done> {
             ..Default::default()
         }
     };
+    archive::apply_custom_title(&mut meta, state.custom_title.clone());
     let hashes = region_hashes(&job.entry.file, state.offset)?;
     Some(Done {
         entry: job.entry,
         meta,
         text,
+        metadata_refresh,
         resumed_from,
         records,
         state,
@@ -489,7 +597,7 @@ impl Index {
         let mut stmt = self.conn.prepare(
             "SELECT id, backend, session_id, file, size, mtime_ns, text_indexed,
                     projection_version, offset, next_index, codex_mode, head_hash, tail_hash,
-                    run_category, run_count, last_kind, last_hash
+                    run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset
              FROM sessions",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -510,10 +618,13 @@ impl Index {
                     mtime_ns: r.get(5)?,
                     text_indexed: r.get::<_, i64>(6)? != 0,
                     projection_version: r.get(7)?,
+                    title_metadata_version: r.get(17)?,
+                    title_offset: r.get(19)?,
                     hashes: (r.get(11)?, r.get(12)?),
                     state: ProjectionState {
                         offset: r.get::<_, i64>(8)? as u64,
                         next_index: r.get::<_, i64>(9)? as usize,
+                        custom_title: r.get(18)?,
                         mode: CodexMode::from_i64(r.get(10)?),
                         run,
                         last_turn: match (
@@ -561,10 +672,20 @@ impl Index {
                     if s.file == file
                         && s.size == e.size_bytes as i64
                         && s.mtime_ns == mtime_ns(e.mtime)
-                        && s.projection_version == PROJECTION_VERSION =>
+                        && s.projection_version == PROJECTION_VERSION
+                        && s.title_metadata_version == TITLE_METADATA_VERSION
+                        && s.title_offset == s.state.offset as i64 =>
                 {
                     report.unchanged += 1;
                     continue;
+                }
+                Some(s)
+                    if s.file == file
+                        && s.size == e.size_bytes as i64
+                        && s.mtime_ns == mtime_ns(e.mtime)
+                        && s.projection_version == PROJECTION_VERSION =>
+                {
+                    Work::Metadata(s.id, s.state.clone())
                 }
                 // A file continues where the last pass stopped only if it grew and the
                 // bytes it was indexed from are still the same. Growing alone did not prove
@@ -577,7 +698,13 @@ impl Index {
                         && e.size_bytes >= s.state.offset
                         && region_hashes(&e.file, s.state.offset) == Some(s.hashes) =>
                 {
-                    Work::Resume(s.id, s.state.clone())
+                    if s.title_metadata_version == TITLE_METADATA_VERSION
+                        && s.title_offset == s.state.offset as i64
+                    {
+                        Work::Resume(s.id, s.state.clone())
+                    } else {
+                        Work::Metadata(s.id, s.state.clone())
+                    }
                 }
                 _ => Work::Full,
             };
@@ -672,7 +799,9 @@ impl Index {
                     None => report.failed += 1,
                     Some(d) => {
                         let resumed = d.resumed_from.is_some();
+                        let metadata_refresh = d.metadata_refresh;
                         match self.write(d) {
+                            Ok(true) if metadata_refresh => report.metadata_refreshed += 1,
                             Ok(true) if resumed => report.appended += 1,
                             Ok(true) => report.reindexed += 1,
                             Ok(false) => {}
@@ -718,11 +847,13 @@ impl Index {
             .join("\n");
         let meta_json = serde_json::to_string(&d.meta).unwrap_or_else(|_| "{}".into());
         let s = &d.state;
+        // Issue #36: old binaries leave title_offset behind when advancing offset, so
+        // readers can detect that the cached title did not follow the new checkpoint.
         let id: i64 = tx.query_row(
             "INSERT INTO sessions (backend, session_id, file, size, mtime_ns, meta, paths, origin,
                  subagent, text_indexed, projection_version, offset, next_index, codex_mode,
-                 head_hash, tail_hash, run_category, run_count, last_kind, last_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+                 head_hash, tail_hash, run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
              ON CONFLICT (backend, session_id) DO UPDATE SET
                  file = excluded.file, size = excluded.size, mtime_ns = excluded.mtime_ns,
                  meta = excluded.meta, paths = excluded.paths, origin = excluded.origin,
@@ -732,7 +863,10 @@ impl Index {
                  head_hash = excluded.head_hash, tail_hash = excluded.tail_hash,
                  run_category = excluded.run_category,
                  run_count = excluded.run_count, last_kind = excluded.last_kind,
-                 last_hash = excluded.last_hash
+                 last_hash = excluded.last_hash,
+                 title_metadata_version = excluded.title_metadata_version,
+                 custom_title = excluded.custom_title,
+                 title_offset = excluded.title_offset
              RETURNING id",
             params![
                 k.0.as_str(),
@@ -755,6 +889,9 @@ impl Index {
                 s.run.as_ref().map(|(_, n)| *n as i64),
                 s.last_turn.map(|(k, _)| kind_str(k)),
                 s.last_turn.map(|(_, h)| h as i64),
+                TITLE_METADATA_VERSION,
+                s.custom_title,
+                s.offset as i64,
             ],
             |r| r.get(0),
         )?;

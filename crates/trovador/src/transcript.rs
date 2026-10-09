@@ -720,6 +720,8 @@ pub struct ProjectionState {
     /// Bytes consumed, always at a line boundary.
     pub offset: u64,
     pub next_index: usize,
+    /// Issue #36: retain typed titles across resumes without rereading the old transcript.
+    pub custom_title: Option<String>,
     pub mode: CodexMode,
     /// An omitted run still open at `offset`. A full read would merge records appended
     /// after it into the same run, so it is carried rather than flushed.
@@ -844,6 +846,11 @@ impl Projection {
             let Ok(r) = parsed else {
                 continue;
             };
+            if self.backend == Backend::Claude
+                && let Some(title) = crate::archive::custom_title(&r)
+            {
+                self.state.custom_title = Some(title.to_owned());
+            }
             let mut drafts = Vec::new();
             match self.backend {
                 Backend::Claude => project_claude(&r, &self.limits, &mut drafts),

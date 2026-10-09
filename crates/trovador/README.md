@@ -230,6 +230,16 @@ $ trovador doctor
 | `resumable` | Transcript size under the resume ceiling (900,000 bytes) |
 | `open_with` | The command to paste in a terminal |
 
+Indexed Claude files retain the latest custom title across appends. Without an index,
+files up to `TROVADOR_TITLE_SCAN_MAX_BYTES` (4,194,304 bytes by default) are scanned for
+custom titles. Larger unindexed files use the head and tail windows, so a custom title
+between those windows can be missed. Run `trovador index` to recover it. Setting the limit
+to `0` disables the fallback scan. Between index refreshes, list and show scan appended
+bytes only when `size - stored offset` fits the same budget. Above it, they apply the
+stored custom title over the head/tail metadata until `trovador index` or search refreshes
+the file. Complete final JSON title records without a newline can be displayed within
+the budget, but enter the persisted title state only after their newline is written.
+
 Lists hide subagents by default. On the machine this was developed on, 2,950 of 5,292
 sessions were subagents, 1,694 of them Codex `guardian` approval reviewers.
 

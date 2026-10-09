@@ -134,6 +134,157 @@ fn a_title_rewritten_past_the_head_read_comes_from_the_tail() {
 }
 
 #[test]
+fn a_custom_title_between_head_and_tail_outranks_later_generated_titles() {
+    let f = Fixture::new();
+    let filler = claude_assistant(&"x".repeat(100 * 1024));
+    let records = vec![
+        claude_user("/w", "hello"),
+        filler.clone(),
+        json!({"type": "custom-title", "customTitle": "My Typed Title"}),
+        filler.clone(),
+        filler.clone(),
+        filler.clone(),
+        filler.clone(),
+        filler,
+        json!({"type": "ai-title", "aiTitle": "generated title"}),
+    ];
+    let path = f.claude("-w", ID_A, &records, 0);
+    let body = std::fs::read_to_string(path).unwrap();
+    let custom_at = body.find("custom-title").unwrap();
+    assert!(custom_at > 64 * 1024);
+    assert!(custom_at < body.len() - 256 * 1024);
+    let d = sessions::show(&f.ctx(), ID_A, None).unwrap();
+    assert_eq!(d.row.meta.title.as_deref(), Some("My Typed Title"));
+    assert_eq!(d.row.meta.title_source, Some(TitleSource::Custom));
+}
+
+#[test]
+fn custom_titles_at_or_across_the_head_boundary_are_not_lost() {
+    for head_bytes in [64 * 1024, 64 * 1024 + 20] {
+        let f = Fixture::new();
+        let user = claude_user("/w", "hello");
+        let filler = claude_assistant("");
+        let padding = 64 * 1024 - user.to_string().len() - filler.to_string().len() - 2;
+        let records = vec![
+            user,
+            claude_assistant(&"x".repeat(padding)),
+            json!({"type": "custom-title", "customTitle": "boundary title"}),
+            claude_assistant(&"y".repeat(600 * 1024)),
+            json!({"type": "ai-title", "aiTitle": "generated"}),
+        ];
+        f.claude("-w", ID_A, &records, 0);
+        let ctx = f.ctx_with(trovador::Limits {
+            head_steps: vec![head_bytes],
+            ..limits()
+        });
+        let d = sessions::show(&ctx, ID_A, None).unwrap();
+        assert_eq!(d.row.meta.title.as_deref(), Some("boundary title"));
+        assert_eq!(d.row.meta.title_source, Some(TitleSource::Custom));
+    }
+}
+
+#[test]
+fn a_custom_title_crossing_the_tail_start_outranks_a_later_ai_title() {
+    let f = Fixture::new();
+    let custom = json!({"type": "custom-title", "customTitle": "crossing title"});
+    let ai = json!({"type": "ai-title", "aiTitle": "generated"});
+    let suffix_bytes = 256 * 1024 - (custom.to_string().len() + 1) + 20;
+    let padding =
+        suffix_bytes - (claude_assistant("").to_string().len() + 1) - (ai.to_string().len() + 1);
+    let path = f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "hello"),
+            claude_assistant(&"x".repeat(100 * 1024)),
+            custom.clone(),
+            claude_assistant(&"y".repeat(padding)),
+            ai,
+        ],
+        0,
+    );
+    let body = std::fs::read_to_string(path).unwrap();
+    let start = body.find(&custom.to_string()).unwrap();
+    let tail_start = body.len() - 256 * 1024;
+    assert!(start > 64 * 1024);
+    assert!(start < tail_start && tail_start < start + custom.to_string().len());
+    let d = sessions::show(&f.ctx(), ID_A, None).unwrap();
+    assert_eq!(d.row.meta.title.as_deref(), Some("crossing title"));
+    assert_eq!(d.row.meta.title_source, Some(TitleSource::Custom));
+}
+
+#[test]
+fn a_later_custom_title_in_the_tail_replaces_a_custom_title_in_the_gap() {
+    let f = Fixture::new();
+    f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "hello"),
+            claude_assistant(&"x".repeat(100 * 1024)),
+            json!({"type": "custom-title", "customTitle": "A"}),
+            claude_assistant(&"y".repeat(500 * 1024)),
+            json!({"type": "custom-title", "customTitle": "B"}),
+            json!({"type": "ai-title", "aiTitle": "generated"}),
+        ],
+        0,
+    );
+    let d = sessions::show(&f.ctx(), ID_A, None).unwrap();
+    assert_eq!(d.row.meta.title.as_deref(), Some("B"));
+    assert_eq!(d.row.meta.title_source, Some(TitleSource::Custom));
+}
+
+#[test]
+fn an_unindexed_file_above_the_title_scan_budget_keeps_head_tail_metadata() {
+    let f = Fixture::new();
+    let ctx = f.ctx_with(trovador::Limits {
+        title_scan_max_bytes: 300 * 1024,
+        ..limits()
+    });
+    let path = f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "hello"),
+            claude_assistant(&"x".repeat(100 * 1024)),
+            json!({"type": "custom-title", "customTitle": "in the gap"}),
+            claude_assistant(&"y".repeat(500 * 1024)),
+            json!({"type": "ai-title", "aiTitle": "generated"}),
+        ],
+        0,
+    );
+    let e = archive::find_session(&ctx.paths, ID_A, None).unwrap();
+    assert!(e.size_bytes > ctx.limits.title_scan_max_bytes as u64);
+    let d = sessions::show(&ctx, ID_A, None).unwrap();
+    assert_eq!(d.row.meta.title.as_deref(), Some("generated"));
+    assert_eq!(d.row.meta.title_source, Some(TitleSource::Generated));
+    assert!(!ctx.paths.home.join("index.db").exists());
+    assert!(path.exists());
+}
+
+#[test]
+fn a_complete_final_custom_title_without_a_newline_wins_over_an_earlier_title() {
+    let f = Fixture::new();
+    let path = f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "hello"),
+            claude_assistant(&"x".repeat(100 * 1024)),
+            json!({"type": "custom-title", "customTitle": "A"}),
+            claude_assistant(&"y".repeat(500 * 1024)),
+            json!({"type": "custom-title", "customTitle": "B"}),
+        ],
+        0,
+    );
+    let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_len(file.metadata().unwrap().len() - 1).unwrap();
+    let d = sessions::show(&f.ctx(), ID_A, None).unwrap();
+    assert_eq!(d.row.meta.title.as_deref(), Some("B"));
+    assert_eq!(d.row.meta.title_source, Some(TitleSource::Custom));
+}
+
+#[test]
 fn a_guardian_codex_session_is_marked_as_a_subagent_with_its_parent() {
     let f = Fixture::new();
     f.codex(

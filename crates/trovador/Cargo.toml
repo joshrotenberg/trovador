@@ -24,6 +24,7 @@ claude-wrapper = "0.14"
 codex-wrapper = "0.4"
 futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
 humantime = "2.4.0"
+memchr = "2.8.3"
 regex = "1.13.1"
 rusqlite = { version = "0.40.2", features = ["bundled", "functions"] }
 schemars = "1.2.2"

@@ -164,7 +164,9 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
     let limit = opts.limit.unwrap_or(ctx.limits.list_default).max(1);
     // Metadata from the index where the file has not changed since it was indexed. The
     // index is only read here, never created: listing must not leave state behind.
-    let cached = Index::open_existing(&ctx.paths, &ctx.limits)
+    let index = Index::open_existing(&ctx.paths, &ctx.limits);
+    let cached = index
+        .as_ref()
         .map(|i| i.meta_snapshot())
         .unwrap_or_default();
     let hide_automated = !opts.include_automated && opts.origin.is_none();
@@ -198,7 +200,13 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
             continue;
         }
         examined += 1;
-        let meta = cached_meta(&cached, e).unwrap_or_else(|| archive::read_meta(e, &ctx.limits));
+        let meta = cached_meta(&cached, e)
+            .or_else(|| {
+                index
+                    .as_ref()
+                    .and_then(|i| i.read_meta_entry(e, &ctx.limits))
+            })
+            .unwrap_or_else(|| archive::read_meta(e, &ctx.limits));
         if meta.subagent && !opts.include_subagents {
             continue;
         }
@@ -250,7 +258,9 @@ pub struct SessionDetail {
 
 pub fn show(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<SessionDetail, Error> {
     let e = archive::find_session(&ctx.paths, id, backend)?;
-    let meta = archive::read_meta(&e, &ctx.limits);
+    let meta = Index::open_existing(&ctx.paths, &ctx.limits)
+        .and_then(|i| i.read_meta_entry(&e, &ctx.limits))
+        .unwrap_or_else(|| archive::read_meta(&e, &ctx.limits));
     let r = row(&e, meta, &ctx.limits);
     Ok(SessionDetail {
         file: e.file.display().to_string(),
@@ -405,8 +415,11 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         .into_iter()
         .filter_map(|h| {
             let e = entries.get(&(h.backend, h.session_id.clone()))?;
+            // Issue #36: a complete final title without a newline is display metadata,
+            // so search must use the same bounded read as list and show.
+            let meta = idx.read_meta_entry(e, &ctx.limits).unwrap_or(h.meta);
             Some(SearchHit {
-                row: row(e, h.meta, &ctx.limits),
+                row: row(e, meta, &ctx.limits),
                 match_count: h.match_count,
                 matches: h.matches,
             })

@@ -276,13 +276,18 @@ impl SessionMeta {
     }
 }
 
-/// Reads as little of the file as answers the question. Most sessions resolve from the
-/// first 64 KB; the wider steps only run while cwd or the first user message is missing.
-/// Claude's titles and relocation are rewritten as the session goes, so the latest value
-/// is near the end and comes from a tail read rather than from reading everything.
+/// Reads cwd and snippets from head windows, and rewritten metadata from the tail.
+/// Issue #36: an unindexed file gets a title scan only within the configured byte budget.
 pub fn read_meta(e: &ArchiveEntry, limits: &Limits) -> SessionMeta {
+    read_meta_inner(e, limits, true)
+}
+
+pub(crate) fn read_meta_windows(e: &ArchiveEntry, limits: &Limits) -> SessionMeta {
+    read_meta_inner(e, limits, false)
+}
+
+fn read_meta_inner(e: &ArchiveEntry, limits: &Limits, scan_titles: bool) -> SessionMeta {
     let mut meta = SessionMeta::default();
-    // How many bytes from the start the last head read covered.
     let mut covered = 0u64;
     for &step in &limits.head_steps {
         if covered >= e.size_bytes {
@@ -303,14 +308,81 @@ pub fn read_meta(e: &ArchiveEntry, limits: &Limits) -> SessionMeta {
     if e.backend == Backend::Claude && covered < e.size_bytes {
         let tail_from = e.size_bytes.saturating_sub(TAIL_BYTES as u64).max(covered);
         if let Ok(tail) = read_range(&e.file, tail_from, TAIL_BYTES) {
-            // Starting exactly where the head stopped is a line boundary only by luck.
             apply_claude_latest(&mut meta, lines_after_first(&tail));
+        }
+        if scan_titles && e.size_bytes <= limits.title_scan_max_bytes as u64 {
+            let mut custom_title = None;
+            if scan_custom_titles(&e.file, 0, e.size_bytes, &mut custom_title).is_ok() {
+                apply_custom_title(&mut meta, custom_title);
+            }
         }
     }
     meta
 }
 
 const TAIL_BYTES: usize = 256 * 1024;
+
+pub(crate) fn apply_custom_title(meta: &mut SessionMeta, title: Option<String>) {
+    if let Some(title) = title {
+        meta.title = Some(title);
+        meta.title_source = Some(TitleSource::Custom);
+    }
+}
+
+pub(crate) fn custom_title(record: &Value) -> Option<&str> {
+    (str_at(record, "type") == Some("custom-title"))
+        .then(|| str_at(record, "customTitle"))
+        .flatten()
+}
+
+pub(crate) fn scan_custom_titles(
+    path: &Path,
+    from: u64,
+    until: u64,
+    title: &mut Option<String>,
+) -> std::io::Result<()> {
+    // Issue #36: only candidate records need JSON parsing. Large byte chunks avoid
+    // validating every transcript line as UTF-8, including on a metadata-only upgrade.
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(from))?;
+    let mut reader = file.take(until.saturating_sub(from));
+    let mut chunk = [0u8; 64 * 1024];
+    let mut pending = Vec::new();
+    loop {
+        let n = reader.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        pending.extend_from_slice(&chunk[..n]);
+        if let Some(end) = memchr::memrchr(b'\n', &chunk[..n]) {
+            let end = pending.len() - n + end;
+            let complete = &pending[..=end];
+            let mut parsed_until = 0;
+            for at in memchr::memmem::find_iter(complete, b"custom-title") {
+                if at < parsed_until {
+                    continue;
+                }
+                let start = memchr::memrchr(b'\n', &complete[..at]).map_or(0, |i| i + 1);
+                let stop = at + memchr::memchr(b'\n', &complete[at..]).unwrap();
+                parsed_until = stop + 1;
+                if let Ok(record) = serde_json::from_slice::<Value>(&complete[start..stop])
+                    && let Some(t) = custom_title(&record)
+                {
+                    *title = Some(t.to_owned());
+                }
+            }
+            pending.drain(..=end);
+        }
+    }
+    // Issue #36: metadata windows accept complete final JSON without a newline too.
+    if memchr::memmem::find(&pending, b"custom-title").is_some()
+        && let Ok(record) = serde_json::from_slice::<Value>(&pending)
+        && let Some(t) = custom_title(&record)
+    {
+        *title = Some(t.to_owned());
+    }
+    Ok(())
+}
 
 fn read_range(path: &Path, from: u64, len: usize) -> std::io::Result<String> {
     let mut f = File::open(path)?;

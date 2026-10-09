@@ -20,6 +20,9 @@ pub struct Limits {
     /// session that opens with attachments was seen with its first user message at byte
     /// 757,435, past spike's 512 KB ceiling.
     pub head_steps: Vec<usize>,
+    /// Unindexed Claude files above this size keep head/tail title metadata. Indexing
+    /// tracks titles incrementally regardless of this fallback scan budget (issue #36).
+    pub title_scan_max_bytes: usize,
     /// Per-record cap in a transcript projection, so one huge message cannot dominate.
     pub record_chars: usize,
     /// Cap for tool results and tool call arguments, which are rarely worth more.
@@ -74,6 +77,7 @@ impl Default for Limits {
         Self {
             response_max_chars: 100_000,
             head_steps: vec![64 * 1024, 512 * 1024, 4 * 1024 * 1024],
+            title_scan_max_bytes: 4 * 1024 * 1024,
             record_chars: 4_000,
             tool_chars: 600,
             page_size: 200,
@@ -128,6 +132,7 @@ impl Limits {
         Self {
             response_max_chars: num("TROVADOR_RESPONSE_MAX_CHARS", d.response_max_chars),
             head_steps,
+            title_scan_max_bytes: num("TROVADOR_TITLE_SCAN_MAX_BYTES", d.title_scan_max_bytes),
             record_chars: num("TROVADOR_RECORD_CHARS", d.record_chars),
             tool_chars: num("TROVADOR_TOOL_CHARS", d.tool_chars),
             page_size: num("TROVADOR_PAGE_SIZE", d.page_size).max(1),
@@ -172,6 +177,14 @@ mod tests {
     fn an_unparseable_override_keeps_the_default_instead_of_becoming_zero() {
         let l = Limits::from_lookup(lookup(&[("TROVADOR_PAGE_SIZE", "lots")]));
         assert_eq!(l.page_size, 200);
+    }
+
+    #[test]
+    fn the_title_scan_budget_can_be_overridden_or_disabled() {
+        let l = Limits::from_lookup(lookup(&[("TROVADOR_TITLE_SCAN_MAX_BYTES", "12345")]));
+        assert_eq!(l.title_scan_max_bytes, 12345);
+        let l = Limits::from_lookup(lookup(&[("TROVADOR_TITLE_SCAN_MAX_BYTES", "0")]));
+        assert_eq!(l.title_scan_max_bytes, 0);
     }
 
     #[test]
