@@ -138,9 +138,9 @@ pub struct Sessions {
 }
 
 impl Sessions {
-    pub fn from_env() -> Self {
+    pub fn from_prepared(state: &bottega_core::state::State) -> Self {
         Self {
-            paths: bottega_core::state::trovador_dir(),
+            paths: state.shared.clone(),
         }
     }
 }

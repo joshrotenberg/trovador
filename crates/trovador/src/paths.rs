@@ -1,8 +1,8 @@
 //! Where the provider archives are and where trovador keeps its own state.
 //!
 //! Every path the library touches comes from a `Paths` value. Tests build one from a temp
-//! directory; only `Paths::from_env` ever looks at the real home directory, so the suite
-//! cannot reach real state by forgetting an override.
+//! directory. Construction is pure; binaries explicitly prepare durable state before
+//! serving commands. Environment resolution reads the user home, while tests supply temp roots.
 
 use std::path::{Path, PathBuf};
 
@@ -15,8 +15,10 @@ pub struct Paths {
     /// `~/.codex/archived_sessions`: where Codex moves a thread when it is archived. Flat,
     /// same file names.
     pub codex_archived: PathBuf,
-    /// `~/.trovador`: everything trovador owns.
+    /// `~/.bottega/trovador`: everything trovador owns.
     pub home: PathBuf,
+    pub shared: PathBuf,
+    pub state: bottega_core::state::State,
     /// The `claude` binary to run, when not the one on PATH.
     pub claude_bin: Option<PathBuf>,
     /// The `codex` binary to run, when not the one on PATH.
@@ -25,6 +27,7 @@ pub struct Paths {
 
 impl Paths {
     pub fn from_env() -> Self {
+        let state = bottega_core::state::from_env();
         let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let var = |k: &str| {
             std::env::var_os(k)
@@ -42,7 +45,9 @@ impl Paths {
             }),
             codex_archive: var("TROVADOR_CODEX_ARCHIVE")
                 .unwrap_or_else(|| home.join(".codex").join("sessions")),
-            home: bottega_core::state::trovador_dir(),
+            home: state.trovador.clone(),
+            shared: state.shared.clone(),
+            state,
             claude_bin: var("TROVADOR_CLAUDE_BIN"),
             codex_bin: var("TROVADOR_CODEX_BIN"),
         }
@@ -50,11 +55,16 @@ impl Paths {
 
     /// All three under one root, laid out like a real home directory.
     pub fn under(root: &Path) -> Self {
+        let state = bottega_core::state::resolve(None, None, root);
+        assert!(state.trovador.starts_with(root));
+        assert!(state.shared.starts_with(root));
         Self {
             claude_archive: root.join(".claude").join("projects"),
             codex_archive: root.join(".codex").join("sessions"),
             codex_archived: root.join(".codex").join("archived_sessions"),
-            home: bottega_core::state::resolve_trovador_dir(None, root),
+            home: state.trovador.clone(),
+            shared: state.shared.clone(),
+            state,
             claude_bin: None,
             codex_bin: None,
         }

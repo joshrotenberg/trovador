@@ -27,3 +27,7 @@ working in it; read it before changing that crate.
 - Skills are shared by both hosts. Write them for either agent: name MCP tools by their
   tool names, never by a host-specific prefix.
 - No em dashes, no AI attribution, conventional-commit prefixes.
+
+Resolve durable state only through `bottega-core::state`: `~/.bottega/shared` and
+`~/.bottega/trovador`. Tests isolate the root with `BOTTEGA_HOME` or explicit
+temporary inputs and assert that durable paths stay under their temporary root.

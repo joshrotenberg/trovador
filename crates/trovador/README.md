@@ -133,7 +133,7 @@ be read. Other errors remain failures. Either Codex root's failures protect summ
 for missing Codex sessions because summaries do not record source paths.
 If `unavailable_roots` or `empty_backends` reports a backend whose missing sessions
 you really removed, delete the corresponding files under `<home>/summaries` by hand
-to reclaim them (`<home>` defaults to `~/.trovador`).
+to reclaim them (`<home>` defaults to `~/.bottega/trovador`).
 
 Every command prints one JSON document. The MCP `sessions` tool takes the same inputs as an
 `action` of `list`, `show`, `transcript`, or `output`, and the `search` tool takes the same inputs as
@@ -295,7 +295,7 @@ memory (release build, `/usr/bin/time -l`, 2026-10-07).
 
 ## Search
 
-The index is SQLite with FTS5 at `~/.trovador/index.db`: one row of metadata per session and
+The index is SQLite with FTS5 at `~/.bottega/trovador/index.db`: one row of metadata per session and
 one full-text row per projected record that carries text, keyed so a hit's `index` is the
 transcript offset to open it at.
 
@@ -345,7 +345,7 @@ Provenance). The only model calls trovador makes are summaries:
 
 - **Depth.** A summary runs `claude -p` with `TROVADOR_DEPTH` passed down, and a run at
   `TROVADOR_MAX_DEPTH` (2) is refused.
-- **Log.** Every summary run's start and end is a line in `~/.trovador/runs.jsonl`, sharing a
+- **Log.** Every summary run's start and end is a line in `~/.bottega/trovador/runs.jsonl`, sharing a
   `run_id`.
 - **Tasks.** Over MCP, `summarize` accepts task execution. A client that negotiates tasks
   gets a task id at once and polls `tasks/get`; any other client gets the result as before.
@@ -361,7 +361,7 @@ decisions, current state, open items. Past 8 chunks the first and last halves ar
 the summary says which parts were left out, which bounds the cost of a very large session.
 
 Summary runs use `--no-session-persistence`, so they leave no transcript in the archive and
-are never offered for continuation. The result is cached in `~/.trovador/summaries/` against
+are never offered for continuation. The result is cached in `~/.bottega/trovador/summaries/` against
 the source file's size and mtime; a cache hit costs nothing and says `cached: true`. The
 `model` parameter (`--model` in the CLI) regenerates the summary if it differs from the
 cached model. A matching or omitted model reuses a current cached summary; `force=true`
@@ -386,7 +386,7 @@ sessions, pads, blobs, windows, runners, and reports are counted and not importe
 
 ## Provenance
 
-`~/.trovador/spawned.json` (mode 0600) records the sessions the toolkit started; tosi adds
+`~/.bottega/shared/spawned.json` (mode 0600) records the sessions the toolkit started; tosi adds
 each session it starts. list and search leave automated sessions (`claude -p`, `codex exec`)
 out by default, except these. `sessions show` reports `spawned`. It is a record, not a
 permission: nothing decides whether a past session may be continued, because nothing
@@ -398,7 +398,7 @@ repaired, the toolkit's sessions are hidden like any other automated session.
 
 trovador reads `~/.claude/projects`, `~/.codex/sessions`, and `~/.codex/archived_sessions`
 and never writes to any of them itself; the providers write there when tosi runs them. Its
-own state goes under `~/.trovador`: `index.db`, `spawned.json`, `runs.jsonl`, `summaries/`.
+own state goes under `~/.bottega/trovador`: `index.db`, `runs.jsonl`, `summaries/`. Provenance lives in `~/.bottega/shared/`.
 `outputs/`, left by `ask` before it moved, is removed by `trovador gc` once old enough.
 `sessions list` reads the index when it exists but never creates it. Override the paths with
 `TROVADOR_CLAUDE_ARCHIVE`, `TROVADOR_CODEX_ARCHIVE`, `TROVADOR_CODEX_ARCHIVED`,
@@ -414,7 +414,7 @@ transcripts still show them.
 any machine's real archives, whatever CLI versions wrote them: every session file listed
 once, transcripts contiguous and capped, the index equal to the transcript projection,
 search finding a phrase taken from any indexed record, CLI and MCP agreeing, and archive
-files left untouched. Its state goes to the cargo target directory, never `~/.trovador`.
+files left untouched. Its state goes to the cargo target directory, never `~/.bottega/trovador`.
 
 ```sh
 cargo test --release --test live -- --ignored --nocapture
@@ -428,3 +428,30 @@ a newer CLI introduced shows up as a new category.
 ## License
 
 MIT or Apache-2.0, at your option.
+
+State lives under `BOTTEGA_HOME` or `~/.bottega`: `shared/` holds provenance and its lock,
+`trovador/` holds the index, summaries, and run log. `tosi/` is reserved and is not
+created yet. Non-empty `TROVADOR_HOME` overrides only trovador's directory; empty
+overrides are ignored. Provenance always goes to `<root>/shared/`, including when
+only `TROVADOR_HOME` is set; preparation moves its legacy provenance there without
+overwriting existing files. Directories are 0700 and files are 0600.
+
+The first run after upgrading migrates `~/.trovador` when neither override is set
+and the new trovador directory does not exist. Restart both host apps after upgrading
+so no old server keeps writing to the old location. Conflicts and migration failures
+are reported by `trovador doctor`; existing directories are never merged.
+
+Path resolution is pure: `state::resolve`, `state::from_env`, and `Paths` construction
+compute paths without creating or migrating state. Only binary entry points call
+`state::prepare`; tests call it explicitly with temporary roots.
+
+Migration commits by renaming the old directory to the new service directory.
+Across filesystems it verifies a partial copy against the source path, size, and
+mtime manifest before committing, then retains `~/.trovador.migrated` for manual
+removal. An incomplete partial copy is retried on startup. Shared-file moves resume
+after a crash. Recursive permission tightening is best effort and runs once on the
+newly committed migration tree. Ordinary starts tighten only the state directories
+themselves and preserve modes of their existing contents, including override roots.
+A source changing during copy fails the command: retry shortly or stop the old
+server before retrying. Stable migration failures can still use the old location.
+Doctor inspects conflicts, partial copies, and retired sources on every call.

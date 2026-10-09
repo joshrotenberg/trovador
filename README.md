@@ -51,6 +51,8 @@ recently written session instead of only the current one.
 
 ## Set up a machine
 
+`rm -rf ~/.bottega` removes suite state and leaves provider sessions untouched.
+
 The repository is private, so cargo fetches with the git CLI, which uses your GitHub
 credentials. From a clone, `cargo install --path crates/<tool>` works too.
 
@@ -117,7 +119,7 @@ cargo install --locked --path ~/Code/github.com/joshrotenberg/bottega/crates/<to
 ```
 
 Then update the plugin in each host (`claude plugin update <tool>@bottega`; in Codex,
-add it again) and start a new session. A running MCP server never reloads.
+add it again) and restart both host apps. A running MCP server never reloads.
 
 ## Check
 
@@ -134,5 +136,31 @@ starts each shim with `--version`. CI runs all four on Linux, and the Rust check
 macOS.
 
 `crates/bottega-core` is the shared library for redaction, provenance, backend names,
-private state files, and state locations. Both services depend on it; state remains
-under `TROVADOR_HOME` or `~/.trovador`.
+private state files, and state locations. Both services depend on it.
+
+State lives under `BOTTEGA_HOME` or `~/.bottega`: `shared/` holds provenance and its lock,
+`trovador/` holds the index, summaries, and run log. `tosi/` is reserved and is not
+created yet. Non-empty `TROVADOR_HOME` overrides only trovador's directory; empty
+overrides are ignored. Provenance always goes to `<root>/shared/`, including when
+only `TROVADOR_HOME` is set; preparation moves its legacy provenance there without
+overwriting existing files. Directories are 0700 and files are 0600.
+
+The first run after upgrading migrates `~/.trovador` when neither override is set
+and the new trovador directory does not exist. Restart both host apps after upgrading
+so no old server keeps writing to the old location. Conflicts and migration failures
+are reported by `trovador doctor`; existing directories are never merged.
+
+Path resolution is pure: `state::resolve`, `state::from_env`, and `Paths` construction
+compute paths without creating or migrating state. Only binary entry points call
+`state::prepare`; tests call it explicitly with temporary roots.
+
+Migration commits by renaming the old directory to the new service directory.
+Across filesystems it verifies a partial copy against the source path, size, and
+mtime manifest before committing, then retains `~/.trovador.migrated` for manual
+removal. An incomplete partial copy is retried on startup. Shared-file moves resume
+after a crash. Recursive permission tightening is best effort and runs once on the
+newly committed migration tree. Ordinary starts tighten only the state directories
+themselves and preserve modes of their existing contents, including override roots.
+A source changing during copy fails the command: retry shortly or stop the old
+server before retrying. Stable migration failures can still use the old location.
+Doctor inspects conflicts, partial copies, and retired sources on every call.

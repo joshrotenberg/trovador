@@ -20,8 +20,8 @@ behaviour, not afterwards.
 ## Two properties worth defending
 
 **Seamless in and out.** trovador reads what the CLIs already write and never writes to
-`~/.claude` or `~/.codex`. Everything it owns lives under `~/.trovador`, so removing that
-directory removes trovador and leaves the user's sessions untouched.
+`~/.claude` or `~/.codex`. Suite state lives under `~/.bottega`, so removing that
+directory removes suite state and leaves the user's sessions untouched.
 
 **Both doors agree.** `src/lib.rs` is the library. `trovador <command>` and
 `trovador serve` (MCP over stdio) are thin adapters over it. spike had four separate bugs
@@ -71,8 +71,10 @@ bug, including spike issue numbers where the lesson came from there.
 - `cargo test` is deterministic: no network, no model spend, fake provider binaries, fixture
   archives built in temp directories by `tests/common/mod.rs`.
 - **The suite never touches real state.** Every path comes from a `Paths` value built from a
-  temp directory. Nothing in the library falls back to the real home directory except
-  `Paths::from_env`, which tests never call.
+  temp directory. `Paths` construction and core state resolution are pure.
+  Environment resolution reads the user home; tests isolate it with overrides or
+  explicit temporary inputs. Only binary entry points call `state::prepare`;
+  fixture setup calls it explicitly with a temporary root.
 - **The suite must survive being run concurrently.** Scratch paths come from `tempfile`,
   never from timestamps.
 - A test name says what would break. Adding a feature without assertions is not done, and

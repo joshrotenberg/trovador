@@ -41,11 +41,33 @@ struct Live {
     sample: Vec<ArchiveEntry>,
 }
 
+fn archive_paths() -> Paths {
+    let mut paths = Paths::under(Path::new(env!("CARGO_TARGET_TMPDIR")));
+    let home = std::env::home_dir().unwrap();
+    let archive = |name: &str, default: PathBuf| {
+        std::env::var_os(name)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or(default)
+    };
+    paths.claude_archive = archive("TROVADOR_CLAUDE_ARCHIVE", home.join(".claude/projects"));
+    paths.codex_archive = archive("TROVADOR_CODEX_ARCHIVE", home.join(".codex/sessions"));
+    paths.codex_archived = archive(
+        "TROVADOR_CODEX_ARCHIVED",
+        paths
+            .codex_archive
+            .parent()
+            .unwrap()
+            .join("archived_sessions"),
+    );
+    paths
+}
+
 fn live() -> &'static Live {
     static LIVE: OnceLock<Live> = OnceLock::new();
     LIVE.get_or_init(|| {
         let started = SystemTime::now();
-        let before = snapshot_archives(&Paths::from_env());
+        let before = snapshot_archives(&archive_paths());
         let idle_before = started - Duration::from_secs(600);
         let prefixes = before
             .iter()
@@ -56,7 +78,7 @@ fn live() -> &'static Live {
         let _ = std::fs::remove_dir_all(&home);
         let paths = Paths {
             home,
-            ..Paths::from_env()
+            ..archive_paths()
         };
         let ctx = Ctx {
             paths,
@@ -692,6 +714,11 @@ fn cli(ctx: &Ctx, args: &[&str]) -> Value {
         .env("TROVADOR_CLAUDE_ARCHIVE", &ctx.paths.claude_archive)
         .env("TROVADOR_CODEX_ARCHIVE", &ctx.paths.codex_archive)
         .env("TROVADOR_CODEX_ARCHIVED", &ctx.paths.codex_archived)
+        .env(
+            "BOTTEGA_TEST_ROOT",
+            ctx.paths.shared.parent().unwrap().parent().unwrap(),
+        )
+        .env("BOTTEGA_HOME", ctx.paths.shared.parent().unwrap())
         .env("TROVADOR_HOME", &ctx.paths.home)
         .output()
         .unwrap();

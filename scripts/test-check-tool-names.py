@@ -91,10 +91,12 @@ class DiscoveryTests(unittest.TestCase):
 
         def discover(command, env):
             self.assertTrue(all(key not in env for key in settings))
-            self.assertTrue(Path(env["TROVADOR_HOME"]).parent.is_dir())
+            self.assertTrue(Path(env["BOTTEGA_HOME"]).parent.is_dir())
+            self.assertEqual(Path(env["BOTTEGA_HOME"]).name, ".bottega")
+            self.assertNotIn("TROVADOR_HOME", env)
             return {Path(command[0]).name}
 
-        with patch.dict(os.environ, settings), patch.object(check, "tool_names", side_effect=discover):
+        with patch.dict(os.environ, dict(settings, TROVADOR_HOME="/must-not-be-inherited")), patch.object(check, "tool_names", side_effect=discover):
             check.main()
 
 

@@ -60,3 +60,7 @@ plugin packaging, and the existing test coverage. The first baseline and its
 verified corrections completed on 2026-10-08; see
 [the review record](reviews/2026-10-08-baseline/REPORT.md) for snapshots, findings,
 checks, and limitations. Subsequent substantive batches use this same workflow.
+
+Resolve durable state only through `bottega-core::state`: `~/.bottega/shared` and
+`~/.bottega/trovador`. Tests isolate the root with `BOTTEGA_HOME` or explicit
+temporary inputs and assert that durable paths stay under their temporary root.

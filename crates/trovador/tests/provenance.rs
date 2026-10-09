@@ -53,7 +53,7 @@ fn spawned_records_carry_over_from_the_old_consent_file() {
     let f = Fixture::new();
     std::fs::create_dir_all(&f.paths.home).unwrap();
     std::fs::write(
-        f.paths.home.join("consent.json"),
+        f.paths.shared.join("consent.json"),
         json!({"version": 1, "level": "approved",
             "spawned": [{"backend": "codex", "session_id": ID_B, "at": "2026-10-08T00:00:00.000Z"}],
             "decisions": [{"backend": "claude", "session_id": ID_C, "decision": "denied",

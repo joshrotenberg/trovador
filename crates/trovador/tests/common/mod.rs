@@ -28,7 +28,11 @@ pub struct Fixture {
 impl Fixture {
     pub fn new() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        let paths = Paths::under(dir.path());
+        let mut paths = Paths::under(dir.path());
+        let state = bottega_core::state::prepare(paths.state.clone()).unwrap();
+        paths.home = state.trovador.clone();
+        paths.shared = state.shared.clone();
+        paths.state = state;
         Self { dir, paths }
     }
 

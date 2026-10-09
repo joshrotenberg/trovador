@@ -1276,6 +1276,7 @@ dependencies = [
  "tower-mcp",
  "tracing",
  "tracing-subscriber",
+ "trovador",
  "uuid",
 ]
 

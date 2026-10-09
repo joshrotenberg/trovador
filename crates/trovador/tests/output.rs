@@ -24,6 +24,8 @@ fn cli(f: &Fixture, args: &[&str]) -> Value {
         .env("TROVADOR_CLAUDE_ARCHIVE", &f.paths.claude_archive)
         .env("TROVADOR_CODEX_ARCHIVE", &f.paths.codex_archive)
         .env("TROVADOR_CODEX_ARCHIVED", &f.paths.codex_archived)
+        .env("BOTTEGA_TEST_ROOT", f.dir.path())
+        .env("BOTTEGA_HOME", f.paths.shared.parent().unwrap())
         .env("TROVADOR_HOME", &f.paths.home)
         .env("TROVADOR_ACTIVE_WINDOW_S", "0")
         .env("TROVADOR_RESPONSE_MAX_CHARS", MAX.to_string())

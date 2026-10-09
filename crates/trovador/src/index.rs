@@ -1,4 +1,4 @@
-//! The SQLite index at `~/.trovador/index.db`: session metadata plus an FTS5 table of
+//! The SQLite index at `~/.bottega/trovador/index.db`: session metadata plus an FTS5 table of
 //! projected record text, kept current incrementally.
 //!
 //! Records are keyed by rowid `session_row << 32 | record_index`, so one session's records

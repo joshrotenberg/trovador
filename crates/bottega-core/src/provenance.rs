@@ -4,7 +4,7 @@
 //! search include those sessions, although automated sessions (`claude -p`, `codex exec`)
 //! are otherwise left out by default. It is provenance only: past sessions are read-only
 //! history, and nothing here decides whether one may be continued. The record lives in
-//! `~/.trovador/spawned.json`, not in the index, because the index is derived and can be
+//! `~/.bottega/shared/spawned.json`, not in the index, because the index is derived and can be
 //! deleted at any time.
 
 use std::fs;

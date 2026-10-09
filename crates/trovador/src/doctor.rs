@@ -120,6 +120,17 @@ async fn provider(backend: Backend, configured: Option<&Path>) -> Provider {
 pub async fn report(ctx: &Ctx) -> Report {
     let mut problems = Vec::new();
     let p = &ctx.paths;
+    if let Some(warning) = &p.state.warning {
+        problems.push(Problem { severity: Severity::Warn, what: warning.clone(), fix: "Retry preparation after fixing the reported filesystem error; the committed directory remains authoritative".into() });
+    }
+
+    for diagnostic in bottega_core::state::diagnostics(&p.state) {
+        problems.push(Problem {
+            severity: Severity::Warn,
+            what: diagnostic.what,
+            fix: diagnostic.fix,
+        });
+    }
 
     let providers = vec![
         provider(Backend::Claude, p.claude_bin.as_deref()).await,

@@ -78,6 +78,8 @@ async fn cli_and_mcp_report_the_same_hidden_subagent_and_include_option() {
             .env("TROVADOR_CLAUDE_ARCHIVE", &f.paths.claude_archive)
             .env("TROVADOR_CODEX_ARCHIVE", &f.paths.codex_archive)
             .env("TROVADOR_CODEX_ARCHIVED", &f.paths.codex_archived)
+            .env("BOTTEGA_TEST_ROOT", f.dir.path())
+            .env("BOTTEGA_HOME", f.paths.shared.parent().unwrap())
             .env("TROVADOR_HOME", &f.paths.home)
             .env("TROVADOR_ACTIVE_WINDOW_S", "0")
             .output()

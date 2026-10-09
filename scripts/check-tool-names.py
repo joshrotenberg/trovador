@@ -82,7 +82,8 @@ def tool_names(command, env):
 
 def main():
     with tempfile.TemporaryDirectory(prefix="bottega-tool-check-") as scratch:
-        env = dict(os.environ, TROVADOR_HOME=str(Path(scratch) / ".trovador"))
+        env = dict(os.environ, BOTTEGA_HOME=str(Path(scratch) / ".bottega"))
+        env.pop("TROVADOR_HOME", None)
         # Metadata discovery starts no workers; inherited launch settings must
         # not prevent checking the server from an agent development shell.
         for suffix in ("CHILD", "DEFAULT_BACKEND", "MAX_CONCURRENCY"):

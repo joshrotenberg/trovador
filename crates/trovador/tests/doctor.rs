@@ -105,3 +105,58 @@ fn an_index_from_another_version_is_reported_as_due_for_a_rebuild() {
         r.problems
     );
 }
+
+#[tokio::test]
+async fn migration_warning_reaches_the_shared_doctor_report() {
+    let f = Fixture::new();
+    let ctx = f.ctx();
+    std::fs::create_dir(f.dir.path().join(".trovador")).unwrap();
+    let report = trovador::doctor::report(&ctx).await;
+    assert!(
+        report
+            .problems
+            .iter()
+            .any(|p| p.what.contains("without merging"))
+    );
+}
+
+#[tokio::test]
+async fn doctor_rechecks_recovery_conditions_and_provides_separate_fixes() {
+    let f = Fixture::new();
+    let ctx = f.ctx();
+    let root = ctx.paths.state.root.clone();
+    std::fs::create_dir(f.dir.path().join(".trovador")).unwrap();
+    std::fs::create_dir(f.dir.path().join(".trovador.migrated")).unwrap();
+    std::fs::create_dir(root.join("trovador.partial")).unwrap();
+    std::fs::write(ctx.paths.home.join("spawned.json"), "source").unwrap();
+    std::fs::write(ctx.paths.shared.join("spawned.json"), "target").unwrap();
+    let report = doctor::report(&ctx).await;
+    let conditions = [
+        "without merging",
+        "incomplete migration copy",
+        "retired migration source",
+        "shared state conflict",
+    ];
+    let fixes: std::collections::HashSet<_> = conditions
+        .iter()
+        .map(|condition| {
+            &report
+                .problems
+                .iter()
+                .find(|p| p.what.contains(condition))
+                .unwrap()
+                .fix
+        })
+        .collect();
+    assert_eq!(fixes.len(), 4);
+    std::fs::remove_dir(f.dir.path().join(".trovador")).unwrap();
+    std::fs::remove_dir(f.dir.path().join(".trovador.migrated")).unwrap();
+    std::fs::remove_dir(root.join("trovador.partial")).unwrap();
+    std::fs::remove_file(ctx.paths.home.join("spawned.json")).unwrap();
+    let report = doctor::report(&ctx).await;
+    assert!(
+        conditions
+            .iter()
+            .all(|condition| !report.problems.iter().any(|p| p.what.contains(condition)))
+    );
+}

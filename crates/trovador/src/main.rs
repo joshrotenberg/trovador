@@ -235,6 +235,16 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let _ = REDACT.set(!cli.no_redact);
     let mut ctx = Ctx::from_env();
+    let state = match bottega_core::state::prepare(ctx.paths.state.clone()) {
+        Ok(state) => state,
+        Err(error) => {
+            tracing::error!("state preparation failed: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    ctx.paths.home = state.trovador.clone();
+    ctx.paths.shared = state.shared.clone();
+    ctx.paths.state = state;
     ctx.limits.redact = !cli.no_redact;
     match cli.command {
         Command::Serve { read_only } => serve(

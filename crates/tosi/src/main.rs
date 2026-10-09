@@ -34,6 +34,13 @@ enum Action {
 
 fn main() -> Result<(), tower_mcp::BoxError> {
     let cli = Cli::parse();
+    let state = bottega_core::state::prepare(bottega_core::state::from_env())?;
+    if let Some(warning) = &state.warning {
+        eprintln!("{warning}");
+    }
+    for diagnostic in bottega_core::state::diagnostics(&state) {
+        eprintln!("{}; {}", diagnostic.what, diagnostic.fix);
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -48,7 +55,7 @@ fn main() -> Result<(), tower_mcp::BoxError> {
                     Err("one or more provider checks are not ready in this launch context".into())
                 }
             }
-            None => run().await,
+            None => run(state).await,
         }
     });
     // Worker cleanup is already awaited by run(). Tokio's stdin reader can
@@ -57,7 +64,7 @@ fn main() -> Result<(), tower_mcp::BoxError> {
     outcome
 }
 
-async fn run() -> Result<(), tower_mcp::BoxError> {
+async fn run(state: bottega_core::state::State) -> Result<(), tower_mcp::BoxError> {
     if config::is_delegated_child() {
         return Err("tosi cannot start inside a delegated worker".into());
     }
@@ -98,7 +105,7 @@ async fn run() -> Result<(), tower_mcp::BoxError> {
     }
     let runner = Arc::new(CliRunner::default());
     let manager = Manager::new(runner.clone(), default_backend, max_concurrency)
-        .with_sessions(tosi::manager::Sessions::from_env())
+        .with_sessions(tosi::manager::Sessions::from_prepared(&state))
         // Only the new name: a legacy TASK_RUNNERS_ alias for a security control would be a
         // switch nobody auditing the environment looks for (found in review).
         .with_redaction(std::env::var("TOSI_NO_REDACT").as_deref() != Ok("1"));
