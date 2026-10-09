@@ -87,6 +87,32 @@ fn until_keeps_sessions_written_before_it_and_combines_with_since() {
 }
 
 #[test]
+fn until_past_2262_does_not_hide_search_matches_and_agrees_with_list() {
+    let f = fixture();
+    for date in ["2300-01-01", "9999-12-31"] {
+        assert_eq!(listed(&f, None, Some(date)), vec![ID_A, ID_B, ID_C]);
+        assert_eq!(
+            found(&f, None, Some(date)),
+            listed(&f, None, Some(date)),
+            "until {date}"
+        );
+    }
+}
+
+#[test]
+fn since_past_2262_does_not_return_old_search_matches_and_agrees_with_list() {
+    let f = fixture();
+    for date in ["2300-01-01", "9999-12-31"] {
+        assert_eq!(listed(&f, Some(date), None), Vec::<String>::new());
+        assert_eq!(
+            found(&f, Some(date), None),
+            listed(&f, Some(date), None),
+            "since {date}"
+        );
+    }
+}
+
+#[test]
 fn an_absolute_date_works_like_a_duration() {
     let f = fixture();
     let five_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(5 * DAY);

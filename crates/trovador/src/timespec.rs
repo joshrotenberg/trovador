@@ -70,9 +70,12 @@ fn parse_absolute(s: &str) -> Option<SystemTime> {
 
 /// Nanoseconds since the epoch, as the index stores mtimes.
 pub fn ns(t: SystemTime) -> i64 {
-    t.duration_since(SystemTime::UNIX_EPOCH)
+    let nanos = t
+        .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
-        .as_nanos() as i64
+        .as_nanos();
+    // Issue #30: dates past 2262 must not wrap negative and invert search filters.
+    i64::try_from(nanos).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]
