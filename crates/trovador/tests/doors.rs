@@ -3,7 +3,7 @@
 
 mod common;
 
-use std::process::Command;
+use std::process::{Command, Output};
 
 use common::*;
 use serde_json::{Value, json};
@@ -34,8 +34,8 @@ fn fixture() -> Fixture {
     f
 }
 
-fn cli(f: &Fixture, args: &[&str]) -> Value {
-    let out = Command::new(env!("CARGO_BIN_EXE_trovador"))
+fn cli_output(f: &Fixture, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_trovador"))
         .args(args)
         .env("TROVADOR_CLAUDE_ARCHIVE", &f.paths.claude_archive)
         .env("TROVADOR_CODEX_ARCHIVE", &f.paths.codex_archive)
@@ -51,7 +51,11 @@ fn cli(f: &Fixture, args: &[&str]) -> Value {
             f.paths.codex_bin.clone().unwrap_or_default(),
         )
         .output()
-        .expect("run trovador");
+        .expect("run trovador")
+}
+
+fn cli(f: &Fixture, args: &[&str]) -> Value {
+    let out = cli_output(f, args);
     assert!(
         out.status.success(),
         "trovador {args:?} failed: {}",
@@ -304,4 +308,60 @@ async fn a_cached_summary_is_identical_through_both_doors_and_the_resource() {
         1,
         "only the first summary ran a model"
     );
+}
+
+#[test]
+fn oversized_regex_is_an_invalid_query_before_index_refresh_through_cli() {
+    let f = fixture();
+    let out = cli_output(&f, &["search", "--regex", r"\w{100}"]);
+    assert_eq!(out.status.code(), Some(1));
+    let error = String::from_utf8(out.stderr).unwrap();
+    assert!(error.starts_with("trovador: invalid query"), "{error}");
+    assert!(
+        error.contains("Compiled regex exceeds size limit"),
+        "{error}"
+    );
+    assert!(!f.paths.home.join("index.db").exists());
+}
+
+#[tokio::test]
+async fn oversized_regex_is_an_invalid_query_before_index_refresh_through_mcp() {
+    let f = fixture();
+    let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
+    client.initialize().await;
+    let result = client
+        .call_tool("search", json!({"query": r"\w{100}", "regex": true}))
+        .await;
+    assert!(result.is_error);
+    let error = result.all_text();
+    assert!(error.starts_with("invalid query"), "{error}");
+    assert!(
+        error.contains("Compiled regex exceeds size limit"),
+        "{error}"
+    );
+    assert!(!f.paths.home.join("index.db").exists());
+}
+
+#[test]
+fn invalid_since_is_an_invalid_query_before_index_refresh_through_cli() {
+    let f = fixture();
+    let out = cli_output(&f, &["search", "question", "--since", "garbage"]);
+    assert_eq!(out.status.code(), Some(1));
+    let error = String::from_utf8(out.stderr).unwrap();
+    assert!(error.starts_with("trovador: invalid query"), "{error}");
+    assert!(!f.paths.home.join("index.db").exists());
+}
+
+#[tokio::test]
+async fn invalid_since_is_an_invalid_query_before_index_refresh_through_mcp() {
+    let f = fixture();
+    let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
+    client.initialize().await;
+    let result = client
+        .call_tool("search", json!({"query": "question", "since": "garbage"}))
+        .await;
+    assert!(result.is_error);
+    let error = result.all_text();
+    assert!(error.starts_with("invalid query"), "{error}");
+    assert!(!f.paths.home.join("index.db").exists());
 }

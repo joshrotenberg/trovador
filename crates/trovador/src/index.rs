@@ -788,6 +788,22 @@ fn delete_records(tx: &rusqlite::Transaction, id: i64) -> rusqlite::Result<usize
     )
 }
 
+// Issue #33: validation must enforce SQL's regex limits before refreshing the index.
+pub(crate) fn search_regex(pattern: &str) -> std::result::Result<regex::Regex, regex::Error> {
+    regex::RegexBuilder::new(pattern)
+        .case_insensitive(true)
+        .size_limit(1 << 22)
+        .build()
+}
+
+// Issue #33: SQLite loses the callback error kind, so retain its query origin.
+pub(crate) const REGEXP_QUERY_ERROR_PREFIX: &str = "regexp query: ";
+
+pub(crate) fn sql_search_regex(pattern: &str) -> std::io::Result<regex::Regex> {
+    search_regex(pattern)
+        .map_err(|err| std::io::Error::other(format!("{REGEXP_QUERY_ERROR_PREFIX}{err}")))
+}
+
 fn register_regexp(conn: &Connection) -> rusqlite::Result<()> {
     use rusqlite::functions::FunctionFlags;
     conn.create_scalar_function(
@@ -796,11 +812,8 @@ fn register_regexp(conn: &Connection) -> rusqlite::Result<()> {
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
         |ctx| {
             // Compiled once per statement rather than once per row.
-            let re = ctx.get_or_create_aux(0, |v| -> std::result::Result<_, regex::Error> {
-                regex::RegexBuilder::new(v.as_str().unwrap_or(""))
-                    .case_insensitive(true)
-                    .size_limit(1 << 22)
-                    .build()
+            let re = ctx.get_or_create_aux(0, |v| -> std::io::Result<_> {
+                sql_search_regex(v.as_str().unwrap_or(""))
             })?;
             let text = ctx.get_raw(1).as_str().unwrap_or("");
             Ok(re.is_match(text))
@@ -1061,10 +1074,7 @@ impl Index {
              ORDER BY {order_by} LIMIT {per_session}"
         ))?;
         let re = if opts.regex {
-            regex::RegexBuilder::new(&opts.query)
-                .case_insensitive(true)
-                .build()
-                .ok()
+            search_regex(&opts.query).ok()
         } else {
             fts_highlighter(&expression)
         };

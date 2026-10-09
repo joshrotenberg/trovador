@@ -355,8 +355,9 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         return Err(Error::Query("choose regex or fts, not both".into()));
     }
     if opts.regex {
-        regex::Regex::new(&opts.query).map_err(|e| Error::Query(e.to_string()))?;
+        crate::index::search_regex(&opts.query).map_err(|e| Error::Query(e.to_string()))?;
     }
+    let (since, until) = window(opts.since.as_deref(), opts.until.as_deref())?;
     let mut idx = Index::open(&ctx.paths, &ctx.limits)?;
     let refresh = idx.refresh(
         &ctx.paths,
@@ -370,7 +371,6 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         .per_session
         .unwrap_or(ctx.limits.per_session_default)
         .max(1);
-    let (since, until) = window(opts.since.as_deref(), opts.until.as_deref())?;
     let vis = Visibility {
         since_ns: since.map(crate::timespec::ns),
         until_ns: until.map(crate::timespec::ns),
@@ -385,11 +385,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
     };
     let raw = idx
         .search(opts, &vis, limit, per_session, ctx.limits.redact)
-        .map_err(|e| match e {
-            // A malformed FTS5 expression is the caller's to fix, not an index failure.
-            IndexError::Sql(err) if opts.fts => Error::Query(err.to_string()),
-            other => other.into(),
-        })?;
+        .map_err(|e| search_error(e, opts))?;
 
     let entries: HashMap<(Backend, String), ArchiveEntry> = archive::scan_all(&ctx.paths)
         .into_iter()
@@ -514,4 +510,67 @@ pub fn reindex(ctx: &Ctx, rebuild: bool) -> Result<RefreshReport, Error> {
 
 pub fn index_status(ctx: &Ctx) -> Option<index::IndexStatus> {
     Index::open_existing(&ctx.paths, &ctx.limits).and_then(|i| i.status().ok())
+}
+
+fn search_error(error: IndexError, opts: &SearchOpts) -> Error {
+    match error {
+        // A malformed FTS5 expression is the caller's to fix, not an index failure.
+        IndexError::Sql(err) if opts.fts => Error::Query(err.to_string()),
+        // Issue #33: callback failures remain invalid queries if validation diverges.
+        // SQLite loses the callback kind; only tagged regex failures are query errors.
+        IndexError::Sql(err)
+            if opts.regex
+                && (matches!(&err, rusqlite::Error::UserFunctionError(_))
+                    || matches!(
+                        &err,
+                        rusqlite::Error::SqliteFailure(_, Some(message))
+                                if message.starts_with(index::REGEXP_QUERY_ERROR_PREFIX)
+                    )) =>
+        {
+            Error::Query(err.to_string())
+        }
+        other => other.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regex_callback_failures_are_queries_but_database_failures_remain_index_errors() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.create_scalar_function(
+            "regexp",
+            2,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+            |ctx| {
+                let re = ctx.get_or_create_aux(0, |v| {
+                    crate::index::sql_search_regex(v.as_str().unwrap_or(""))
+                })?;
+                Ok(re.is_match(ctx.get_raw(1).as_str().unwrap_or("")))
+            },
+        )
+        .unwrap();
+        let opts = SearchOpts {
+            regex: true,
+            ..Default::default()
+        };
+        let err = conn
+            .query_row("SELECT regexp(?1, 'question')", [r"\w{100}"], |r| {
+                r.get::<_, bool>(0)
+            })
+            .unwrap_err();
+        assert!(matches!(
+            search_error(IndexError::Sql(err), &opts),
+            Error::Query(_)
+        ));
+        let err = conn
+            .query_row("SELECT * FROM missing", [], |r| r.get::<_, bool>(0))
+            .unwrap_err();
+        assert!(matches!(
+            search_error(IndexError::Sql(err), &opts),
+            Error::Index(_)
+        ));
+    }
 }
