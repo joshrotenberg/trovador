@@ -24,3 +24,13 @@ separately from prose result; it is null without a schema, and Claude may return
 empty prose with structured output. Missing, invalid, mismatched, or oversized
 requested JSON fails the task. Structured JSON is never truncated and is limited
 to 64000 serialized UTF-8 JSON bytes.
+
+Task IDs survive restarts. Use list_tasks to find them and wait_tasks to retrieve
+results. The owner serves memory results; other processes read the always-redacted
+disk copy, which may differ when TOSI_NO_REDACT is enabled in the owner.
+
+The owner caches at most 1024 task entries. At capacity, persisted terminal
+entries are evicted oldest first and then read from the redacted disk copy.
+Active and unsaved entries are protected. Dirty saves are retried on listing
+and every 60 seconds, as well as when waiting on that ID. Unknown record versions
+are left in place for newer servers; they produce an error only on direct reads.

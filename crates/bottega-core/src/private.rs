@@ -43,6 +43,15 @@ pub fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
             .truncate(true)
             .open(&tmp)?;
         f.write_all(contents)?;
+        f.sync_all()?;
     }
-    std::fs::rename(tmp, path)
+    std::fs::rename(tmp, path)?;
+    #[cfg(unix)]
+    std::fs::File::open(
+        path.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new(".")),
+    )?
+    .sync_all()?;
+    Ok(())
 }

@@ -22,6 +22,14 @@ struct CheckEnvironment {
 }
 
 pub fn router(manager: Manager, runner: Arc<CliRunner>) -> McpRouter {
+    let list_manager = manager.clone();
+    let list = ToolBuilder::new("list_tasks")
+        .description("List durable tasks newest first, including interrupted tasks whose server stopped. After a restart, list before spawning replacements. Compact by default; full_result or wait_tasks retrieves results.")
+        .read_only()
+        .handler(move |input: crate::registry::ListTasks| {
+            let manager = list_manager.clone();
+            async move { Ok(reply(manager.list_tasks(input).await)) }
+        }).build();
     let check = ToolBuilder::new("check_environment")
         .description(include_str!("../resources/mcp/tools/check_environment.md").trim())
         .read_only()
@@ -79,6 +87,7 @@ pub fn router(manager: Manager, runner: Arc<CliRunner>) -> McpRouter {
         .tool(continue_task)
         .tool(cancel)
         .tool(check)
+        .tool(list)
 }
 
 fn skill_resources() -> [Resource; 6] {

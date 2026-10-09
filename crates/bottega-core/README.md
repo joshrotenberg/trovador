@@ -7,8 +7,7 @@ Provenance accepts an explicit state directory so callers and tests control ever
 file it reads or writes. Trovador keeps its archive paths and provider binaries.
 
 State lives under `BOTTEGA_HOME` or `~/.bottega`: `shared/` holds provenance and its lock,
-`trovador/` holds the index, summaries, and run log. `tosi/` is reserved and is not
-created yet. Non-empty `TROVADOR_HOME` overrides only trovador's directory; empty
+`trovador/` holds the index, summaries, and run log. `tosi/` holds durable task history and owner leases. Non-empty `TROVADOR_HOME` overrides only trovador's directory; empty
 overrides are ignored. Provenance always goes to `<root>/shared/`, including when
 only `TROVADOR_HOME` is set; preparation moves its legacy provenance there without
 overwriting existing files. Directories are 0700 and files are 0600.

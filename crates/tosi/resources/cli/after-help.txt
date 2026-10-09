@@ -3,14 +3,22 @@ Environment:
   TOSI_MAX_CONCURRENCY  1..32 (default 4)
   TOSI_CLAUDE_BIN       Claude CLI path
   TOSI_CODEX_BIN        Codex CLI path
-  TOSI_NO_REDACT        1 returns worker results without redacting secrets
+  TOSI_NO_REDACT        1 makes the owner return cached memory results without redaction; disk stays redacted
+  TOSI_TASK_RETENTION  maximum retained records (default 500; must be positive; active tasks stay)
+  TOSI_TASK_RETENTION_DAYS  maximum age since completion in days (default 30; must be positive)
   RUST_LOG              stderr log filter
 
 Legacy TASK_RUNNERS_* configuration names remain fallbacks, except for TOSI_NO_REDACT;
 TOSI_* takes precedence.
 
-Tools: check_environment, spawn_task, wait_tasks, continue_task, cancel_task
+Tools: check_environment, spawn_task, wait_tasks, continue_task, cancel_task, list_tasks
 Diagnostics: tosi doctor [--backend claude|codex]
 Doctor prints non-secret JSON; exit 1 means a selected provider is not ready.
 No login shell is loaded. Workers inherit the server's environment and sandbox.
-Task records live for this server process; provider histories remain on disk.
+Task records survive restarts under BOTTEGA_HOME/tosi (default ~/.bottega/tosi).
+History: tosi tasks [--status STATUS] [--since UNIX_MS] [--limit N] [--full-result]
+Statuses: running, cancelling, completed, failed, cancelled, interrupted.
+Interrupted means the owning server stopped before finishing.
+
+State must be on a local filesystem. Invalid JSON or missing versions are quarantined.
+Unknown versions stay in place and are skipped; direct reads report their version.

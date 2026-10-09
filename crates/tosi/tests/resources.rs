@@ -115,6 +115,7 @@ async fn standalone_server_lists_and_reads_the_canonical_plugin_skill() {
             "cancel_task",
             "check_environment",
             "continue_task",
+            "list_tasks",
             "spawn_task",
             "wait_tasks"
         ]

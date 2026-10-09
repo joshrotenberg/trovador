@@ -30,8 +30,7 @@ Start with `spawn_task`, retain its ID, and collect outcomes with `wait_tasks`.
 A wait timeout is a progress snapshot, not a task failure or cancellation.
 Use `continue_task` for a follow-up to the newest successful turn, or
 `cancel_task` when work is no longer needed. Inspect returned states and verify
-results and changed files before integrating them. Task IDs last only for this
-server process; this is not a persistent autonomous team.
+results and changed files before integrating them. Task IDs survive a server restart; use `list_tasks` to recover them.
 Follow-ups retain the original backend, model, and effort without overrides.
 Selection metadata records the request and settings sent; `reported.model` and
 `reported.effort` remain `null`. Do not infer them from tokens or usage totals.
@@ -79,3 +78,19 @@ with `resources/read` at the corresponding URI:
 - [Consult an earlier session](references/consult.md): a fresh worker's view on a
   past session, from its trovador summary.
   `skill://tosi/delegate/references/consult.md`
+
+After a restart, use `list_tasks` to recover durable task IDs and `wait_tasks`
+to retrieve results. `interrupted` is terminal: the owning server stopped before
+finishing. Read the error before assigning replacement work. Other servers may
+wait on live tasks, but only the owner can cancel or continue a live task.
+
+The owning server serves memory results. Disk copies are always redacted, even
+when the owner has TOSI_NO_REDACT enabled; another server's structured copy may
+differ from the validated original. Inspect wait_tasks errors as well as tasks:
+unavailable IDs do not prevent retrieval of other requested tasks.
+
+The owner caches at most 1024 task entries. At capacity, persisted terminal
+entries are evicted oldest first and then read from the redacted disk copy.
+Active and unsaved entries are protected. Dirty saves are retried on listing
+and every 60 seconds, as well as when waiting on that ID. Unknown record versions
+are left in place for newer servers; they produce an error only on direct reads.

@@ -56,8 +56,8 @@ both servers and preserves Claude's plugin data. Refresh the host session and re
 existing host caches do not rename themselves. MCP resource URIs now start with
 `skill://tosi/`.
 
-Finish or cancel active work before replacing a server: task IDs remain local to
-that process. Existing `TASK_RUNNERS_*` configuration variables remain accepted
+Finish or cancel active work before replacing a server. Task IDs are durable;
+work stopped by a server crash is reported as `interrupted`. Existing `TASK_RUNNERS_*` configuration variables remain accepted
 as legacy fallbacks, with the corresponding `TOSI_*` value taking precedence.
 Use the new names in new configurations. Historical review records retain the
 old identity and paths as evidence of the versions they reviewed.
@@ -193,7 +193,7 @@ it does not load a login shell, aliases, or shell initialization files.
 | `TOSI_MAX_CONCURRENCY` | `4` | Maximum active tasks in this server process, from 1 to 32. Starts at capacity are rejected, not queued. |
 | `TOSI_CLAUDE_BIN` | `claude` on `PATH` | Claude executable path. |
 | `TOSI_CODEX_BIN` | `codex` on `PATH` | Codex executable path. |
-| `TOSI_NO_REDACT` | unset | `1` returns worker results, structured results, and errors without replacing secrets (API keys, tokens, private keys, `NAME=secret` assignments) with `[redacted:<kind>]`. No tool argument can turn redaction off. |
+| `TOSI_NO_REDACT` | unset | `1` makes the owning server return cached memory results, structured results, and errors without replacing secrets (API keys, tokens, private keys, `NAME=secret` assignments) with `[redacted:<kind>]`. No tool argument can turn redaction off. |
 
 Legacy `TASK_RUNNERS_*` counterparts are accepted when the corresponding `TOSI_*`
 variable is absent. Prefer `TOSI_*`; the new name takes precedence when both exist.
@@ -287,17 +287,65 @@ subject to the explicit tool list. Codex keeps native AGENTS.md handling while i
 user configuration and disabling plugins. Project or managed configuration may
 still apply to Codex.
 
-Task records and results are held in memory for the current MCP server lifetime.
-The server retains at most 1024 tasks, then rejects starts until a new server
-session is created. Each prose result is limited to 64000 characters and marks
-`result_truncated` if shortened. Requested structured results have a separate
-64000-byte limit and fail instead of being truncated. Each provider stdout/stderr
-capture is capped at 4 MiB; Claude turns are also limited to 30 CLI turns per task.
-Provider CLIs may retain conversation history on disk, but task IDs cannot be
-recovered after the server restarts. Each host connection creates its own server
-and task registry; installing in both hosts or on both machines does not share
-running tasks. There is no daemon, persistence service, scheduler, automatic
-retry, or cross-machine resume.
+Task records are private, versioned JSON files under `~/.bottega/tosi/tasks`
+(or `<BOTTEGA_HOME>/tosi/tasks`). Results are redacted before storage. State must be on a local filesystem,
+not NFS or another remote filesystem. Several
+host servers share this history. Use `list_tasks` or `tosi tasks` after a restart,
+then `wait_tasks` to retrieve full results. Listing defaults to 50 compact
+snapshots, newest first, with `status`, `since` (Unix milliseconds), `limit`, and
+`full_result` filters/options. CLI options use `--status`, `--since`, `--limit`,
+and `--full-result`.
+
+Statuses are `running`, `cancelling`, `completed`, `failed`, `cancelled`, and
+`interrupted`. An interrupted task's owner stopped before finishing; its error
+reports the recorded provider PID when it appears alive. PIDs can be reused;
+check whether that process is still the provider before taking action. Another server can wait for
+live tasks, but only their owner can cancel them. Successfully completed latest
+turns can be continued from another server. Replace interrupted tasks with a
+fresh assignment. Servers do not kill children started by another server.
+
+Retention defaults to 500 records and 30 days, configurable through
+`TOSI_TASK_RETENTION` and `TOSI_TASK_RETENTION_DAYS` (legacy `TASK_RUNNERS_`
+prefixes also work). Only terminal records are pruned. Active tasks can exceed
+these limits. Both retention settings must be greater than zero; age is measured
+from task completion. Maintenance runs at startup and every 60 seconds while
+the server is active, including removal of abandoned temp files older than five
+minutes.
+Pruning and interrupted recovery use an exclusive lock; ordinary direct reads
+use a shared lock. Atomic record writes sync the file and its directory.
+Files that are not JSON or have no `version` field are logged to stderr and moved
+to `tasks/quarantine/`, so they do not block healthy tasks or server startup.
+Unknown-version records stay in place, are logged once per file per process,
+and are excluded from listing and retention. This allows independently updated
+servers to share state without damaging newer records.
+Direct reads of the affected ID preserve its error. Quarantine files remain
+available for manual inspection and recovery. State remains
+local to this machine; there is no automatic provider retry or cross-machine resume.
+The owning server caches at most 1024 task entries in memory, including
+`TOSI_NO_REDACT` results. At capacity it evicts the oldest persisted terminal
+entries by completion time; active and unsaved entries are protected. Evicted
+tasks are read from the always-redacted store, even by their original owner.
+Continuations can resume evicted tasks. Persisted terminal entries release their
+extra disk result/error copies. Lease locks determine owner liveness; missing or
+malformed identity metadata falls back to the lease, and uncertain I/O errors
+leave tasks unchanged.
+Disk copies are always redacted, and other servers and `tosi tasks` use those
+copies. With the opt-out enabled, a disk structured result may differ from the
+original validated result and may not satisfy its schema. When redaction is on,
+it happens before validation, and the disk copy keeps the validated result.
+Failed terminal saves are retried when the owner polls the task, on every
+`list_tasks` call, and on the server's 60-second maintenance cadence. Unsaved
+finished results remain available in memory until persistence succeeds.
+
+`wait_tasks` returns known snapshots in `tasks` and per-ID failures in `errors`
+as `{task_id, error}`. An unknown or pruned ID reports
+`unknown task_id: <id> (pruned or never existed)` without failing the other IDs.
+A per-ID error ends the wait; inspect both arrays before deciding what to retry.
+
+Each prose result is limited to 64000 characters and marks `result_truncated`
+if shortened. Structured results have a separate 64000-byte limit and fail
+instead of being truncated. Provider stdout/stderr capture is capped at 4 MiB;
+Claude turns are also limited to 30 CLI turns per task.
 
 Worker processes carry both `TOSI_CHILD=1` and the legacy `TASK_RUNNERS_CHILD=1`;
 the server recognizes either marker to prevent recursive delegation across old

@@ -24,6 +24,17 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Action {
+    /// List durable task history as JSON
+    Tasks {
+        #[arg(long, value_enum)]
+        status: Option<tosi::manager::Status>,
+        #[arg(long)]
+        since: Option<u64>,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        full_result: bool,
+    },
     /// Report CLI discovery and authentication visible in this launch context as JSON; no model call
     Doctor {
         /// Check only this provider (omitted checks both)
@@ -54,6 +65,24 @@ fn main() -> Result<(), tower_mcp::BoxError> {
                 } else {
                     Err("one or more provider checks are not ready in this launch context".into())
                 }
+            }
+            Some(Action::Tasks {
+                status,
+                since,
+                limit,
+                full_result,
+            }) => {
+                let tasks = tokio::task::spawn_blocking(move || {
+                    tosi::registry::Registry::open(&state)?.list(tosi::registry::ListTasks {
+                        status,
+                        since,
+                        limit,
+                        full_result: Some(full_result),
+                    })
+                })
+                .await??;
+                println!("{}", serde_json::to_string_pretty(&tasks)?);
+                Ok(())
             }
             None => run(state).await,
         }
@@ -104,8 +133,13 @@ async fn run(state: bottega_core::state::State) -> Result<(), tower_mcp::BoxErro
         );
     }
     let runner = Arc::new(CliRunner::default());
+    let registry_state = state.clone();
+    let registry =
+        tokio::task::spawn_blocking(move || tosi::registry::Registry::open(&registry_state))
+            .await??;
     let manager = Manager::new(runner.clone(), default_backend, max_concurrency)
         .with_sessions(tosi::manager::Sessions::from_prepared(&state))
+        .with_registry(registry)
         // Only the new name: a legacy TASK_RUNNERS_ alias for a security control would be a
         // switch nobody auditing the environment looks for (found in review).
         .with_redaction(std::env::var("TOSI_NO_REDACT").as_deref() != Ok("1"));

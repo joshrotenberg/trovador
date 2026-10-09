@@ -52,14 +52,14 @@ impl Effort {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RequestedSettings {
     pub backend: Option<Backend>,
     pub model: Option<String>,
     pub effort: Option<Effort>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SelectedSettings {
     pub backend: Backend,
     pub model: Option<String>,
@@ -67,13 +67,13 @@ pub struct SelectedSettings {
 }
 
 /// Unknown without authoritative per-turn evidence, absent from current adapters.
-#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ReportedSettings {
     pub model: Option<String>,
     pub effort: Option<Effort>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Selection {
     pub requested: RequestedSettings,
     pub selected: SelectedSettings,
@@ -103,6 +103,15 @@ pub struct RunOutput {
 
 #[async_trait]
 pub trait Runner: Send + Sync {
+    async fn run_observed(
+        &self,
+        spec: RunSpec,
+        cancel: CancellationToken,
+        _observer: std::sync::Arc<dyn Fn(u32) + Send + Sync>,
+    ) -> Result<RunOutput, String> {
+        self.run(spec, cancel).await
+    }
+
     /// Return only after the child exits or explicit cancellation has reaped it.
     async fn run(&self, spec: RunSpec, cancel: CancellationToken) -> Result<RunOutput, String>;
 }

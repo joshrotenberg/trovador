@@ -31,6 +31,24 @@ infer them from usage totals. No server-side downgrading, fallback, or retry occ
 
 Supply an absolute cwd and a self-contained brief with applicable repository
 instructions; the parent conversation is not inherited. Default to read-only and
-isolate parallel edits. Task IDs exist only for this server process. Hosts decide
+isolate parallel edits. Task IDs survive server restarts in shared durable state. Hosts decide
 whether to load resources into model context; exposing them does not automatically
 inject their contents.
+
+After a restart, use `list_tasks` to recover durable task IDs and `wait_tasks`
+to retrieve results. `interrupted` is terminal: the owning server stopped before
+finishing. Read the error before assigning replacement work. Other servers may
+wait on live tasks, but only the owner can cancel or continue a live task.
+
+The owning server serves its tasks from memory, honoring `TOSI_NO_REDACT`.
+Disk copies are always redacted; other servers and `tosi tasks` read those copies.
+With redaction disabled in the owner, their structured results may differ from
+the validated original and may not match its schema. State must use a local
+filesystem. A wait response separates known `tasks` from per-ID `errors`; an
+unknown or pruned ID does not prevent retrieval of other requested tasks.
+
+The owner caches at most 1024 task entries. At capacity, persisted terminal
+entries are evicted oldest first and then read from the redacted disk copy.
+Active and unsaved entries are protected. Dirty saves are retried on listing
+and every 60 seconds, as well as when waiting on that ID. Unknown record versions
+are left in place for newer servers; they produce an error only on direct reads.

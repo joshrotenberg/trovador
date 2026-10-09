@@ -6,3 +6,5 @@ mod output;
 pub mod selection;
 pub mod server;
 pub mod types;
+
+pub mod registry;

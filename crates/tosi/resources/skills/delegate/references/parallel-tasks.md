@@ -26,8 +26,9 @@ For example, one worker can inspect a parser while another checks the relevant
 call sites. Both should return file references and evidence; the parent decides
 whether the findings explain the observed failure.
 
-Each host connection has its own task registry and concurrency limit. Records
-last only for that server process. There is no shared daemon, cross-machine
-handoff, automatic retry, or nested Tosi server. A server retains at most
-1024 task records; start a new server session after reaching that limit, once
-the current work is settled and its results are retained elsewhere.
+Each host connection has its own concurrency limit. Servers on the same machine
+share durable task history. After a restart, use `list_tasks` and then `wait_tasks`
+to recover results. `interrupted` means the owning server stopped before finishing.
+There is no cross-machine handoff, automatic retry, or nested Tosi server.
+Terminal retention defaults to 500 records and 30 days. Preserve important
+outcomes in the workspace.

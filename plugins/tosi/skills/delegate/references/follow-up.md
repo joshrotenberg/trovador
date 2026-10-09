@@ -12,7 +12,7 @@ returning a new task ID. These settings cannot be overridden on a follow-up; use
 or omitted settings do not guarantee unchanged provider defaults; see the
 [model and effort reference](model-effort.md). Only one turn
 may be active in a conversation. After it finishes, use the newest returned ID;
-older turns cannot be forked or continued again. Failed or cancelled tasks must
+older turns cannot be forked or continued again. Failed, interrupted, or cancelled tasks must
 be replaced with `spawn_task`, including the facts needed to restart the work.
 
 Collect results with `wait_tasks`. `timeout_ms` is at most 55000, and `0` returns
@@ -44,7 +44,20 @@ explicitly declare root `"type": "object"`, and use only local `$ref` references
 For provider compatibility, prefer object properties with every property in
 `required` and `additionalProperties: false`.
 
-Task IDs are local to the current server process. Provider CLI history may
-remain on disk, but a new server cannot continue an old Tosi task ID.
-Retain useful outcomes in the parent conversation or workspace before ending
-the server session.
+Task IDs survive a server restart. Use `list_tasks` to recover IDs, then
+`wait_tasks` for full results. The terminal status `interrupted` means the owner
+stopped before finishing; read its error, including any surviving child PID.
+Only the owning server can cancel a live task. Any server can wait or continue
+a successfully completed latest turn. Terminal history is retained by default
+for up to 30 days and 500 records; preserve important outcomes in the workspace.
+
+The owning server serves memory results. Disk copies are always redacted, even
+when the owner has TOSI_NO_REDACT enabled; another server's structured copy may
+differ from the validated original. Inspect wait_tasks errors as well as tasks:
+unavailable IDs do not prevent retrieval of other requested tasks.
+
+The owner caches at most 1024 task entries. At capacity, persisted terminal
+entries are evicted oldest first and then read from the redacted disk copy.
+Active and unsaved entries are protected. Dirty saves are retried on listing
+and every 60 seconds, as well as when waiting on that ID. Unknown record versions
+are left in place for newer servers; they produce an error only on direct reads.

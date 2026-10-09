@@ -323,11 +323,25 @@ async fn bad_input_does_not_start_work_and_shutdown_rejects_new_tasks() {
     assert!(
         manager
             .wait_tasks(WaitTasks {
-                task_ids: vec!["missing".into()],
+                task_ids: vec![],
                 timeout_ms: Some(0)
             })
             .await
             .is_err()
+    );
+    let missing = manager
+        .wait_tasks(WaitTasks {
+            task_ids: vec!["missing".into()],
+            timeout_ms: Some(0),
+        })
+        .await
+        .unwrap();
+    assert!(missing.tasks.is_empty());
+    assert_eq!(missing.errors.len(), 1);
+    assert_eq!(missing.errors[0].task_id, "missing");
+    assert_eq!(
+        missing.errors[0].error,
+        "unknown task_id: missing (pruned or never existed)"
     );
     assert!(runner.calls.lock().await.is_empty());
     manager.shutdown().await;

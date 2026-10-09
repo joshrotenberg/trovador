@@ -13,6 +13,7 @@ use crate::private::{private_dir, private_file, write_private};
 pub struct State {
     pub root: PathBuf,
     pub trovador: PathBuf,
+    pub tosi: PathBuf,
     pub shared: PathBuf,
     pub warning: Option<String>,
     old: PathBuf,
@@ -58,6 +59,7 @@ pub fn resolve(root: Option<OsString>, service: Option<OsString>, home: &Path) -
             .map(PathBuf::from)
             .unwrap_or_else(|| root.join("trovador")),
         shared: root.join("shared"),
+        tosi: root.join("tosi"),
         root,
         warning: None,
         old: home.join(".trovador"),
@@ -70,7 +72,7 @@ pub fn resolve(root: Option<OsString>, service: Option<OsString>, home: &Path) -
 fn guard(state: &State) {
     if let Some(root) = std::env::var_os("BOTTEGA_TEST_ROOT") {
         let root = PathBuf::from(root);
-        for path in [&state.root, &state.trovador, &state.shared] {
+        for path in [&state.root, &state.trovador, &state.shared, &state.tosi] {
             assert!(
                 path.starts_with(&root),
                 "durable state escaped test root: {}",
@@ -148,6 +150,7 @@ fn prepare_inner(mut state: State, copy: CopyStep<'_>) -> io::Result<State> {
         }
         private_dir(&state.trovador)?;
         private_dir(&state.shared)?;
+        private_dir(&state.tosi)?;
         move_shared(&state)?;
         Ok(())
     })();

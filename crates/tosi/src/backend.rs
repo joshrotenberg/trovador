@@ -32,10 +32,11 @@ const TERMINATION_GRACE: Duration = Duration::from_millis(250);
 /// `TOSI_CLAUDE_BIN` and `TOSI_CODEX_BIN` override executable
 /// discovery, with legacy TASK_RUNNERS_* fallbacks when absent. They are read
 /// at construction, not from task input.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CliRunner {
     claude_binary: Option<PathBuf>,
     codex_binary: Option<PathBuf>,
+    observer: Option<std::sync::Arc<dyn Fn(u32) + Send + Sync>>,
 }
 
 impl Default for CliRunner {
@@ -50,6 +51,7 @@ impl CliRunner {
         Self {
             claude_binary: config::var_os("CLAUDE_BIN").map(PathBuf::from),
             codex_binary: config::var_os("CODEX_BIN").map(PathBuf::from),
+            observer: None,
         }
     }
 
@@ -90,6 +92,7 @@ impl CliRunner {
     }
 
     async fn claude(&self, spec: RunSpec, cancel: CancellationToken) -> Result<RunOutput, String> {
+        let observer = self.observer.clone();
         let client = Claude::builder()
             .binary(self.resolved_binary(Backend::Claude)?)
             .working_dir(&spec.cwd)
@@ -97,6 +100,11 @@ impl CliRunner {
             .env("TASK_RUNNERS_CHILD", "1")
             .timeout_secs(spec.timeout_secs)
             .kill_grace(TERMINATION_GRACE)
+            .on_spawn(std::sync::Arc::new(move |info| {
+                if let Some(observer) = &observer {
+                    observer(info.pid);
+                }
+            }))
             .output_limit(OUTPUT_LIMIT)
             .build()
             .map_err(claude_build_error)?;
@@ -176,6 +184,7 @@ impl CliRunner {
         } else {
             None
         };
+        let observer = self.observer.clone();
         let client = Codex::builder()
             .binary(self.resolved_binary(Backend::Codex)?)
             .working_dir(&spec.cwd)
@@ -183,6 +192,11 @@ impl CliRunner {
             .env("TASK_RUNNERS_CHILD", "1")
             .timeout_secs(spec.timeout_secs)
             .termination_grace(TERMINATION_GRACE)
+            .on_spawn(std::sync::Arc::new(move |info| {
+                if let Some(observer) = &observer {
+                    observer(info.pid);
+                }
+            }))
             .output_limit(OUTPUT_LIMIT)
             .build()
             .map_err(codex_build_error)?;
@@ -367,6 +381,17 @@ async fn read_codex_final_message(path: &Path) -> Result<String, String> {
 
 #[async_trait]
 impl Runner for CliRunner {
+    async fn run_observed(
+        &self,
+        spec: RunSpec,
+        cancel: CancellationToken,
+        observer: std::sync::Arc<dyn Fn(u32) + Send + Sync>,
+    ) -> Result<RunOutput, String> {
+        let mut runner = self.clone();
+        runner.observer = Some(observer);
+        runner.run(spec, cancel).await
+    }
+
     async fn run(&self, spec: RunSpec, cancel: CancellationToken) -> Result<RunOutput, String> {
         if cancel.is_cancelled() {
             return Err("task cancelled before process start".into());

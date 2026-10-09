@@ -6,6 +6,7 @@ fn guarded(root: &Path, state: State) -> State {
         &state.root,
         &state.trovador,
         &state.shared,
+        &state.tosi,
         &state::provenance_path(&state.shared),
     ] {
         assert!(
@@ -21,13 +22,13 @@ fn guarded(root: &Path, state: State) -> State {
 fn fresh_and_overridden_locations_stay_isolated() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
-    let s = guarded(
-        home,
-        state::prepare(state::resolve(None, None, home)).unwrap(),
-    );
+    let s = guarded(home, state::resolve(None, None, home));
+    assert!(!s.root.join("tosi").exists());
+    let s = guarded(home, state::prepare(s).unwrap());
     assert_eq!(s.trovador, home.join(".bottega/trovador"));
     assert!(s.shared.is_dir());
-    assert!(!s.root.join("tosi").exists());
+    assert!(s.tosi.is_dir());
+    assert_eq!(s.tosi, home.join(".bottega/tosi"));
     assert_eq!(
         state::resolve(Some(OsString::new()), Some(OsString::new()), home).trovador,
         s.trovador

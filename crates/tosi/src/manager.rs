@@ -1,7 +1,10 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -66,7 +69,9 @@ pub struct CancelTask {
     pub task_id: String,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, clap::ValueEnum, PartialEq, Eq,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Running,
@@ -74,15 +79,19 @@ pub enum Status {
     Completed,
     Failed,
     Cancelled,
+    Interrupted,
 }
 
 impl Status {
     pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Cancelled | Self::Interrupted
+        )
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TaskSnapshot {
     pub task_id: String,
     pub conversation_id: String,
@@ -103,18 +112,30 @@ pub struct TaskSnapshot {
     pub error: Option<String>,
     pub provider_session_id: Option<String>,
     pub usage: Option<serde_json::Value>,
+    pub output_schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct WaitResult {
     pub tasks: Vec<TaskSnapshot>,
     pub timed_out: bool,
+    pub errors: Vec<TaskReadError>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskReadError {
+    pub task_id: String,
+    pub error: String,
 }
 
 struct TaskEntry {
     snapshot: TaskSnapshot,
     spec: RunSpec,
     cancel: CancellationToken,
+    owned: bool,
+    dirty: bool,
+    disk_result: Option<(String, bool)>,
+    disk_error: Option<String>,
 }
 
 struct Conversation {
@@ -155,12 +176,17 @@ fn to_core(backend: Backend) -> bottega_core::Backend {
 #[derive(Clone)]
 pub struct Manager {
     state: Arc<Mutex<State>>,
+    launches: Arc<Mutex<()>>,
+    persistence: Arc<Mutex<()>>,
     changed: watch::Sender<u64>,
     runner: Arc<dyn Runner>,
     default_backend: Backend,
     max_concurrency: usize,
+    memory_cap: usize,
+    maintenance_started: Arc<AtomicBool>,
     sessions: Option<Sessions>,
     redact: bool,
+    store: Option<Arc<crate::registry::Registry>>,
 }
 
 impl Manager {
@@ -168,12 +194,17 @@ impl Manager {
         let (changed, _) = watch::channel(0);
         Self {
             state: Arc::new(Mutex::new(State::default())),
+            launches: Arc::new(Mutex::new(())),
+            persistence: Arc::new(Mutex::new(())),
             changed,
             runner,
             default_backend,
             max_concurrency,
+            memory_cap: MAX_TASKS,
+            maintenance_started: Arc::new(AtomicBool::new(false)),
             sessions: None,
             redact: true,
+            store: None,
         }
     }
 
@@ -192,7 +223,82 @@ impl Manager {
         self
     }
 
+    pub fn with_registry(mut self, registry: crate::registry::Registry) -> Self {
+        self.store = Some(Arc::new(registry));
+        self.ensure_maintenance();
+        self
+    }
+
+    fn ensure_maintenance(&self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        if self.maintenance_started.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let state = Arc::downgrade(&self.state);
+        let store = Arc::downgrade(store);
+        let persistence = self.persistence.clone();
+        runtime.spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                let (Some(state), Some(store)) = (state.upgrade(), store.upgrade()) else {
+                    return;
+                };
+                if state.lock().await.closing {
+                    return;
+                }
+                Self::retry_dirty_entries(&state, &persistence, &store).await;
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Err(e) = store.prune() {
+                        eprintln!("tosi: task maintenance failed: {e}");
+                    }
+                })
+                .await;
+            }
+        });
+    }
+
+    /// Embedders can bound cached results separately from durable retention.
+    pub fn with_memory_cap(mut self, cap: usize) -> Self {
+        assert!(cap > 0, "memory task cap must be positive");
+        self.memory_cap = cap;
+        self
+    }
+
+    pub async fn list_tasks(
+        &self,
+        input: crate::registry::ListTasks,
+    ) -> Result<Vec<TaskSnapshot>, String> {
+        self.ensure_maintenance();
+        if let Some(store) = &self.store {
+            Self::retry_dirty_entries(&self.state, &self.persistence, store).await;
+        }
+        let mut tasks = if let Some(store) = &self.store {
+            let store = store.clone();
+            let disk_input = input.clone();
+            // Apply filters after replacing disk snapshots with this process's authoritative copies.
+            tokio::task::spawn_blocking(move || store.list(disk_input))
+                .await
+                .map_err(|e| e.to_string())??
+        } else {
+            Vec::new()
+        };
+        let state = self.state.lock().await;
+        for entry in state.tasks.values().filter(|entry| entry.owned) {
+            tasks.retain(|task| task.task_id != entry.snapshot.task_id);
+            tasks.push(entry.snapshot.clone());
+        }
+        drop(state);
+        crate::registry::filter(tasks, input)
+    }
+
     pub async fn spawn_task(&self, input: SpawnTask) -> Result<TaskSnapshot, String> {
+        self.ensure_maintenance();
+        let _launch = self.launches.lock().await;
         validate_prompt(&input.task)?;
         let cwd = PathBuf::from(&input.cwd);
         if !cwd.is_absolute() || !cwd.is_dir() {
@@ -229,60 +335,129 @@ impl Manager {
             session_id: None,
             timeout_secs,
         };
-        let mut state = self.state.lock().await;
-        self.check_capacity(&state)?;
         let conversation_id = Uuid::new_v4().to_string();
-        let snapshot = self.insert(&mut state, conversation_id, None, spec, requested);
+        let snapshot = self.insert(conversation_id, None, spec, requested).await?;
         Ok(snapshot)
     }
 
     pub async fn continue_task(&self, input: ContinueTask) -> Result<TaskSnapshot, String> {
+        self.ensure_maintenance();
+        let _launch = self.launches.lock().await;
         validate_prompt(&input.message)?;
-        let mut state = self.state.lock().await;
-        self.check_capacity(&state)?;
-        let prior = state.tasks.get(&input.task_id).ok_or("unknown task_id")?;
-        let conversation_id = prior.snapshot.conversation_id.clone();
-        let conversation = state
-            .conversations
-            .get(&conversation_id)
-            .ok_or("conversation missing")?;
-        if conversation.active_task_id.is_some() {
-            return Err("this conversation already has an active task".into());
-        }
-        if conversation.latest_task_id != input.task_id {
-            return Err(format!(
-                "continue the latest task instead: {}",
-                conversation.latest_task_id
-            ));
-        }
-        if prior.snapshot.status != Status::Completed {
+        let local = {
+            let state = self.state.lock().await;
+            if let Some(prior) = state.tasks.get(&input.task_id).filter(|entry| entry.owned) {
+                let conversation = state
+                    .conversations
+                    .get(&prior.snapshot.conversation_id)
+                    .ok_or("conversation missing")?;
+                if conversation.active_task_id.is_some() {
+                    return Err("this conversation already has an active task".into());
+                }
+                if conversation.latest_task_id != input.task_id {
+                    return Err(format!(
+                        "continue the latest task instead: {}",
+                        conversation.latest_task_id
+                    ));
+                }
+                Some((prior.snapshot.clone(), prior.spec.clone()))
+            } else {
+                None
+            }
+        };
+        // Imported turns are temporary values, never cache entries that survive rejection.
+        let (prior, mut spec) = if let Some(local) = local {
+            local
+        } else {
+            let store = self.store.as_ref().ok_or("unknown task_id")?.clone();
+            let id = input.task_id.clone();
+            let record = tokio::task::spawn_blocking(move || store.read(&id))
+                .await
+                .map_err(|e| e.to_string())??;
+            if !record.snapshot.status.is_terminal() {
+                if record.owner == self.store.as_ref().unwrap().owner {
+                    return Err("this conversation already has an active task".into());
+                }
+                return Err(record.owner_error());
+            }
+            let snapshot = record.snapshot;
+            let spec = RunSpec {
+                backend: snapshot.backend,
+                task: String::new(),
+                cwd: snapshot.cwd.clone(),
+                model: snapshot.model.clone(),
+                effort: snapshot.effort,
+                output_schema: snapshot.output_schema.clone(),
+                session_id: snapshot.provider_session_id.clone(),
+                timeout_secs: snapshot.timeout_secs,
+                access: snapshot.access,
+            };
+            (snapshot, spec)
+        };
+        if prior.status != Status::Completed {
             return Err("only a successfully completed task can be continued; spawn a new task after failure or cancellation".into());
         }
-        let session_id = prior
-            .snapshot
-            .provider_session_id
-            .clone()
-            .ok_or("provider returned no resumable session ID")?;
-        let mut spec = prior.spec.clone();
-        let requested = prior.snapshot.selection.requested.clone();
+        spec.session_id = Some(
+            prior
+                .provider_session_id
+                .clone()
+                .ok_or("provider returned no resumable session ID")?,
+        );
         spec.task = input.message;
-        spec.session_id = Some(session_id);
-        let snapshot = self.insert(
-            &mut state,
-            conversation_id,
+        self.insert(
+            prior.conversation_id,
             Some(input.task_id),
             spec,
-            requested,
-        );
-        Ok(snapshot)
+            prior.selection.requested,
+        )
+        .await
+    }
+
+    fn evict_for_capacity(&self, state: &mut State) {
+        if self.store.is_none() || state.tasks.len() < self.memory_cap {
+            return;
+        }
+        let mut candidates: Vec<_> = state
+            .tasks
+            .iter()
+            .filter(|(_, entry)| entry.owned && entry.snapshot.status.is_terminal() && !entry.dirty)
+            .map(|(id, entry)| {
+                (
+                    entry
+                        .snapshot
+                        .finished_at_ms
+                        .unwrap_or(entry.snapshot.started_at_ms),
+                    id.clone(),
+                )
+            })
+            .collect();
+        candidates.sort();
+        for (_, id) in candidates {
+            if state.tasks.len() < self.memory_cap {
+                break;
+            }
+            if let Some(entry) = state.tasks.remove(&id) {
+                let conversation_id = &entry.snapshot.conversation_id;
+                if state
+                    .conversations
+                    .get(conversation_id)
+                    .is_some_and(|c| c.latest_task_id == id && c.active_task_id.is_none())
+                {
+                    state.conversations.remove(conversation_id);
+                }
+            }
+        }
     }
 
     fn check_capacity(&self, state: &State) -> Result<(), String> {
         if state.closing {
             return Err("server is shutting down".into());
         }
-        if state.tasks.len() >= MAX_TASKS {
-            return Err("this experiment retains at most 1024 tasks per server session; start a new server session".into());
+        if state.tasks.len() >= self.memory_cap {
+            return Err(format!(
+                "memory task limit ({}) reached; wait for active tasks or retry unsaved results",
+                self.memory_cap
+            ));
         }
         let active = state
             .tasks
@@ -298,14 +473,18 @@ impl Manager {
         Ok(())
     }
 
-    fn insert(
+    async fn insert(
         &self,
-        state: &mut State,
         conversation_id: String,
         parent_task_id: Option<String>,
         spec: RunSpec,
         requested: RequestedSettings,
-    ) -> TaskSnapshot {
+    ) -> Result<TaskSnapshot, String> {
+        {
+            let mut state = self.state.lock().await;
+            self.evict_for_capacity(&mut state);
+            self.check_capacity(&state)?;
+        }
         let task_id = Uuid::new_v4().to_string();
         let cancel = CancellationToken::new();
         let snapshot = TaskSnapshot {
@@ -337,13 +516,26 @@ impl Manager {
             error: None,
             provider_session_id: None,
             usage: None,
+            output_schema: spec.output_schema.clone(),
         };
+        if let Some(store) = &self.store {
+            let store = store.clone();
+            let saved = snapshot.clone();
+            tokio::task::spawn_blocking(move || store.create(&saved))
+                .await
+                .map_err(|e| e.to_string())??;
+        }
+        let mut state = self.state.lock().await;
         state.tasks.insert(
             task_id.clone(),
             TaskEntry {
                 snapshot: snapshot.clone(),
                 spec: spec.clone(),
                 cancel: cancel.clone(),
+                owned: true,
+                dirty: false,
+                disk_result: None,
+                disk_error: None,
             },
         );
         state.conversations.insert(
@@ -353,11 +545,26 @@ impl Manager {
                 active_task_id: Some(task_id.clone()),
             },
         );
+        drop(state);
+        let store = self.store.clone();
+        let observed_id = task_id.clone();
+        let observer = Arc::new(move |pid| {
+            if let Some(store) = &store {
+                let store = store.clone();
+                let id = observed_id.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = store.provider_started(&id, pid) {
+                        eprintln!("tosi: persisting provider pid failed: {e}");
+                    }
+                });
+            }
+        });
         let runner = self.runner.clone();
         let manager = self.clone();
         // The monitor owns the execution handle. Dropping an MCP request must not abort provider cleanup.
         tokio::spawn(async move {
-            let run = tokio::spawn(async move { runner.run(spec, cancel).await });
+            let run =
+                tokio::spawn(async move { runner.run_observed(spec, cancel, observer).await });
             let outcome = match run.await {
                 Ok(outcome) => outcome,
                 Err(e) => Err(format!("worker panicked or stopped: {e}")),
@@ -365,10 +572,33 @@ impl Manager {
             manager.finish(&task_id, outcome).await;
         });
         self.changed.send_modify(|v| *v = v.wrapping_add(1));
-        snapshot
+        Ok(snapshot)
     }
 
     async fn finish(&self, task_id: &str, outcome: Result<RunOutput, String>) {
+        let provenance = {
+            let state = self.state.lock().await;
+            state
+                .tasks
+                .get(task_id)
+                .filter(|e| e.spec.session_id.is_none() && !e.cancel.is_cancelled())
+                .and_then(|e| {
+                    self.sessions
+                        .as_ref()
+                        .zip(outcome.as_ref().ok()?.session_id.as_ref())
+                        .map(|(sessions, id)| {
+                            (sessions.paths.clone(), to_core(e.spec.backend), id.clone())
+                        })
+                })
+        };
+        if let Some((paths, backend, id)) = provenance {
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Err(e) = bottega_core::provenance::record_spawned(&paths, backend, &id) {
+                    eprintln!("tosi: recording session {id} failed: {e}");
+                }
+            })
+            .await;
+        }
         let mut state = self.state.lock().await;
         let Some(entry) = state.tasks.get_mut(task_id) else {
             return;
@@ -377,6 +607,12 @@ impl Manager {
         if entry.cancel.is_cancelled() {
             entry.snapshot.status = Status::Cancelled;
         } else {
+            // Even an opted-out owner's truncated memory copy must not leak a cut secret
+            // into durable history, where the full token is no longer available to redact.
+            entry.disk_result = outcome
+                .as_ref()
+                .ok()
+                .map(|output| bounded_text(&bottega_core::redact::redact_str(&output.text)));
             // Redaction runs before validation, so the structured result a caller receives is the
             // one checked against output_schema (found in review: redacting after validation
             // could complete with a result that no longer matched it). The session id is kept
@@ -406,19 +642,6 @@ impl Manager {
                     }
                 })
             });
-            // A session this server started is recorded as started by the toolkit, so
-            // trovador's list and search include it although it is automated. A follow-up
-            // resumes a session already recorded.
-            if entry.spec.session_id.is_none()
-                && let (Some(sessions), Some(id)) = (&self.sessions, &session_id)
-                && let Err(e) = bottega_core::provenance::record_spawned(
-                    &sessions.paths,
-                    to_core(entry.spec.backend),
-                    id,
-                )
-            {
-                tracing::warn!("recording {id} as started by tosi failed: {e}");
-            }
             match outcome {
                 Ok(output) => {
                     entry.snapshot.status = Status::Completed;
@@ -434,14 +657,19 @@ impl Manager {
                 Err(error) => {
                     entry.snapshot.status = Status::Failed;
                     entry.snapshot.provider_session_id = session_id;
+                    entry.disk_error =
+                        Some(bounded_text(&bottega_core::redact::redact_str(&error)).0);
                     entry.snapshot.error = Some(bounded_text(&self.redacted(&error)).0);
                 }
             }
         }
+        entry.dirty = self.store.is_some();
         let conversation_id = entry.snapshot.conversation_id.clone();
         if let Some(conversation) = state.conversations.get_mut(&conversation_id) {
             conversation.active_task_id = None;
         }
+        drop(state);
+        self.persist_dirty(task_id).await;
         self.changed.send_modify(|v| *v = v.wrapping_add(1));
     }
 
@@ -456,44 +684,166 @@ impl Manager {
         let mut changed = self.changed.subscribe();
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
         loop {
-            let tasks = self.snapshots(&input.task_ids).await?;
-            if tasks.iter().any(|t| t.status.is_terminal()) {
+            let (tasks, errors) = self.snapshots(&input.task_ids).await?;
+            if !errors.is_empty() || tasks.iter().any(|t| t.status.is_terminal()) {
                 return Ok(WaitResult {
                     tasks,
                     timed_out: false,
+                    errors,
                 });
             }
             if tokio::time::Instant::now() >= deadline {
                 return Ok(WaitResult {
                     tasks,
                     timed_out: true,
+                    errors,
                 });
             }
-            if tokio::time::timeout_at(deadline, changed.changed())
+            if tokio::time::timeout_at(deadline, async { tokio::select! { _ = changed.changed() => {}, _ = tokio::time::sleep(Duration::from_millis(250)) => {} } })
                 .await
                 .is_err()
             {
-                let tasks = self.snapshots(&input.task_ids).await?;
-                let timed_out = !tasks.iter().any(|t| t.status.is_terminal());
-                return Ok(WaitResult { tasks, timed_out });
+                let (tasks, errors) = self.snapshots(&input.task_ids).await?;
+                let timed_out = errors.is_empty() && !tasks.iter().any(|t| t.status.is_terminal());
+                return Ok(WaitResult { tasks, timed_out, errors });
             }
         }
     }
 
-    async fn snapshots(&self, ids: &[String]) -> Result<Vec<TaskSnapshot>, String> {
-        let state = self.state.lock().await;
-        ids.iter()
-            .map(|id| {
-                state
-                    .tasks
-                    .get(id)
-                    .map(|t| t.snapshot.clone())
-                    .ok_or_else(|| format!("unknown task_id: {id}"))
-            })
-            .collect()
+    async fn persist_dirty(&self, id: &str) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        Self::persist_entry(&self.state, &self.persistence, store, id).await;
+    }
+
+    async fn retry_dirty_entries(
+        state: &Arc<Mutex<State>>,
+        persistence: &Arc<Mutex<()>>,
+        store: &Arc<crate::registry::Registry>,
+    ) {
+        let ids: Vec<_> = state
+            .lock()
+            .await
+            .tasks
+            .iter()
+            .filter(|(_, entry)| entry.owned && entry.dirty)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids {
+            Self::persist_entry(state, persistence, store, &id).await;
+        }
+    }
+
+    async fn persist_entry(
+        state: &Arc<Mutex<State>>,
+        persistence: &Arc<Mutex<()>>,
+        store: &Arc<crate::registry::Registry>,
+        id: &str,
+    ) {
+        // Serialize saves while taking the latest memory state, so a late cancelling save
+        // cannot overwrite completion and every poll can retry a failed terminal save.
+        let _persist = persistence.lock().await;
+        let snapshot = {
+            let cached = state.lock().await;
+            let Some(entry) = cached.tasks.get(id).filter(|e| e.owned && e.dirty) else {
+                return;
+            };
+            let mut snapshot = entry.snapshot.clone();
+            if snapshot.result.is_some()
+                && let Some((text, truncated)) = &entry.disk_result
+            {
+                snapshot.result = Some(text.clone());
+                snapshot.result_truncated = *truncated;
+            }
+            if snapshot.error.is_some()
+                && let Some(error) = &entry.disk_error
+            {
+                snapshot.error = Some(error.clone());
+            }
+            snapshot
+        };
+        let store = store.clone();
+        let saved = snapshot.clone();
+        match tokio::task::spawn_blocking(move || store.update(&saved)).await {
+            Ok(Ok(())) => {
+                let mut state = state.lock().await;
+                if let Some(entry) = state.tasks.get_mut(id)
+                    && entry.snapshot.status == snapshot.status
+                    && entry.snapshot.finished_at_ms == snapshot.finished_at_ms
+                {
+                    entry.dirty = false;
+                    if entry.snapshot.status.is_terminal() {
+                        entry.disk_result = None;
+                        entry.disk_error = None;
+                    }
+                }
+            }
+            result => eprintln!("tosi: persisting task {id} failed: {result:?}"),
+        }
+    }
+
+    async fn snapshots(
+        &self,
+        ids: &[String],
+    ) -> Result<(Vec<TaskSnapshot>, Vec<TaskReadError>), String> {
+        let mut tasks = Vec::new();
+        let mut errors = Vec::new();
+        for id in ids {
+            self.persist_dirty(id).await;
+            let local = self
+                .state
+                .lock()
+                .await
+                .tasks
+                .get(id)
+                .filter(|entry| entry.owned)
+                .map(|entry| entry.snapshot.clone());
+            if let Some(local) = local {
+                tasks.push(local);
+                continue;
+            }
+            let result = if Uuid::parse_str(id).is_err() {
+                Err(format!("unknown task_id: {id} (pruned or never existed)"))
+            } else if let Some(store) = &self.store {
+                let store = store.clone();
+                let id = id.clone();
+                tokio::task::spawn_blocking(move || store.read(&id).map(|r| r.snapshot))
+                    .await
+                    .map_err(|e| e.to_string())?
+            } else {
+                Err(format!("unknown task_id: {id} (pruned or never existed)"))
+            };
+            match result {
+                Ok(task) => tasks.push(task),
+                Err(error) => errors.push(TaskReadError {
+                    task_id: id.clone(),
+                    error,
+                }),
+            }
+        }
+        Ok((tasks, errors))
     }
 
     pub async fn cancel_task(&self, input: CancelTask) -> Result<TaskSnapshot, String> {
+        let owned = self
+            .state
+            .lock()
+            .await
+            .tasks
+            .get(&input.task_id)
+            .is_some_and(|entry| entry.owned);
+        if !owned && let Some(store) = &self.store {
+            let store = store.clone();
+            let id = input.task_id.clone();
+            let record = tokio::task::spawn_blocking(move || store.read(&id))
+                .await
+                .map_err(|e| e.to_string())??;
+            if record.snapshot.status.is_terminal() {
+                return Ok(record.snapshot);
+            }
+            return Err(record.owner_error());
+        }
         {
             let mut state = self.state.lock().await;
             let entry = state
@@ -504,20 +854,22 @@ impl Manager {
                 return Ok(entry.snapshot.clone());
             }
             entry.snapshot.status = Status::Cancelling;
+            entry.dirty = self.store.is_some();
             entry.cancel.cancel();
             self.changed.send_modify(|v| *v = v.wrapping_add(1));
         }
+        self.persist_dirty(&input.task_id).await;
         let result = self
             .wait_tasks(WaitTasks {
                 task_ids: vec![input.task_id],
                 timeout_ms: Some(55_000),
             })
             .await?;
-        // A slow provider remains `cancelling`; do not claim it has exited before cleanup finishes.
-        Ok(result.tasks.into_iter().next().expect("one requested task"))
+        Ok(result.tasks.into_iter().next().expect("one owned task"))
     }
 
     pub async fn shutdown(&self) {
+        let _launch = self.launches.lock().await;
         let mut changed = self.changed.subscribe();
         {
             let mut state = self.state.lock().await;
@@ -525,6 +877,7 @@ impl Manager {
             for entry in state.tasks.values_mut() {
                 if !entry.snapshot.status.is_terminal() {
                     entry.snapshot.status = Status::Cancelling;
+                    entry.dirty = self.store.is_some();
                     entry.cancel.cancel();
                 }
             }
@@ -538,6 +891,10 @@ impl Manager {
                 .values()
                 .all(|t| t.snapshot.status.is_terminal())
             {
+                let ids: Vec<_> = self.state.lock().await.tasks.keys().cloned().collect();
+                for id in ids {
+                    self.persist_dirty(&id).await;
+                }
                 return;
             }
             if changed.changed().await.is_err() {
@@ -594,3 +951,7 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
+
+#[cfg(test)]
+#[path = "manager/tests.rs"]
+mod tests;
