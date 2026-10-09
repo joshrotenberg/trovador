@@ -176,7 +176,11 @@ pub async fn summarize(
     model: Option<&str>,
 ) -> Result<Summary, SummaryError> {
     let e = archive::find_session(&ctx.paths, id, backend)?;
-    if !force && let Some(hit) = cached(ctx, &e) {
+    // Issue #26: an explicit model choice must not be ignored by a cache hit.
+    if !force
+        && let Some(hit) = cached(ctx, &e)
+        && model.is_none_or(|requested| requested == hit.model)
+    {
         return Ok(hit);
     }
     let text = {

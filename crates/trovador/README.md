@@ -291,14 +291,17 @@ Provenance). The only model calls trovador makes are summaries:
 ## Summaries
 
 `summarize` renders a session's transcript, cuts it into 250,000-character chunks,
-summarizes each with `haiku`, and merges them into one summary: goal, what happened, key
+summarizes each with `haiku` by default, and merges them into one summary: goal, what happened, key
 decisions, current state, open items. Past 8 chunks the first and last halves are kept and
 the summary says which parts were left out, which bounds the cost of a very large session.
 
 Summary runs use `--no-session-persistence`, so they leave no transcript in the archive and
 are never offered for continuation. The result is cached in `~/.trovador/summaries/` against
 the source file's size and mtime; a cache hit costs nothing and says `cached: true`. The
-`session://{backend}/{id}/summary` resource returns only a cached summary and never makes one.
+`model` parameter (`--model` in the CLI) regenerates the summary if it differs from the
+cached model. A matching or omitted model reuses a current cached summary; `force=true`
+(`--force` in the CLI) always regenerates it. Each session keeps only the latest summary.
+The `session://{backend}/{id}/summary` resource returns only a cached summary and never makes one.
 A summary longer than `TROVADOR_RESPONSE_MAX_CHARS` is returned in parts, each marked
 `truncated`; `offset` (`--offset` in the CLI) reads the next part from the cache.
 

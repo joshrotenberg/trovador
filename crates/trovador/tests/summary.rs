@@ -49,6 +49,42 @@ fn a_small_session_is_summarized_in_one_call_and_then_served_from_the_cache() {
 }
 
 #[test]
+fn an_explicit_model_change_regenerates_but_matching_or_omitted_models_reuse_the_cache() {
+    let f = Fixture::new().with_fakes();
+    let ctx = f.ctx();
+    session_with(&f, ID_A, 3);
+    let runtime = rt();
+    let with_model = |model| {
+        runtime
+            .block_on(summary::summarize(&ctx, ID_A, None, false, model))
+            .unwrap()
+    };
+
+    let initial = with_model(Some("haiku"));
+    assert!(!initial.cached);
+    assert_eq!(initial.model, "haiku");
+
+    let changed = with_model(Some("opus"));
+    assert!(!changed.cached);
+    assert_eq!(changed.model, "opus");
+    let calls = f.calls("claude");
+    assert_eq!(calls.len(), 2);
+    assert!(
+        calls[1]
+            .windows(2)
+            .any(|args| args == ["arg=--model", "arg=opus"])
+    );
+
+    for model in [Some("opus"), None] {
+        let reused = with_model(model);
+        assert!(reused.cached);
+        assert_eq!(reused.model, "opus");
+        assert_eq!(reused.cost_usd, 0.0);
+    }
+    assert_eq!(f.calls("claude").len(), 2);
+}
+
+#[test]
 fn an_append_makes_the_cached_summary_stale() {
     let f = Fixture::new().with_fakes();
     let ctx = f.ctx();

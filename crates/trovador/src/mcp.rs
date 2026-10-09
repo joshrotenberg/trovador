@@ -54,8 +54,8 @@ hidden counts them, and include_active and include_automated bring them back.";
 
 const RUNS: &str = "
 
-summarize returns a summary of a session, from the cache when the session has not \
-changed; a miss costs tokens. session://{backend}/{id}/summary returns only a cached one.
+summarize returns a summary of a session, from the cache unless the session or explicit \
+model changes; a miss costs tokens. session://{backend}/{id}/summary returns only a cached one.
 
 trovador only reads sessions: past sessions are history, not something to continue. New \
 work is tosi's spawn_task; to go back into a session, a person resumes it with the \
@@ -80,7 +80,8 @@ struct SummarizeInput {
     /// Make a new summary even if a current one is cached.
     #[serde(default)]
     force: bool,
-    /// Model for the summary; haiku by default.
+    /// Model to use; a different model regenerates the cached summary. If omitted,
+    /// reuse any current summary or use the configured default (haiku) on a miss.
     model: Option<String>,
     /// The character to start from, for the next part of a summary longer than the
     /// response budget (follow truncated.next_offset).
@@ -296,8 +297,8 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
         .title("Summarize a session")
         .description(format!(
             "Summarize one session: goal, what happened, key decisions, current state, open \
-             items. Served from the cache when the session has not changed since it was \
-             summarized (cached=true, no cost); otherwise costs model tokens (haiku by \
+             items. Served from the cache unless the session or explicit model changes \
+             (cached=true, no cost); otherwise costs model tokens (haiku by \
              default). force=true makes a new one.{UNTRUSTED}"
         ))
         // A turn can run for many minutes. A client that negotiated tasks gets a task

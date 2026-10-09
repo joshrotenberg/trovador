@@ -85,7 +85,7 @@ enum Command {
         #[arg(long)]
         rebuild: bool,
     },
-    /// Summarize a session: cached until the session changes. Costs tokens on a miss.
+    /// Summarize a session: cached unless the session or explicit model changes. Costs tokens on a miss.
     Summarize {
         id: String,
         #[arg(long)]
@@ -93,6 +93,8 @@ enum Command {
         /// Make a new summary even if a current one is cached.
         #[arg(long)]
         force: bool,
+        /// Model to use; a different model regenerates the cached summary. If omitted,
+        /// reuse any current summary or use the configured default (haiku) on a miss.
         #[arg(long)]
         model: Option<String>,
         /// The character to start from, for the next part of a summary longer than the
