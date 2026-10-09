@@ -22,6 +22,7 @@ use crate::paths::Paths;
 use crate::transcript::{CodexMode, PROJECTION_VERSION, Projection, ProjectionState, RecordKind};
 
 const SCHEMA_VERSION: i64 = 3;
+const TOKENIZER: &str = "unicode61 remove_diacritics 2";
 
 /// Origins whose text is not indexed. A Codex `guardian` session is an approval reviewer
 /// whose input is a copy of its parent session's history: on 2026-10-07 that was 67 MB of
@@ -31,6 +32,8 @@ const TEXT_EXCLUDED_ORIGINS: &[&str] = &["guardian"];
 
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
+    #[error("invalid query: {0}")]
+    Query(String),
     #[error("index database: {0}")]
     Sql(#[from] rusqlite::Error),
     #[error("index directory {path}: {source}")]
@@ -240,7 +243,7 @@ impl Index {
         }
         // Everything here is derived from the archives, so an unknown schema is rebuilt
         // rather than migrated.
-        self.conn.execute_batch(
+        self.conn.execute_batch(&format!(
             "DROP TABLE IF EXISTS records;
              DROP TABLE IF EXISTS sessions;
              CREATE TABLE sessions (
@@ -269,9 +272,9 @@ impl Index {
              );
              CREATE VIRTUAL TABLE records USING fts5(
                  text, kind UNINDEXED, name UNINDEXED,
-                 tokenize = 'unicode61 remove_diacritics 2'
-             );",
-        )?;
+                 tokenize = '{TOKENIZER}'
+             );"
+        ))?;
         let (schema, projection, settings) = built_with(limits);
         for (key, value) in [
             ("schema", schema),
@@ -905,6 +908,14 @@ pub struct RawSearch {
 /// and all are required. Quoting every term keeps punctuation in identifiers from being
 /// read as FTS5 operators.
 pub fn terms_to_fts(query: &str) -> Option<String> {
+    let terms = search_terms(query)
+        .into_iter()
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>();
+    (!terms.is_empty()).then(|| terms.join(" "))
+}
+
+fn search_terms(query: &str) -> Vec<&str> {
     let mut terms = Vec::new();
     let mut rest = query.trim();
     while !rest.is_empty() {
@@ -920,11 +931,125 @@ pub fn terms_to_fts(query: &str) -> Option<String> {
             }
         };
         if !term.trim().is_empty() {
-            terms.push(format!("\"{}\"", term.trim().replace('"', "\"\"")));
+            terms.push(term.trim());
         }
         rest = tail.trim_start();
     }
-    (!terms.is_empty()).then(|| terms.join(" "))
+    terms
+}
+
+struct QueryTokenizer(Connection);
+
+impl QueryTokenizer {
+    fn new() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        // Issue #28: Rust character categories differ from SQLite's, including PUA
+        // glyphs and combining marks. Share the records tokenizer to avoid guessing.
+        conn.execute_batch(&format!(
+            "CREATE VIRTUAL TABLE tokens USING fts5(text, tokenize = '{TOKENIZER}');
+             CREATE VIRTUAL TABLE vocabulary USING fts5vocab(tokens, 'row');"
+        ))?;
+        Ok(Self(conn))
+    }
+
+    fn has_tokens(&self, text: &str) -> Result<bool> {
+        self.0.execute("DELETE FROM tokens", [])?;
+        self.0
+            .execute("INSERT INTO tokens(text) VALUES (?1)", [text])?;
+        Ok(self
+            .0
+            .query_row("SELECT EXISTS(SELECT 1 FROM vocabulary)", [], |r| r.get(0))?)
+    }
+}
+
+pub fn validate_terms(query: &str) -> Result<()> {
+    let tokenizer = QueryTokenizer::new()?;
+    let terms = search_terms(query);
+    if terms.is_empty() {
+        return Err(IndexError::Query(
+            "query cannot match: no searchable terms remain".into(),
+        ));
+    }
+    for term in terms {
+        if !tokenizer.has_tokens(term)? {
+            return Err(IndexError::Query(format!(
+                "term {term:?} cannot match: the records tokenizer produces no tokens; use regex for punctuation"
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn fts_absence_note(query: &str) -> Result<Option<String>> {
+    let tokenizer = QueryTokenizer::new()?;
+    let mut chars = query.chars().peekable();
+    let mut tokens = Vec::new();
+    let mut tokenless_phrase_or_word = false;
+    while let Some(c) = chars.next() {
+        if c.is_whitespace() {
+            continue;
+        }
+        if c == '"' {
+            let mut phrase = String::new();
+            while let Some(c) = chars.next() {
+                if c == '"' {
+                    if chars.peek() == Some(&'"') {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                phrase.push(c);
+            }
+            tokenless_phrase_or_word |= !tokenizer.has_tokens(&phrase)?;
+            tokens.push(phrase);
+        } else if ":{}()-+*^,".contains(c) {
+            tokens.push(c.to_string());
+        } else {
+            let mut word = c.to_string();
+            while let Some(&c) = chars.peek() {
+                if c.is_whitespace() || "\":{}()-+*^,".contains(c) {
+                    break;
+                }
+                word.push(c);
+                chars.next();
+            }
+            // Issue #28: FTS5 accepts non-ASCII barewords that unicode61 drops.
+            // Operators and column names are syntax, so only search words affect proof.
+            let column_name = chars.clone().find(|c| !c.is_whitespace()) == Some(':');
+            if !column_name && !matches!(word.as_str(), "AND" | "OR" | "NOT" | "NEAR") {
+                tokenless_phrase_or_word |= !tokenizer.has_tokens(word.trim_end_matches('*'))?;
+            }
+            tokens.push(word);
+        }
+    }
+    // Issue #28: these references may be in OR branches or negated filters. They
+    // cannot justify rejecting a valid expression, but make an empty result ambiguous.
+    let unindexed = tokens.iter().enumerate().any(|(i, token)| {
+        if token != ":" || i == 0 {
+            return false;
+        }
+        let columns = if tokens[i - 1] == "}" {
+            let start = tokens[..i - 1]
+                .iter()
+                .rposition(|t| t == "{")
+                .unwrap_or(i - 1);
+            &tokens[start..i - 1]
+        } else {
+            &tokens[i - 1..i]
+        };
+        columns
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case("kind") || c.eq_ignore_ascii_case("name"))
+    });
+    let mut reasons = Vec::new();
+    if unindexed {
+        reasons.push("query references unindexed kind or name columns");
+    }
+    if tokenless_phrase_or_word {
+        reasons.push("query contains a phrase or word with no tokens");
+    }
+    Ok((!reasons.is_empty()).then(|| format!("absence is not proof: {}", reasons.join("; "))))
 }
 
 fn like_escape(s: &str) -> String {

@@ -257,7 +257,14 @@ transcript offset to open it at.
 - **Queries.** By default every word and "quoted phrase" is required and each matches as a
   sequence of tokens, so a UUID or a `snake_case` name matches as written. `--fts` passes
   FTS5 syntax through (`OR`, `NOT`, `NEAR`, `prefix*`). `--regex` runs a case-insensitive
-  regular expression over the indexed text.
+  regular expression over the indexed text. Terms are checked with the index's SQLite
+  tokenizer before opening or refreshing the index. A non-empty term that produces no
+  tokens is rejected because the AND query cannot match; use `--regex` to search
+  punctuation. Empty quoted phrases and stray quotes are ignored, but a query with no
+  remaining searchable terms is rejected. Valid FTS5 syntax runs unchanged, including
+  negated filters and OR branches. When an FTS query returns no hits and references the
+  unindexed `kind` or `name` columns or contains a phrase or word with no tokens,
+  `absence_is_proof` is false and a note explains why.
 - **Ranking.** Sessions are ordered by their best-matching record (bm25), or by recency with
   `--recent`. Regex results are always newest first.
 - **Freshness.** A search first brings the index up to date, for at most

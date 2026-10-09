@@ -357,6 +357,14 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
     if opts.regex {
         crate::index::search_regex(&opts.query).map_err(|e| Error::Query(e.to_string()))?;
     }
+    // Issue #28: certainly unmatchable terms must fail even if the index cannot open,
+    // and must not spend the caller's refresh budget before reporting invalid input.
+    if !opts.regex && !opts.fts {
+        crate::index::validate_terms(&opts.query).map_err(|err| match err {
+            IndexError::Query(message) => Error::Query(message),
+            other => other.into(),
+        })?;
+    }
     let (since, until) = window(opts.since.as_deref(), opts.until.as_deref())?;
     let mut idx = Index::open(&ctx.paths, &ctx.limits)?;
     let refresh = idx.refresh(
@@ -453,10 +461,22 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
             parts.join(", ")
         )
     });
-    let note = [stale_note, unavailable_note, excluded_note, hidden_note]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+    let query_note = if opts.fts && hits.is_empty() {
+        crate::index::fts_absence_note(&opts.query)?
+    } else {
+        None
+    };
+    let query_is_proof = query_note.is_none();
+    let note = [
+        stale_note,
+        unavailable_note,
+        excluded_note,
+        hidden_note,
+        query_note,
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
     let note = (!note.is_empty()).then(|| note.join("; "));
     Ok(SearchResult {
         query: opts.query.clone(),
@@ -471,7 +491,9 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         expression: raw.expression,
         sessions_matched: raw.sessions_matched,
         returned: hits.len(),
-        absence_is_proof: hits.is_empty().then_some(exhaustive && !hidden.any()),
+        absence_is_proof: hits
+            .is_empty()
+            .then_some(exhaustive && !hidden.any() && query_is_proof),
         hidden,
         hits,
         exhaustive,

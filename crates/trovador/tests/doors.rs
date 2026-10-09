@@ -310,6 +310,282 @@ async fn a_cached_summary_is_identical_through_both_doors_and_the_resource() {
     );
 }
 
+async fn assert_unmatchable_query_is_rejected_through_both_doors(query: &str, fts: bool) {
+    let f = fixture();
+    let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
+    client.initialize().await;
+    let response = client
+        .call_tool("search", json!({"query": query, "fts": fts}))
+        .await;
+    assert!(response.is_error, "{query:?}: {}", response.all_text());
+    assert!(
+        response.all_text().contains("cannot match"),
+        "{}",
+        response.all_text()
+    );
+    assert!(!response.all_text().contains("\"absence_is_proof\":true"));
+
+    assert!(!trovador::index::db_path(&f.paths).exists());
+    let args = if fts {
+        vec!["search", "--fts", "--", query]
+    } else {
+        vec!["search", "--", query]
+    };
+    let output = cli_output(&f, &args);
+    assert!(
+        !output.status.success(),
+        "{query:?}: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot match"));
+    assert!(output.stdout.is_empty());
+    assert!(!trovador::index::db_path(&f.paths).exists());
+}
+
+#[tokio::test]
+async fn tokenless_terms_cannot_claim_absence_through_cli_or_mcp() {
+    for query in ["->", "-", "...", "\"\"", "question ->", "\u{0345}"] {
+        assert_unmatchable_query_is_rejected_through_both_doors(query, false).await;
+    }
+}
+
+#[tokio::test]
+async fn ambiguous_empty_fts_results_have_a_note_and_never_claim_absence_through_both_doors() {
+    let f = fixture();
+    sessions::reindex(&f.ctx(), false).unwrap();
+    for (query, reason) in [
+        ("kind:user", "unindexed"),
+        ("name:Bash", "unindexed"),
+        ("\"name\":Bash", "unindexed"),
+        ("\"->\"", "no tokens"),
+        ("\"\"", "no tokens"),
+        ("\"\u{0345}\"", "no tokens"),
+    ] {
+        let result = cli(&f, &["search", "--fts", "--", query]);
+        assert_eq!(result["sessions_matched"], 0, "{query}");
+        assert_eq!(result["absence_is_proof"], false, "{query}");
+        assert!(
+            result["note"].as_str().unwrap().contains(reason),
+            "{result}"
+        );
+        assert_eq!(
+            without_timing(result),
+            without_timing(mcp_tool(&f, "search", json!({"query": query, "fts": true})).await)
+        );
+    }
+}
+
+#[test]
+fn unmatchable_queries_are_library_errors_even_when_punctuation_exists() {
+    let f = fixture();
+    f.claude(
+        "-w",
+        ID_A,
+        &[claude_user("/w", "alpha deploy - charlie -> bravo ...")],
+        20,
+    );
+    for (query, fts) in [
+        ("->", false),
+        ("-", false),
+        ("...", false),
+        ("\"\"", false),
+        ("\u{0345}", false),
+    ] {
+        let error = sessions::search(
+            &f.ctx(),
+            &trovador::index::SearchOpts {
+                query: query.into(),
+                fts,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, sessions::Error::Query(_)),
+            "{query:?}: {error}"
+        );
+        assert!(
+            error.to_string().contains("cannot match"),
+            "{query:?}: {error}"
+        );
+        assert!(!trovador::index::db_path(&f.paths).exists());
+    }
+    let result = sessions::search(
+        &f.ctx(),
+        &trovador::index::SearchOpts {
+            query: "->".into(),
+            regex: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(result.sessions_matched, 1);
+}
+
+#[tokio::test]
+async fn searchable_fts_filters_and_quoted_column_like_text_still_work_through_both_doors() {
+    let f = fixture();
+    sessions::reindex(&f.ctx(), false).unwrap();
+    for query in [
+        "text:question",
+        "{text}:question",
+        "\"kind:user\"",
+        "text:question OR text:answer",
+    ] {
+        let cli_result = cli(&f, &["search", "--fts", "--", query]);
+        let mcp_result = mcp_tool(&f, "search", json!({"query": query, "fts": true})).await;
+        assert_eq!(
+            without_timing(cli_result.clone()),
+            without_timing(mcp_result)
+        );
+        if query != "\"kind:user\"" {
+            assert_eq!(cli_result["sessions_matched"], 2, "{query}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn pua_tokens_and_ignored_empty_quotes_remain_searchable_through_both_doors() {
+    let f = Fixture::new();
+    f.claude(
+        "-w",
+        ID_A,
+        &[claude_user("/w", "error: deploy user \u{e0b0}")],
+        20,
+    );
+    sessions::reindex(&f.ctx(), false).unwrap();
+    for query in ["\u{e0b0}", "error: \"", "error: \"\""] {
+        let result = cli(&f, &["search", "--", query]);
+        assert_eq!(result["sessions_matched"], 1, "{query}");
+        assert_eq!(
+            without_timing(result),
+            without_timing(mcp_tool(&f, "search", json!({"query": query})).await)
+        );
+    }
+    for query in [
+        "-kind:user",
+        "-{kind name}:deploy",
+        "deploy OR kind:user",
+        "{text kind}:user",
+    ] {
+        let result = cli(&f, &["search", "--fts", "--", query]);
+        assert_eq!(result["sessions_matched"], 1, "{query}");
+        assert_eq!(
+            without_timing(result),
+            without_timing(mcp_tool(&f, "search", json!({"query": query, "fts": true})).await)
+        );
+    }
+}
+
+#[tokio::test]
+async fn fts_syntax_errors_preserve_sqlites_message_without_a_column_hint() {
+    let f = fixture();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE VIRTUAL TABLE records USING fts5(text, kind UNINDEXED, name UNINDEXED, tokenize = 'unicode61 remove_diacritics 2');").unwrap();
+    for query in ["(", "text:", "deploy OR"] {
+        let expected = conn
+            .query_row(
+                "SELECT count(*) FROM records WHERE records MATCH ?1",
+                [query],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_err()
+            .to_string();
+        let error = sessions::search(
+            &f.ctx(),
+            &trovador::index::SearchOpts {
+                query: query.into(),
+                fts: true,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, sessions::Error::Query(_)));
+        assert_eq!(error.to_string(), format!("invalid query: {expected}"));
+        let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
+        client.initialize().await;
+        let result = client
+            .call_tool("search", json!({"query": query, "fts": true}))
+            .await;
+        assert!(result.is_error);
+        assert_eq!(result.all_text(), format!("invalid query: {expected}"));
+        let output = cli_output(&f, &["search", "--fts", "--", query]);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("invalid query: {expected}")),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("column filters"), "{stderr}");
+    }
+}
+
+#[test]
+fn tokenless_terms_fail_before_an_unopenable_index_is_touched() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(&f.paths.home).unwrap();
+    std::fs::write(trovador::index::db_path(&f.paths), "not a database").unwrap();
+    let error = sessions::search(
+        &f.ctx(),
+        &trovador::index::SearchOpts {
+            query: "->".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, sessions::Error::Query(_)), "{error}");
+    assert!(error.to_string().contains("->"));
+}
+
+#[tokio::test]
+async fn unquoted_tokenless_fts_words_cannot_prove_absence_through_cli_or_mcp() {
+    let f = fixture();
+    sessions::reindex(&f.ctx(), false).unwrap();
+    for query in [
+        "question AND →",
+        "question AND \u{0345}",
+        "question AND ☺",
+        "question AND →*",
+        "deploy →",
+        "deploy \u{0345}",
+    ] {
+        let result = cli(&f, &["search", "--fts", "--", query]);
+        assert_eq!(result["sessions_matched"], 0, "{query}");
+        assert_eq!(result["absence_is_proof"], false, "{query}");
+        assert!(
+            result["note"].as_str().unwrap().contains("no tokens"),
+            "{result}"
+        );
+        assert_eq!(
+            without_timing(result),
+            without_timing(mcp_tool(&f, "search", json!({"query": query, "fts": true})).await)
+        );
+    }
+}
+
+#[tokio::test]
+async fn ordinary_unquoted_fts_words_operators_and_prefixes_do_not_add_a_query_note() {
+    let f = fixture();
+    sessions::reindex(&f.ctx(), false).unwrap();
+    for query in [
+        "question AND neverseen",
+        "question NOT question",
+        "neverseen OR nonexistent",
+        "NEAR(question neverseen)",
+        "text : neverseen*",
+    ] {
+        let result = cli(&f, &["search", "--fts", "--", query]);
+        assert_eq!(result["sessions_matched"], 0, "{query}");
+        assert_eq!(result["absence_is_proof"], true, "{query}");
+        assert!(result.get("note").is_none(), "{result}");
+        assert_eq!(
+            without_timing(result),
+            without_timing(mcp_tool(&f, "search", json!({"query": query, "fts": true})).await)
+        );
+    }
+}
+
 #[test]
 fn oversized_regex_is_an_invalid_query_before_index_refresh_through_cli() {
     let f = fixture();
