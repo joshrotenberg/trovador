@@ -134,21 +134,21 @@ struct State {
 /// an automated session. Past sessions are read-only history: nothing here continues one.
 #[derive(Clone, Debug)]
 pub struct Sessions {
-    pub paths: trovador::paths::Paths,
+    pub paths: std::path::PathBuf,
 }
 
 impl Sessions {
     pub fn from_env() -> Self {
         Self {
-            paths: trovador::paths::Paths::from_env(),
+            paths: bottega_core::state::trovador_dir(),
         }
     }
 }
 
-fn to_trovador(backend: Backend) -> trovador::Backend {
+fn to_core(backend: Backend) -> bottega_core::Backend {
     match backend {
-        Backend::Claude => trovador::Backend::Claude,
-        Backend::Codex => trovador::Backend::Codex,
+        Backend::Claude => bottega_core::Backend::Claude,
+        Backend::Codex => bottega_core::Backend::Codex,
     }
 }
 
@@ -411,9 +411,9 @@ impl Manager {
             // resumes a session already recorded.
             if entry.spec.session_id.is_none()
                 && let (Some(sessions), Some(id)) = (&self.sessions, &session_id)
-                && let Err(e) = trovador::provenance::record_spawned(
+                && let Err(e) = bottega_core::provenance::record_spawned(
                     &sessions.paths,
-                    to_trovador(entry.spec.backend),
+                    to_core(entry.spec.backend),
                     id,
                 )
             {
@@ -563,11 +563,11 @@ impl Manager {
         if !self.redact {
             return (output, false);
         }
-        output.text = trovador::redact::redact_str(&output.text).into_owned();
+        output.text = bottega_core::redact::redact_str(&output.text).into_owned();
         let mut changed = false;
         if let Some(value) = output.structured_result.as_mut() {
             let before = value.clone();
-            trovador::redact::redact_value(value);
+            bottega_core::redact::redact_value(value);
             changed = *value != before;
         }
         (output, changed)
@@ -575,7 +575,7 @@ impl Manager {
 
     fn redacted<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
         if self.redact {
-            trovador::redact::redact_str(text)
+            bottega_core::redact::redact_str(text)
         } else {
             std::borrow::Cow::Borrowed(text)
         }

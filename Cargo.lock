@@ -138,6 +138,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc0b364ead1874514c8c2855ab558056ebfeb775653e7ae45ff72f28f8f3166c"
 
 [[package]]
+name = "bottega-core"
+version = "0.1.0"
+dependencies = [
+ "humantime",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1249,6 +1262,7 @@ name = "tosi"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bottega-core",
  "clap",
  "claude-wrapper",
  "codex-wrapper",
@@ -1262,7 +1276,6 @@ dependencies = [
  "tower-mcp",
  "tracing",
  "tracing-subscriber",
- "trovador",
  "uuid",
 ]
 
@@ -1395,6 +1408,7 @@ name = "trovador"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bottega-core",
  "clap",
  "claude-wrapper",
  "codex-wrapper",

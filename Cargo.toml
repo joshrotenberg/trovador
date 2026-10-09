@@ -1,7 +1,25 @@
 [workspace]
-members = ["crates/trovador", "crates/tosi"]
+members = ["crates/trovador", "crates/tosi", "crates/bottega-core"]
 resolver = "3"
 
 [profile.release]
 lto = "thin"
 strip = true
+
+[workspace.dependencies]
+bottega-core = { path = "crates/bottega-core" }
+clap = { version = "4.6.7", features = ["derive"] }
+claude-wrapper = "=0.14.4"
+codex-wrapper = "=0.4.4"
+humantime = "2.4.0"
+regex = "1.13.1"
+schemars = "1.2.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.21"
+tempfile = "3.27.0"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "fs", "sync"] }
+tower-mcp = "=0.23.2"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.27.0", features = ["v4"] }

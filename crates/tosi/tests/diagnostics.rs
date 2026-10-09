@@ -1,5 +1,8 @@
 #![cfg(unix)]
 
+#[path = "support/state.rs"]
+mod state;
+
 use std::{
     fs,
     io::Write,
@@ -424,7 +427,7 @@ async fn doctor_succeeds_for_authenticated_prereleases_even_inside_delegated_wor
         );
         fixture.set_version(backend, "0.158.0-alpha.2");
         for child_guard in [None, Some("TOSI_CHILD"), Some("TASK_RUNNERS_CHILD")] {
-            let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_tosi"));
+            let mut command = state::server_command(env!("CARGO_BIN_EXE_tosi"), fixture.dir.path());
             command
                 .args(["doctor", "--backend", name])
                 .env(override_name, &fixture.binary)
@@ -459,7 +462,7 @@ async fn doctor_emits_json_and_nonzero_status_when_auth_is_unavailable() {
     );
     let output = tokio::time::timeout(
         Duration::from_secs(5),
-        tokio::process::Command::new(env!("CARGO_BIN_EXE_tosi"))
+        state::server_command(env!("CARGO_BIN_EXE_tosi"), fixture.dir.path())
             .args(["doctor", "--backend", "claude"])
             .env("TOSI_CLAUDE_BIN", &fixture.binary)
             .env("ANTHROPIC_API_KEY", SECRET)
@@ -511,7 +514,7 @@ async fn doctor_honors_legacy_binary_overrides_only_when_the_primary_is_absent()
         let primary_key = format!("TOSI_{suffix}");
         let legacy_key = format!("TASK_RUNNERS_{suffix}");
         for scenario in ["legacy", "primary", "empty", "missing"] {
-            let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_tosi"));
+            let mut command = state::server_command(env!("CARGO_BIN_EXE_tosi"), fixture.dir.path());
             command
                 .args(["doctor", "--backend", name])
                 .env_remove(&primary_key)

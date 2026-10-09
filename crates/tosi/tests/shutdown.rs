@@ -1,5 +1,8 @@
 #![cfg(unix)]
 
+#[path = "support/state.rs"]
+mod state;
+
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -42,7 +45,7 @@ impl Server {
         )
         .unwrap();
         fs::set_permissions(&fake, fs::Permissions::from_mode(0o700)).unwrap();
-        let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_tosi"))
+        let mut child = state::server_command(env!("CARGO_BIN_EXE_tosi"), dir.path())
             .arg("--stdio")
             .env_remove("TOSI_CHILD")
             .env_remove("TASK_RUNNERS_CHILD")
@@ -274,8 +277,8 @@ async fn legacy_server_defaults_apply_only_when_primary_keys_are_absent() {
     }
 }
 
-fn clean_server_command() -> tokio::process::Command {
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_tosi"));
+fn clean_server_command(dir: &TempDir) -> tokio::process::Command {
+    let mut command = state::server_command(env!("CARGO_BIN_EXE_tosi"), dir.path());
     command
         .arg("--stdio")
         .stdin(Stdio::null())
@@ -298,7 +301,8 @@ async fn either_child_guard_rejects_startup_even_when_the_other_disagrees() {
         (Some("1"), Some(""), true),
         (Some("0"), Some("0"), false),
     ] {
-        let mut command = clean_server_command();
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = clean_server_command(&dir);
         if let Some(value) = primary {
             command.env("TOSI_CHILD", value);
         }
@@ -326,9 +330,10 @@ async fn empty_or_invalid_primary_settings_do_not_fall_back_to_legacy_values() {
         ("MAX_CONCURRENCY", "1", "must contain a valid number"),
     ] {
         for primary in ["", "invalid"] {
+            let dir = tempfile::tempdir().unwrap();
             let output = tokio::time::timeout(
                 TEST_TIMEOUT,
-                clean_server_command()
+                clean_server_command(&dir)
                     .env(format!("TOSI_{suffix}"), primary)
                     .env(format!("TASK_RUNNERS_{suffix}"), legacy)
                     .output(),

@@ -1,3 +1,5 @@
+mod state;
+
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
@@ -33,7 +35,7 @@ impl Client {
         let log_dir = tempfile::tempdir().map_err(|e| format!("create log directory: {e}"))?;
         let log_path = log_dir.path().join("server.log");
         let log = File::create(&log_path).map_err(|e| format!("create server log: {e}"))?;
-        let mut child = tokio::process::Command::new(binary.as_ref())
+        let mut child = state::server_command(binary.as_ref(), log_dir.path())
             .arg("--stdio")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

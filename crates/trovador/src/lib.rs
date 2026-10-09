@@ -14,7 +14,7 @@ pub mod mcp;
 pub mod output;
 pub mod paths;
 pub mod provenance;
-pub mod redact;
+pub use bottega_core::redact;
 pub mod runlog;
 pub mod sessions;
 pub mod summary;

@@ -38,4 +38,7 @@ for shim in plugins/*/bin/*; do
   "$shim" --version >/dev/null || fail "$shim --version"
 done
 
+python3 scripts/test-check-tool-names.py || fail "tool discovery regression tests"
+python3 scripts/check-tool-names.py || fail "tool names across servers"
+
 exit $status

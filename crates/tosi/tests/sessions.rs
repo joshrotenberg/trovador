@@ -4,6 +4,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use bottega_core::provenance;
 use serde_json::json;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -11,7 +12,6 @@ use tosi::{
     manager::{ContinueTask, Manager, Sessions, SpawnTask, Status, WaitTasks},
     types::{Backend, RunOutput, RunSpec, Runner},
 };
-use trovador::provenance;
 
 const NEW_ID: &str = "bbbbbbbb-0000-4000-8000-000000000004";
 
@@ -69,7 +69,7 @@ async fn finished(m: &Manager, id: &str) -> tosi::manager::TaskSnapshot {
 #[tokio::test]
 async fn a_session_tosi_starts_is_recorded_and_its_follow_ups_continue_it() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = trovador::paths::Paths::under(dir.path());
+    let paths = bottega_core::state::resolve_trovador_dir(None, dir.path());
     let runner = Arc::new(FakeRunner::default());
     let m = Manager::new(runner.clone(), Backend::Claude, 4).with_sessions(Sessions {
         paths: paths.clone(),
@@ -78,7 +78,7 @@ async fn a_session_tosi_starts_is_recorded_and_its_follow_ups_continue_it() {
     assert_eq!(finished(&m, &t.task_id).await.status, Status::Completed);
     assert!(provenance::is_spawned(
         &paths,
-        trovador::Backend::Codex,
+        bottega_core::Backend::Codex,
         NEW_ID
     ));
 

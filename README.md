@@ -9,7 +9,7 @@ and the catalog (`.claude-plugin/marketplace.json`).
 | `trovador` | Search, read, and summarize every past Claude Code and Codex session on the machine | [`crates/trovador`](crates/trovador) |
 | `tosi` | Delegate bounded tasks to local Claude and Codex workers: spawn, wait, continue, cancel | [`crates/tosi`](crates/tosi) |
 
-`crates/` is one Cargo workspace. tosi links trovador to record each session it starts,
+`crates/` is one Cargo workspace. Both services use bottega-core for the record of sessions tosi starts,
 so trovador's list and search include them. Past sessions are read-only history: agents
 read, search, and summarize them, and nothing in the toolkit continues or forks one. Both
 tools came from repositories of their own, now archived; their history is kept here.
@@ -132,3 +132,7 @@ scripts/check.sh
 each plugin when `claude` is installed, compares synced skills with their crates, and
 starts each shim with `--version`. CI runs all four on Linux, and the Rust checks on
 macOS.
+
+`crates/bottega-core` is the shared library for redaction, provenance, backend names,
+private state files, and state locations. Both services depend on it; state remains
+under `TROVADOR_HOME` or `~/.trovador`.

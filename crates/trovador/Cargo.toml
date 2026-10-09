@@ -1,4 +1,6 @@
 [package]
+# Bottega installs from source; none of its crates are published.
+publish = false
 name = "trovador"
 version = "0.1.0"
 edition = "2024"
@@ -18,25 +20,26 @@ name = "trovador"
 path = "src/main.rs"
 
 [dependencies]
+bottega-core.workspace = true
 anyhow = "1.0.104"
-clap = { version = "4.6.7", features = ["derive"] }
-claude-wrapper = "0.14"
-codex-wrapper = "0.4"
+clap = { workspace = true }
+claude-wrapper = { workspace = true }
+codex-wrapper = { workspace = true }
 futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
-humantime = "2.4.0"
+humantime = { workspace = true }
 memchr = "2.8.3"
-regex = "1.13.1"
+regex = { workspace = true }
 rusqlite = { version = "0.40.2", features = ["bundled", "functions"] }
-schemars = "1.2.2"
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-thiserror = "2.0.21"
-tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "fs", "sync"] }
-tower-mcp = "0.23.2"
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-uuid = { version = "1.27.0", features = ["v4"] }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tower-mcp = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3.27.0"
-tower-mcp = { version = "0.23.2", features = ["testing"] }
+tempfile = { workspace = true }
+tower-mcp = { workspace = true, features = ["testing"] }
