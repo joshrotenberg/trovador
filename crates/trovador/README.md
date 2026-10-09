@@ -68,7 +68,8 @@ local transcripts held 28 calls to spike's MCP tools across 6 sessions, all to `
 | `summarize`, `session://.../summary` | `summarize`, and the same resource |
 | `agent-sessions consent ...` | removed: nothing continues past sessions |
 | `diagnose` | `trovador doctor` (CLI) |
-| `canvass`, `digest`, `board`, `activity`, `windows`, `pin`, `pad`, `pad_set`, `standing_*`, `route`, `runners`, `usage`, `whoami`, `surface`, `operations`, `gc` | not ported |
+| `gc` | `trovador gc` (CLI only) |
+| `canvass`, `digest`, `board`, `activity`, `windows`, `pin`, `pad`, `pad_set`, `standing_*`, `route`, `runners`, `usage`, `whoami`, `surface`, `operations` | not ported |
 
 `docs/parity-2026-10-07.md` compares the two on this machine's archive, produced by
 `scripts/parity.py`.
@@ -230,8 +231,9 @@ sessions were subagents, 1,694 of them Codex `guardian` approval reviewers.
 
 ## Transcripts
 
-Records are `user`, `assistant`, `tool_call`, `tool_result`, `attachment`, `system`, or
-`omitted` with a category. Consecutive omitted records of one category collapse into one
+Records are `user`, `assistant`, `tool_call`, `tool_result`, `attachment`, `system`, `reasoning`,
+or `omitted` with a category. `reasoning` appears only when the provider kept readable text.
+Consecutive omitted records of one category collapse into one
 with a `count`. Text is capped per record (4,000 chars, 600 for tool calls and results) and
 per page (100,000 chars); a page says when it stopped early and where to continue.
 

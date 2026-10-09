@@ -69,7 +69,7 @@ bug, including spike issue numbers where the lesson came from there.
 ## Tests
 
 - `cargo test` is deterministic: no network, no model spend, fake provider binaries, fixture
-  archives under `tests/fixtures`.
+  archives built in temp directories by `tests/common/mod.rs`.
 - **The suite never touches real state.** Every path comes from a `Paths` value built from a
   temp directory. Nothing in the library falls back to the real home directory except
   `Paths::from_env`, which tests never call.

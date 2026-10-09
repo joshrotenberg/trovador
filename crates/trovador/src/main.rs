@@ -112,11 +112,12 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Remove cached summaries and run-log lines that will never be used again. A dry run
+    /// Remove cached summaries, leftover ask replies in outputs/, and run-log lines. A dry run
     /// unless --apply. The record of sessions the toolkit started is never touched.
     Gc {
-        /// Also remove summaries made, and run-log lines written, longer ago than this.
-        /// Cutoffs before 1970-01-01 UTC are clamped to that date.
+        /// Also remove summaries created, leftover ask replies in outputs/ modified, and
+        /// run-log lines written longer ago than this. Cutoffs before 1970-01-01 UTC are
+        /// clamped to that date.
         #[arg(long, default_value = "90d")]
         older_than: String,
         /// Remove; without this, only report.
