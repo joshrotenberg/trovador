@@ -97,7 +97,8 @@ async fn run() -> Result<(), tower_mcp::BoxError> {
         );
     }
     let runner = Arc::new(CliRunner::default());
-    let manager = Manager::new(runner.clone(), default_backend, max_concurrency);
+    let manager = Manager::new(runner.clone(), default_backend, max_concurrency)
+        .with_sessions(tosi::manager::Sessions::from_env());
     let mut transport = StdioTransport::new(router(manager.clone(), runner));
     let handle = transport.handle();
     let run = transport.run();

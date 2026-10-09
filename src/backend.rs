@@ -125,6 +125,9 @@ impl CliRunner {
         }
         if let Some(session_id) = &spec.session_id {
             command = command.resume(session_id);
+            if spec.fork {
+                command = command.fork_session();
+            }
         }
         if let Some(schema) = &spec.output_schema {
             command = command.json_schema(schema.to_string());
@@ -149,7 +152,13 @@ impl CliRunner {
         Ok(RunOutput {
             text: result.result,
             structured_result: result.extra.remove("structured_output"),
-            session_id: nonempty(Some(result.session_id)).or(spec.session_id),
+            // A fork must report its own new id. Falling back to the id it resumed would
+            // name the original session as the fork's (found in review of the fork change).
+            session_id: nonempty(Some(result.session_id)).or(if spec.fork {
+                None
+            } else {
+                spec.session_id
+            }),
             usage: json!({
                 "tokens": result.usage,
                 "cost_usd": result.cost_usd,

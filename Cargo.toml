@@ -19,6 +19,8 @@ tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 tower-mcp = "=0.23.2"
+# Session lookup, resumability, and consent: one implementation shared with trovador.
+trovador = { git = "https://github.com/joshrotenberg/trovador", branch = "main" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
