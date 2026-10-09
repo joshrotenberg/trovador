@@ -55,6 +55,44 @@ fn fixture() -> (Fixture, std::path::PathBuf) {
 }
 
 #[test]
+fn durations_before_the_epoch_keep_age_eligible_data_without_panicking() {
+    for older_than in [Duration::from_secs(86_400 * 365 * 100), Duration::MAX] {
+        for apply in [false, true] {
+            let (f, log) = fixture();
+            let before_log = std::fs::read_to_string(&log).unwrap();
+            let outputs = f.paths.home.join("outputs");
+            std::fs::create_dir_all(&outputs).unwrap();
+            let output = outputs.join("reply.txt");
+            std::fs::write(&output, "saved reply").unwrap();
+
+            let r = trovador::gc::gc(&f.ctx(), older_than, apply).unwrap();
+
+            assert_eq!(r.dry_run, !apply);
+            assert_eq!(
+                (
+                    r.summaries.session_gone,
+                    r.summaries.stale,
+                    r.summaries.old,
+                    r.summaries.kept
+                ),
+                (1, 1, 0, 2)
+            );
+            assert_eq!((r.outputs.old, r.outputs.kept), (0, 1));
+            assert_eq!((r.runs.removed, r.runs.kept), (0, 3));
+            assert_eq!(std::fs::read_to_string(&log).unwrap(), before_log);
+            assert_eq!(std::fs::read_to_string(&output).unwrap(), "saved reply");
+            for id in [ID_C, ID_D] {
+                assert!(
+                    summary::dir(&f.ctx())
+                        .join(format!("claude-{id}.json"))
+                        .exists()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn a_dry_run_reports_and_changes_nothing() {
     let (f, log) = fixture();
     let before_log = std::fs::read_to_string(&log).unwrap();

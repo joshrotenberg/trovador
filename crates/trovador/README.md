@@ -100,6 +100,10 @@ trovador doctor                              # providers, archives, index, prove
 trovador serve                               # MCP over stdio
 ```
 
+`gc --older-than` defaults to `90d`. Durations reaching before 1970-01-01 UTC
+use that date as the age cutoff. Stale summaries and summaries for deleted sessions
+are still eligible for removal regardless of age.
+
 Every command prints one JSON document. The MCP `sessions` tool takes the same inputs as an
 `action` of `list`, `show`, `transcript`, or `output`, and the `search` tool takes the same inputs as
 `trovador search`; both return the same JSON as the CLI. Resources

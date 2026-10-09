@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -58,7 +58,11 @@ pub struct RunCounts {
 }
 
 pub fn gc(ctx: &Ctx, older_than: Duration, apply: bool) -> std::io::Result<GcReport> {
-    let cutoff = SystemTime::now() - older_than;
+    // Issue #39: humantime cannot format pre-epoch times, and subtraction can overflow.
+    let cutoff = SystemTime::now()
+        .checked_sub(older_than)
+        .unwrap_or(UNIX_EPOCH)
+        .max(UNIX_EPOCH);
     let cutoff_text = humantime::format_rfc3339_millis(cutoff).to_string();
     let mut report = GcReport {
         dry_run: !apply,

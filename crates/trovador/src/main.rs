@@ -114,6 +114,7 @@ enum Command {
     /// unless --apply. The record of sessions the toolkit started is never touched.
     Gc {
         /// Also remove summaries made, and run-log lines written, longer ago than this.
+        /// Cutoffs before 1970-01-01 UTC are clamped to that date.
         #[arg(long, default_value = "90d")]
         older_than: String,
         /// Remove; without this, only report.
