@@ -1,0 +1,131 @@
+{
+  "tasks": [
+    {
+      "task_id": "d5c8e27c-1a7a-4427-a9e8-8e4ce9793c46",
+      "conversation_id": "fac8b6ab-6555-4c29-a67b-5bca5b709ff8",
+      "parent_task_id": null,
+      "backend": "claude",
+      "status": "completed",
+      "cwd": "/private/var/folders/kr/h7p0086n6vd22zbkwc2gvhjw0000gn/T/tosi-rename-review-abwmzp9r",
+      "model": null,
+      "access": "read_only",
+      "timeout_secs": 300,
+      "started_at_ms": 1791504750374,
+      "finished_at_ms": 1791504838564,
+      "result": "{\"summary\":\"The rename looks correct, and I found no P0, P1 or P2 problems. Inside this snapshot, nothing outside the intentional compatibility code still uses the old identity. Changed: crate, imports, binary, MCP server name, skill://tosi URIs, generated plugin/tosi, archive and manifest names, and the tosi-local catalog. The five tools and the rest of the server's behaviour are unchanged by the diff.\\n\\nEnvironment variables: config::lookup only falls back to TASK_RUNNERS_* when the TOSI_* name is unset. An empty, invalid or non-UTF-8 TOSI_* value stays in force and causes the error it should. Binary paths are passed through as OsString without loss.\\n\\nNested-server protection: either TOSI_CHILD=1 or TASK_RUNNERS_CHILD=1 blocks startup, whatever the other variable says. Both workers set both markers, so old and new servers block each other in both directions. Doctor is still not blocked inside a worker. Paid live tests still need an explicit opt-in; an empty or 0 TOSI_LIVE_TESTS does not fall back to the old name.\\n\\nI have three minor (P3) items: error messages that name only the TOSI_* variable, missing migration steps for the old local catalog, and a few gaps in the tests.\",\"findings\":[{\"priority\":\"P3\",\"file\":\"src/main.rs\",\"line\":74,\"title\":\"Startup errors name TOSI_* even when the bad value came from the old TASK_RUNNERS_* variable\",\"scenario\":\"An existing setup has TASK_RUNNERS_DEFAULT_BACKEND=Codex (or a bad TASK_RUNNERS_MAX_CONCURRENCY) and no TOSI_* variable. config::var falls back to the old value, which fails, and startup reports \\\"TOSI_DEFAULT_BACKEND must be claude or codex\\\" (or \\\"TOSI_MAX_CONCURRENCY must be between 1 and 32\\\").\",\"evidence\":\"main.rs:71-83 always names TOSI_* in the error text. config::var does not record which name supplied the value. A non-numeric MAX_CONCURRENCY goes through `value.parse()?` and gives a bare ParseIntError that names no variable (this last part is older behaviour).\",\"impact\":\"Not a safety problem: startup still fails as it should. But someone migrating is sent to a variable they never set, so the misconfiguration takes longer to find.\",\"suggested_correction\":\"Have config return the name that supplied the value (for example `Option<(String, OsString)>`), or mention both names in the message, e.g. \\\"TOSI_DEFAULT_BACKEND (or legacy TASK_RUNNERS_DEFAULT_BACKEND) must be claude or codex\\\". Optionally give the same treatment to the parse error.\"},{\"priority\":\"P3\",\"file\":\"README.md\",\"line\":114,\"title\":\"Migration steps don't cover removing the old task-runners-local catalog that pointed at the old directory\",\"scenario\":\"On each of the two machines, the old catalog task-runners-local was added from /…/task-runners. The source directory has now moved to /…/tosi. The user follows the migration section, adds tosi-local and removes the old plugin, but the task-runners-local catalog is still registered and points at a path that no longer exists.\",\"evidence\":\"README.md:110-118 says to install tosi@tosi-local and to \\\"remove or disable the old Task Runners installation\\\". It never mentions removing the old task-runners-local catalog registration. The install commands at lines 71-85 only add catalogs.\",\"impact\":\"Host catalog refreshes may show errors or stale entries for a path that no longer exists. If the old plugin's cached binary is still enabled, both servers could load the same five tools.\",\"suggested_correction\":\"Add one sentence plus the commands each host uses to uninstall task-runners@task-runners-local and remove the task-runners-local catalog, before or after adding tosi-local.\"},{\"priority\":\"P3\",\"file\":\"tests/shutdown.rs\",\"line\":309,\"title\":\"Some compatibility tests can pass for the wrong reason or test only a helper\",\"scenario\":\"Three gaps: (1) empty_or_invalid_primary_settings_do_not_fall_back_to_legacy_values only checks that startup failed, not why. (2) Live-test gating is tested through config::lookup with injected closures, not through the actual enabled() function in tests/live.rs. (3) No test checks that `tosi doctor` still runs with TOSI_CHILD=1 or TASK_RUNNERS_CHILD=1 set.\",\"evidence\":\"shutdown.rs:309-327 asserts only `!output.status.success()`. config.rs:686-705 calls lookup(), not live.rs enabled(). No test in tests/diagnostics.rs sets either CHILD variable for the doctor command.\",\"impact\":\"If a later change makes startup fail for an unrelated reason, or makes doctor obey the nested-server block, these tests would not notice. Today's code behaves correctly when read.\",\"suggested_correction\":\"Check stderr for the expected TOSI_DEFAULT_BACKEND / TOSI_MAX_CONCURRENCY message. Add a doctor test with TOSI_CHILD=1 (and one with TASK_RUNNERS_CHILD=1) that expects ready=true with a fake provider. Optionally move the live-gating decision into a pure function that takes a lookup closure and test it directly.\"}],\"coverage\":[\"The whole of CHANGES.diff (1568 lines), plus AGENTS.md, README.md (install and migration sections), Cargo.toml and .gitignore\",\"src/config.rs, src/main.rs (startup block for workers, default backend and concurrency settings, doctor path), src/backend.rs (binary overrides, CHILD markers on both workers, error messages), src/diagnostics.rs (which environment variables doctor reports)\",\"xtask/src/main.rs: package metadata, release-build artifact selection, plugin/manifest/MCP launch command generation, both catalogs, archive naming and layout\",\"tests/shutdown.rs (precedence, startup block, invalid-value tests), tests/backend.rs (both markers passed to workers), tests/diagnostics.rs (legacy binary-override test), tests/live.rs gating, tests/resources.rs, tests/support/mod.rs\",\"A case-insensitive grep for any leftover task-runners / task_runners / TASK_RUNNERS outside the diff: the only hits are the intended compatibility code and docs, plus a generic phrase \\\"existing task runners\\\" at ROADMAP.md:224\",\"The rules for old/new interoperation in both directions, and that paid live tests stay opt-in when TOSI_LIVE_TESTS is empty or 0\"],\"limitations\":[\"This was a source-only review. I did not run any tests, builds or scripts; I relied on the test results you supplied.\",\"I reviewed only this source copy. I could not inspect the renamed candidate binary, the generated plugin/tosi package or the archives, so I could not check that the installed runtime matches this source.\",\"I could not confirm the source-directory move from task-runners to tosi beyond what the docs say, because the copy is in a temporary directory with a different name.\",\"I only judged host-side marketplace and cache behaviour (Codex and Claude Code plugin management) from the README; I did not verify it.\",\"No paid live provider runs were done for this rename, so real nested-server blocking inside actual Claude and Codex workers was checked only by reading the code and the fake-provider tests.\",\"This review was run on the original installed Task Runners server, not the renamed one.\"]}",
+      "structured_result": {
+        "summary": "The rename looks correct, and I found no P0, P1 or P2 problems. Inside this snapshot, nothing outside the intentional compatibility code still uses the old identity. Changed: crate, imports, binary, MCP server name, skill://tosi URIs, generated plugin/tosi, archive and manifest names, and the tosi-local catalog. The five tools and the rest of the server's behaviour are unchanged by the diff.\n\nEnvironment variables: config::lookup only falls back to TASK_RUNNERS_* when the TOSI_* name is unset. An empty, invalid or non-UTF-8 TOSI_* value stays in force and causes the error it should. Binary paths are passed through as OsString without loss.\n\nNested-server protection: either TOSI_CHILD=1 or TASK_RUNNERS_CHILD=1 blocks startup, whatever the other variable says. Both workers set both markers, so old and new servers block each other in both directions. Doctor is still not blocked inside a worker. Paid live tests still need an explicit opt-in; an empty or 0 TOSI_LIVE_TESTS does not fall back to the old name.\n\nI have three minor (P3) items: error messages that name only the TOSI_* variable, missing migration steps for the old local catalog, and a few gaps in the tests.",
+        "findings": [
+          {
+            "priority": "P3",
+            "file": "src/main.rs",
+            "line": 74,
+            "title": "Startup errors name TOSI_* even when the bad value came from the old TASK_RUNNERS_* variable",
+            "scenario": "An existing setup has TASK_RUNNERS_DEFAULT_BACKEND=Codex (or a bad TASK_RUNNERS_MAX_CONCURRENCY) and no TOSI_* variable. config::var falls back to the old value, which fails, and startup reports \"TOSI_DEFAULT_BACKEND must be claude or codex\" (or \"TOSI_MAX_CONCURRENCY must be between 1 and 32\").",
+            "evidence": "main.rs:71-83 always names TOSI_* in the error text. config::var does not record which name supplied the value. A non-numeric MAX_CONCURRENCY goes through `value.parse()?` and gives a bare ParseIntError that names no variable (this last part is older behaviour).",
+            "impact": "Not a safety problem: startup still fails as it should. But someone migrating is sent to a variable they never set, so the misconfiguration takes longer to find.",
+            "suggested_correction": "Have config return the name that supplied the value (for example `Option<(String, OsString)>`), or mention both names in the message, e.g. \"TOSI_DEFAULT_BACKEND (or legacy TASK_RUNNERS_DEFAULT_BACKEND) must be claude or codex\". Optionally give the same treatment to the parse error."
+          },
+          {
+            "priority": "P3",
+            "file": "README.md",
+            "line": 114,
+            "title": "Migration steps don't cover removing the old task-runners-local catalog that pointed at the old directory",
+            "scenario": "On each of the two machines, the old catalog task-runners-local was added from /…/task-runners. The source directory has now moved to /…/tosi. The user follows the migration section, adds tosi-local and removes the old plugin, but the task-runners-local catalog is still registered and points at a path that no longer exists.",
+            "evidence": "README.md:110-118 says to install tosi@tosi-local and to \"remove or disable the old Task Runners installation\". It never mentions removing the old task-runners-local catalog registration. The install commands at lines 71-85 only add catalogs.",
+            "impact": "Host catalog refreshes may show errors or stale entries for a path that no longer exists. If the old plugin's cached binary is still enabled, both servers could load the same five tools.",
+            "suggested_correction": "Add one sentence plus the commands each host uses to uninstall task-runners@task-runners-local and remove the task-runners-local catalog, before or after adding tosi-local."
+          },
+          {
+            "priority": "P3",
+            "file": "tests/shutdown.rs",
+            "line": 309,
+            "title": "Some compatibility tests can pass for the wrong reason or test only a helper",
+            "scenario": "Three gaps: (1) empty_or_invalid_primary_settings_do_not_fall_back_to_legacy_values only checks that startup failed, not why. (2) Live-test gating is tested through config::lookup with injected closures, not through the actual enabled() function in tests/live.rs. (3) No test checks that `tosi doctor` still runs with TOSI_CHILD=1 or TASK_RUNNERS_CHILD=1 set.",
+            "evidence": "shutdown.rs:309-327 asserts only `!output.status.success()`. config.rs:686-705 calls lookup(), not live.rs enabled(). No test in tests/diagnostics.rs sets either CHILD variable for the doctor command.",
+            "impact": "If a later change makes startup fail for an unrelated reason, or makes doctor obey the nested-server block, these tests would not notice. Today's code behaves correctly when read.",
+            "suggested_correction": "Check stderr for the expected TOSI_DEFAULT_BACKEND / TOSI_MAX_CONCURRENCY message. Add a doctor test with TOSI_CHILD=1 (and one with TASK_RUNNERS_CHILD=1) that expects ready=true with a fake provider. Optionally move the live-gating decision into a pure function that takes a lookup closure and test it directly."
+          }
+        ],
+        "coverage": [
+          "The whole of CHANGES.diff (1568 lines), plus AGENTS.md, README.md (install and migration sections), Cargo.toml and .gitignore",
+          "src/config.rs, src/main.rs (startup block for workers, default backend and concurrency settings, doctor path), src/backend.rs (binary overrides, CHILD markers on both workers, error messages), src/diagnostics.rs (which environment variables doctor reports)",
+          "xtask/src/main.rs: package metadata, release-build artifact selection, plugin/manifest/MCP launch command generation, both catalogs, archive naming and layout",
+          "tests/shutdown.rs (precedence, startup block, invalid-value tests), tests/backend.rs (both markers passed to workers), tests/diagnostics.rs (legacy binary-override test), tests/live.rs gating, tests/resources.rs, tests/support/mod.rs",
+          "A case-insensitive grep for any leftover task-runners / task_runners / TASK_RUNNERS outside the diff: the only hits are the intended compatibility code and docs, plus a generic phrase \"existing task runners\" at ROADMAP.md:224",
+          "The rules for old/new interoperation in both directions, and that paid live tests stay opt-in when TOSI_LIVE_TESTS is empty or 0"
+        ],
+        "limitations": [
+          "This was a source-only review. I did not run any tests, builds or scripts; I relied on the test results you supplied.",
+          "I reviewed only this source copy. I could not inspect the renamed candidate binary, the generated plugin/tosi package or the archives, so I could not check that the installed runtime matches this source.",
+          "I could not confirm the source-directory move from task-runners to tosi beyond what the docs say, because the copy is in a temporary directory with a different name.",
+          "I only judged host-side marketplace and cache behaviour (Codex and Claude Code plugin management) from the README; I did not verify it.",
+          "No paid live provider runs were done for this rename, so real nested-server blocking inside actual Claude and Codex workers was checked only by reading the code and the fake-provider tests.",
+          "This review was run on the original installed Task Runners server, not the renamed one."
+        ]
+      },
+      "result_truncated": false,
+      "error": null,
+      "provider_session_id": "d479183e-669c-45b0-a93f-5c0750dcdac0",
+      "usage": {
+        "tokens": {
+          "input_tokens": 22,
+          "cached_input_tokens": 396089,
+          "cache_write_input_tokens": 57847,
+          "output_tokens": 8182,
+          "reasoning_output_tokens": null,
+          "total_tokens": null
+        },
+        "cost_usd": 0.7057218,
+        "num_turns": 19
+      }
+    },
+    {
+      "task_id": "148a1bee-6888-40d3-b746-feed60e21034",
+      "conversation_id": "a7693baa-5236-49ac-a21a-5909963c2b26",
+      "parent_task_id": null,
+      "backend": "codex",
+      "status": "completed",
+      "cwd": "/private/var/folders/kr/h7p0086n6vd22zbkwc2gvhjw0000gn/T/tosi-rename-review-abwmzp9r",
+      "model": null,
+      "access": "read_only",
+      "timeout_secs": 300,
+      "started_at_ms": 1791504747440,
+      "finished_at_ms": 1791504807035,
+      "result": "{\n  \"summary\": \"No actionable rename, migration, or introduced security regressions found in the supplied snapshot.\",\n  \"findings\": [],\n  \"coverage\": [\n    \"Read AGENTS.md, CHANGES.diff, and relevant source, tests, resources, and packaging configuration.\",\n    \"Checked crate/import/binary/MCP identities, five unchanged tool names, skill URIs, and remaining legacy references.\",\n    \"Verified primary environment precedence, absent-only legacy fallback, empty/invalid primary handling, and OsString preservation.\",\n    \"Verified either child marker blocks MCP startup, both adapters propagate both markers, and doctor remains available inside workers.\",\n    \"Checked live-test opt-in migration and preservation of adapter sandbox, authentication, schema, continuation, effort, and cleanup controls.\",\n    \"Checked metadata-derived plugin/archive paths, native launch manifests, tosi-local catalogs, migration instructions, and packaging assertions.\"\n  ],\n  \"limitations\": [\n    \"Read-only inspection only; no tests, builds, scripts, network access, edits, or delegation performed. Validation results are parent-supplied.\",\n    \"Snapshot SHA-256 c695f8f2ed18897918dc8b3c9efd24a1a0a1a9214678fff12c7c467166a2ff8b is supplied provenance, not independently verified.\",\n    \"Generated candidate packages and fresh installed-host behavior were not available for verification. This review runs through the original Task Runners server.\",\n    \"Paid provider integration cases have not been repeated for this rename.\",\n    \"The temporary snapshot cannot establish the actual source-directory move or host installation migration.\",\n    \"Non-Unicode coverage tests the lookup helper; explicit doctor-with-child-marker and end-to-end live-gating tests are not present.\"\n  ]\n}",
+      "structured_result": {
+        "summary": "No actionable rename, migration, or introduced security regressions found in the supplied snapshot.",
+        "findings": [],
+        "coverage": [
+          "Read AGENTS.md, CHANGES.diff, and relevant source, tests, resources, and packaging configuration.",
+          "Checked crate/import/binary/MCP identities, five unchanged tool names, skill URIs, and remaining legacy references.",
+          "Verified primary environment precedence, absent-only legacy fallback, empty/invalid primary handling, and OsString preservation.",
+          "Verified either child marker blocks MCP startup, both adapters propagate both markers, and doctor remains available inside workers.",
+          "Checked live-test opt-in migration and preservation of adapter sandbox, authentication, schema, continuation, effort, and cleanup controls.",
+          "Checked metadata-derived plugin/archive paths, native launch manifests, tosi-local catalogs, migration instructions, and packaging assertions."
+        ],
+        "limitations": [
+          "Read-only inspection only; no tests, builds, scripts, network access, edits, or delegation performed. Validation results are parent-supplied.",
+          "Snapshot SHA-256 c695f8f2ed18897918dc8b3c9efd24a1a0a1a9214678fff12c7c467166a2ff8b is supplied provenance, not independently verified.",
+          "Generated candidate packages and fresh installed-host behavior were not available for verification. This review runs through the original Task Runners server.",
+          "Paid provider integration cases have not been repeated for this rename.",
+          "The temporary snapshot cannot establish the actual source-directory move or host installation migration.",
+          "Non-Unicode coverage tests the lookup helper; explicit doctor-with-child-marker and end-to-end live-gating tests are not present."
+        ]
+      },
+      "result_truncated": false,
+      "error": null,
+      "provider_session_id": "01a11e01-0e2f-7e13-a819-05f47b2fa1b7",
+      "usage": {
+        "tokens": {
+          "input_tokens": 169208,
+          "cached_input_tokens": 118656,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 747,
+          "reasoning_output_tokens": 14,
+          "total_tokens": null
+        }
+      }
+    }
+  ]
+}

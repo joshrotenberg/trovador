@@ -1,0 +1,1567 @@
+--- before/AGENTS.md
++++ after/AGENTS.md
+@@ -1,6 +1,6 @@
+-# Task Runners development
++# Tosi development
+ 
+-## Review through Task Runners
++## Review through Tosi
+ 
+ Use this project through its own MCP tools to review substantive changes with
+ both Claude and Codex. The owner has authorized bounded paid runs on both
+@@ -19,7 +19,7 @@
+    is unavailable, use a bounded source copy and file hashes/change manifest;
+    do not initialize a repository merely for review. Keep the reviewed source
+    unchanged while reviewers work.
+-2. Use the host's installed Task Runners tools, discovering deferred tools as
++2. Use the host's installed Tosi tools, discovering deferred tools as
+    needed. Check a new or failing launch context with `check_environment`.
+    Missing tools or authentication must be diagnosed through the normal host
+    connection and approval flow. Do not improvise a sandboxed shell bridge or
+--- before/Cargo.lock
++++ after/Cargo.lock
+@@ -1043,7 +1043,7 @@
+ checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
+ 
+ [[package]]
+-name = "task-runners"
++name = "tosi"
+ version = "0.1.0"
+ dependencies = [
+  "async-trait",
+--- before/Cargo.toml
++++ after/Cargo.toml
+@@ -1,5 +1,5 @@
+ [package]
+-name = "task-runners"
++name = "tosi"
+ version = "0.1.0"
+ edition = "2024"
+ rust-version = "1.90"
+--- before/NAMING.md
++++ after/NAMING.md
+@@ -1,10 +1,15 @@
+-# Naming notes
++# Naming decision and research
+ 
+-Research snapshot: **2026-10-08**. **Zenta is the owner's front-runner; Tosi is a
+-strong contender. No rename has been selected.** The project remains Task Runners.
+-The Romanesco alternatives **Daje** and **Annamo** are also under consideration.
++**Selected 2026-10-08: Tosi**, formerly Task Runners, under the **Bottega**
++marketplace. Bottega is a separate marketplace-only repository; the tools remain
++in their own repositories. This decision is for personal use on two machines.
++It does not reserve a crate name, publish a plugin, or merge the tools into one binary.
+ 
+-## Shortlist
++Research snapshot: **2026-10-08**. Zenta was the earlier front-runner, with Tosi
++a strong contender; Daje and Annamo were also considered. The historical research,
++registry checks, and existing-name overlaps below are retained for context.
++
++## Historical shortlist
+ 
+ | Name | Verified meaning and limits | Naming fit |
+ | --- | --- | --- |
+@@ -64,5 +69,6 @@
+ - **ANNaMo** is an existing scientific RNA/DNA folding and assembly model.
+   [Primary paper](https://arxiv.org/abs/2311.03317)
+ 
+-These are research notes for choosing a personal project name. No package,
+-binary, plugin, repository, or installation has been renamed by this decision record.
++The selected project, binary, and plugin identity is `tosi`. Optional public
++GitHub hosting remains separate from registry or plugin publication. Earlier
++review records retain the Task Runners identity and paths of their reviewed snapshots.
+--- before/README.md
++++ after/README.md
+@@ -1,4 +1,4 @@
+-# Task Runners
++# Tosi
+ 
+ A personal local plugin that lets either Codex or Claude Code delegate tasks to
+ Claude and Codex through the same five MCP tools. One Rust executable owns the
+@@ -8,8 +8,14 @@
+ The source checkout's `ROADMAP.md` tracks routing,
+ delegation guidance, dogfood reviews, distribution work, and a second-round
+ orchestration candidate covering workflows, debate, consensus, and pipelines.
+-Naming candidates and verified meanings are recorded in the source checkout's
+-`NAMING.md`; Zenta is the current front-runner while the choice remains open.
++`NAMING.md` records the choice of Tosi and the earlier naming research.
++
++Tosi is intended for personal use on a home machine and laptop under the Bottega
++marketplace. Bottega is a separate marketplace-only repository; Tosi and trovador
++keep their own repositories and executables. The generated `tosi-local` catalog
++is a transitional standalone installation path, and this rename does not integrate
++it into Bottega. A public GitHub repository is optional and is separate from
++publishing to crates.io or a public plugin directory.
+ 
+ ## Build and package
+ 
+@@ -28,9 +34,9 @@
+ ```
+ 
+ `cargo xtask package` runs a locked release build and generates the plugin in
+-`plugin/task-runners/`, including its executable, manifests, skills, and local
++`plugin/tosi/`, including its executable, manifests, skills, and local
+ marketplace. It writes a single-directory archive to
+-`dist/task-runners-VERSION-HOST-OS-ARCH.tar.gz`. The default host is `both`.
++`dist/tosi-VERSION-HOST-OS-ARCH.tar.gz`. The default host is `both`.
+ The selected host controls plugin packaging; every binary still supports both
+ Claude and Codex workers. No host configuration changes occur.
+ 
+@@ -43,7 +49,7 @@
+ effect.
+ 
+ For packaging changes that do not require recompilation, use
+-`cargo xtask package --host both --skip-build --binary /path/to/task-runners`.
++`cargo xtask package --host both --skip-build --binary /path/to/tosi`.
+ These two options must be supplied together. The binary must be an existing
+ native executable; you are responsible for its freshness and architecture.
+ Relative binary paths resolve from your current working directory. The normal
+@@ -58,34 +64,34 @@
+ 
+ Package for the intended host, or use the default `both`, before installation.
+ The generated source checkout catalog and extracted archive each provide a local marketplace.
+-Use the absolute path to the source checkout, or to the extracted `task-runners`
++Use the absolute path to the source checkout, or to the extracted `tosi`
+ directory, as `PLUGIN_SOURCE`. This is a local catalog, not publication to a
+ remote marketplace.
+ 
+ Codex:
+ 
+ ```sh
+-PLUGIN_SOURCE=/absolute/path/to/task-runners
++PLUGIN_SOURCE=/absolute/path/to/tosi
+ codex plugin marketplace add "$PLUGIN_SOURCE"
+-codex plugin add task-runners@task-runners-local
++codex plugin add tosi@tosi-local
+ ```
+ 
+ Claude Code:
+ 
+ ```sh
+-PLUGIN_SOURCE=/absolute/path/to/task-runners
++PLUGIN_SOURCE=/absolute/path/to/tosi
+ claude plugin marketplace add "$PLUGIN_SOURCE"
+-claude plugin install task-runners@task-runners-local
++claude plugin install tosi@tosi-local
+ ```
+ 
+ Restart the host or start a new session after installation. A Claude Code session
+ can also load the built plugin directly without installing it:
+ 
+ ```sh
+-claude --plugin-dir /absolute/path/to/task-runners/plugin/task-runners
+-```
+-
+-For an extracted archive, pass its root `task-runners` directory to `--plugin-dir`.
++claude --plugin-dir /absolute/path/to/tosi/plugin/tosi
++```
++
++For an extracted archive, pass its root `tosi` directory to `--plugin-dir`.
+ The Codex package has a portable `plugin.json` and `mcp.json`. The Claude package
+ has `.claude-plugin/plugin.json` and `.mcp.json`. The `both` package includes both
+ formats, each launching the same bundled executable directly. These instructions target local desktop/CLI hosts;
+@@ -100,6 +106,22 @@
+ connection and refresh the host session. Do not substitute a shell or Python
+ stdio bridge: it creates a separate server with its own environment, sandbox,
+ and task registry.
++
++### Migrating from Task Runners
++
++The source directory is now `tosi` instead of `task-runners`, and the executable,
++plugin, and generated package use `tosi`. Rebuild from the renamed checkout and
++update explicit launch paths. Install `tosi@tosi-local` through the host's normal
++plugin management, then remove or disable the old Task Runners installation to
++avoid loading both servers. Refresh the host session and rediscover the tools;
++existing host caches do not rename themselves. MCP resource URIs now start with
++`skill://tosi/`.
++
++Finish or cancel active work before replacing a server: task IDs remain local to
++that process. Existing `TASK_RUNNERS_*` configuration variables remain accepted
++as legacy fallbacks, with the corresponding `TOSI_*` value taking precedence.
++Use the new names in new configurations. Historical review records retain the
++old identity and paths as evidence of the versions they reviewed.
+ 
+ ## Tools
+ 
+@@ -172,7 +194,7 @@
+ the wrappers do not provide reliable per-turn model/effort evidence. Usage totals
+ and `modelUsage` do not establish those fields. The server does not downgrade,
+ substitute, fall back, or retry, but provider CLIs can resolve aliases, apply caps,
+-or use defaults; Task Runners cannot attest the effective settings.
++or use defaults; Tosi cannot attest the effective settings.
+ 
+ `continue_task` keeps the original backend/model/effort and schema without
+ overrides. Start a fresh task to change them. Reusing an alias or an omitted
+@@ -180,7 +202,7 @@
+ For selection guidance, read the model and effort reference at
+ `resources/skills/delegate/references/model-effort.md` in the source checkout or
+ `skills/delegate/references/model-effort.md` in a generated plugin. MCP clients
+-can read `skill://task-runners/delegate/references/model-effort.md`.
++can read `skill://tosi/delegate/references/model-effort.md`.
+ 
+ ## Structured results
+ 
+@@ -223,18 +245,21 @@
+ 
+ Set these variables in the environment of the host that launches the MCP server,
+ or in its MCP server configuration. A GUI launched independently of your shell
+-may not inherit shell exports. Task Runners starts provider processes directly;
++may not inherit shell exports. Tosi starts provider processes directly;
+ it does not load a login shell, aliases, or shell initialization files.
+ 
+ | Variable | Default | Purpose |
+ | --- | --- | --- |
+-| `TASK_RUNNERS_DEFAULT_BACKEND` | `claude` | `claude` or `codex` when a task omits `backend`. |
+-| `TASK_RUNNERS_MAX_CONCURRENCY` | `4` | Maximum active tasks in this server process, from 1 to 32. Starts at capacity are rejected, not queued. |
+-| `TASK_RUNNERS_CLAUDE_BIN` | `claude` on `PATH` | Claude executable path. |
+-| `TASK_RUNNERS_CODEX_BIN` | `codex` on `PATH` | Codex executable path. |
++| `TOSI_DEFAULT_BACKEND` | `claude` | `claude` or `codex` when a task omits `backend`. |
++| `TOSI_MAX_CONCURRENCY` | `4` | Maximum active tasks in this server process, from 1 to 32. Starts at capacity are rejected, not queued. |
++| `TOSI_CLAUDE_BIN` | `claude` on `PATH` | Claude executable path. |
++| `TOSI_CODEX_BIN` | `codex` on `PATH` | Codex executable path. |
++
++Legacy `TASK_RUNNERS_*` counterparts are accepted when the corresponding `TOSI_*`
++variable is absent. Prefer `TOSI_*`; the new name takes precedence when both exist.
+ 
+ If executable discovery differs between hosts, configure absolute
+-`TASK_RUNNERS_CLAUDE_BIN` and `TASK_RUNNERS_CODEX_BIN` paths. Keep `HOME`,
++`TOSI_CLAUDE_BIN` and `TOSI_CODEX_BIN` paths. Keep `HOME`,
+ `CLAUDE_CONFIG_DIR`, and `CODEX_HOME` consistent with the intended CLI account in
+ the host environment when needed. Do not copy or export credentials to repair a
+ launch-context mismatch.
+@@ -251,8 +276,8 @@
+ omitting it checks both. The same diagnostic is available as JSON from the CLI:
+ 
+ ```sh
+-task-runners doctor
+-task-runners doctor --backend claude
++tosi doctor
++tosi doctor --backend claude
+ ```
+ 
+ The report includes executable path and version, nonsecret environment and
+@@ -289,7 +314,7 @@
+ Markdown resources in total.
+ 
+ The MCP server embeds that same text as readable resources, starting at
+-`skill://task-runners/delegate/SKILL.md`, so a client using only the executable
++`skill://tosi/delegate/SKILL.md`, so a client using only the executable
+ can discover the instructions. Plugin generation copies the same canonical
+ tree into `skills/`; it does not maintain a second version of the guidance.
+ Instruction changes require rebuilding the binary to refresh the embedded
+@@ -332,21 +357,22 @@
+ running tasks. There is no daemon, persistence service, scheduler, automatic
+ retry, or cross-machine resume.
+ 
+-Worker processes carry `TASK_RUNNERS_CHILD=1`; the server refuses to start inside
+-one, preventing recursive Task Runners delegation. Successful cancellation means
++Worker processes carry both `TOSI_CHILD=1` and the legacy `TASK_RUNNERS_CHILD=1`;
++the server recognizes either marker to prevent recursive delegation across old
++and new installations. Successful cancellation means
+ the adapter's cleanup returned, not that an arbitrary remote service rolled back
+ work. A `cancelling` task should be checked until it reaches a terminal state.
+ 
+ ## Package layout
+ 
+ ```text
+-task-runners/                    # generated --host both package
++tosi/                    # generated --host both package
+   plugin.json
+   mcp.json
+   .claude-plugin/plugin.json
+   .claude-plugin/marketplace.json
+   .mcp.json
+-  bin/task-runners
++  bin/tosi
+   skills/delegate/SKILL.md
+   skills/delegate/references/
+   README.md
+@@ -379,14 +405,14 @@
+ Rust live integration tests are disabled by default. Enable them explicitly:
+ 
+ ```sh
+-TASK_RUNNERS_LIVE_TESTS=1 cargo test --locked --test live -- --nocapture
++TOSI_LIVE_TESTS=1 cargo test --locked --test live -- --nocapture
+ ```
+ 
+ These tests launch the compiled server, communicate through MCP stdio, and run
+ the actual provider CLIs. They check structured read-only results, a resumed
+ conversation preserving its schema and provider session, and workspace writes.
+ Both providers run by default. To select one, set
+-`TASK_RUNNERS_LIVE_BACKENDS=claude` or `TASK_RUNNERS_LIVE_BACKENDS=codex`; the
++`TOSI_LIVE_BACKENDS=claude` or `TOSI_LIVE_BACKENDS=codex`; the
+ explicit value `claude,codex` selects both. A selected provider that is missing
+ or unauthenticated fails the test rather than being skipped.
+ 
+--- before/ROADMAP.md
++++ after/ROADMAP.md
+@@ -1,4 +1,4 @@
+-# Task Runners roadmap
++# Tosi roadmap
+ 
+ Status: completed milestones and proposed work, October 8, 2026. This records
+ direction and completion criteria, not a supported API or a release schedule.
+@@ -160,7 +160,7 @@
+ - Show small examples for a routine task, a difficult review, a user's high-effort
+   Opus policy, direct selection, and round robin. Treat model mappings as user
+   configuration rather than universal claims about model quality.
+-- Keep the distinction between native subagent inheritance and Task Runners
++- Keep the distinction between native subagent inheritance and Tosi
+   defaults explicit in new routing examples; callers still need to pass settings
+   when the MCP context does not supply them.
+ 
+@@ -187,19 +187,19 @@
+ Do not compile or download dependencies during normal MCP startup. An external
+ package-manager install or a pinned, verified bootstrapper can be considered later.
+ 
+-### Future packaging option: a shared private marketplace
+-
+-Consider distributing Task Runners and trovador as separate plugins in one
+-private/local marketplace. One native binary could expose separate subcommands,
+-each starting an MCP server with its own tool set; each plugin would select the
+-appropriate subcommand and carry its own instructions and host configuration.
+-Evaluate shared versioning, installation, and launch behavior when this packaging
+-direction becomes useful, while keeping the two tool surfaces distinct.
+-
+-The marketplace may remain private for the two personal machines; public
+-distribution is not a prerequisite. This is provisional packaging direction,
+-not a decision to rename, merge projects, or publish anything now. Current work
+-continues on tool functionality before taking on this packaging change.
++### Bottega marketplace direction
++
++Tosi is the selected tool name under Bottega. The existing `bottega` repository
++is marketplace-only: Tosi and trovador remain separate tools in their own
++repositories, with their own executables and plugin instructions. The rename
++uses the transitional `tosi-local` catalog; integrating with Bottega is separate
++work and is not part of the rename.
++
++The marketplace may remain private/local for the two personal machines. A public
++GitHub repository is optional and does not publish a crate or submit a plugin to
++a public directory. A shared binary exposing separate MCP subcommands remains
++a possible later design, not the current architecture or a commitment to merge
++the tools. Continue tool functionality before taking on that packaging change.
+ 
+ ## Second-round planning checkpoint
+ 
+--- before/resources/cli/after-help.txt
++++ after/resources/cli/after-help.txt
+@@ -1,12 +1,14 @@
+ Environment:
+-  TASK_RUNNERS_DEFAULT_BACKEND  claude (default) or codex
+-  TASK_RUNNERS_MAX_CONCURRENCY  1..32 (default 4)
+-  TASK_RUNNERS_CLAUDE_BIN       Claude CLI path
+-  TASK_RUNNERS_CODEX_BIN        Codex CLI path
+-  RUST_LOG                     stderr log filter
++  TOSI_DEFAULT_BACKEND  claude (default) or codex
++  TOSI_MAX_CONCURRENCY  1..32 (default 4)
++  TOSI_CLAUDE_BIN       Claude CLI path
++  TOSI_CODEX_BIN        Codex CLI path
++  RUST_LOG              stderr log filter
++
++Legacy TASK_RUNNERS_* configuration names remain fallbacks; TOSI_* takes precedence.
+ 
+ Tools: check_environment, spawn_task, wait_tasks, continue_task, cancel_task
+-Diagnostics: task-runners doctor [--backend claude|codex]
++Diagnostics: tosi doctor [--backend claude|codex]
+ Doctor prints non-secret JSON; exit 1 means a selected provider is not ready.
+ No login shell is loaded. Workers inherit the server's environment and sandbox.
+ Task records live for this server process; provider histories remain on disk.
+--- before/resources/mcp/instructions.md
++++ after/resources/mcp/instructions.md
+@@ -1,8 +1,8 @@
+-Task Runners delegates bounded local assignments to Claude or Codex CLI workers.
++Tosi delegates bounded local assignments to Claude or Codex CLI workers.
+ Use the host's installed tools, discovering deferred tools when needed. If tools
+ are unavailable, diagnose the connection or refresh the host session; do not
+ launch a shell/Python stdio bridge for ordinary delegation.
+-Read skill://task-runners/delegate/SKILL.md using resources/read for general
++Read skill://tosi/delegate/SKILL.md using resources/read for general
+ guidance, then retrieve only the relevant linked pattern: parallel tasks,
+ implementation and review, follow-up and cancellation, or model and effort.
+ resources/list discovers all five Markdown resources; they contain the same canonical skill and references
+--- before/resources/mcp/tools/spawn_task.md
++++ after/resources/mcp/tools/spawn_task.md
+@@ -9,7 +9,7 @@
+ backend/value and known exact-model combinations reject before start; aliases
+ and unknown models have unverified compatibility. Omitted model/effort use CLI
+ defaults and applicable environment, not this chat's settings. Do not automatically
+-select Codex ultra. Read skill://task-runners/delegate/references/model-effort.md
++select Codex ultra. Read skill://tosi/delegate/references/model-effort.md
+ for guidance. Task snapshots retain requested/selected settings; reported model
+ and effort are null, not inferred from usage. The server does not downgrade,
+ fall back, or retry; provider CLIs may resolve aliases or apply caps/defaults.
+--- before/resources/skills/delegate/SKILL.md
++++ after/resources/skills/delegate/SKILL.md
+@@ -1,11 +1,11 @@
+ ---
+ name: delegate
+-description: Delegate a bounded local task, independent review, or follow-up to Claude or Codex through Task Runners. Use when the user requests either provider or when a separate worker would help complete the authorized task.
++description: Delegate a bounded local task, independent review, or follow-up to Claude or Codex through Tosi. Use when the user requests either provider or when a separate worker would help complete the authorized task.
+ ---
+ 
+ # Delegate a task
+ 
+-Use Task Runners for a bounded assignment to a local Claude or Codex worker.
++Use Tosi for a bounded assignment to a local Claude or Codex worker.
+ Call this host's installed MCP tools, using tool discovery first if they are
+ deferred. If unavailable, diagnose the plugin connection or refresh the host
+ session; do not create a shell or Python stdio bridge for ordinary delegation.
+@@ -61,13 +61,13 @@
+ 
+ - [Parallel tasks](references/parallel-tasks.md): independent assignments,
+   ownership, collecting results, and capacity.
+-  `skill://task-runners/delegate/references/parallel-tasks.md`
++  `skill://tosi/delegate/references/parallel-tasks.md`
+ - [Implementation and review](references/implementation-review.md): edit scope,
+   provider access, validation, and an independent review.
+-  `skill://task-runners/delegate/references/implementation-review.md`
++  `skill://tosi/delegate/references/implementation-review.md`
+ - [Follow-up and cancellation](references/follow-up.md): conversation continuity,
+   waiting, result handling, and settled cancellation.
+-  `skill://task-runners/delegate/references/follow-up.md`
++  `skill://tosi/delegate/references/follow-up.md`
+ - [Model and effort](references/model-effort.md): user preferences, provider
+   support, omitted settings, and requested versus reported selection.
+-  `skill://task-runners/delegate/references/model-effort.md`
++  `skill://tosi/delegate/references/model-effort.md`
+--- before/resources/skills/delegate/references/follow-up.md
++++ after/resources/skills/delegate/references/follow-up.md
+@@ -45,6 +45,6 @@
+ `required` and `additionalProperties: false`.
+ 
+ Task IDs are local to the current server process. Provider CLI history may
+-remain on disk, but a new server cannot continue an old Task Runners task ID.
++remain on disk, but a new server cannot continue an old Tosi task ID.
+ Retain useful outcomes in the parent conversation or workspace before ending
+ the server session.
+--- before/resources/skills/delegate/references/implementation-review.md
++++ after/resources/skills/delegate/references/implementation-review.md
+@@ -29,7 +29,7 @@
+   directory does not establish a filesystem security boundary.
+ - Codex uses its native read-only or workspace-write sandbox with approval
+   requests disabled. User config and plugins are disabled; project or managed
+-  MCP configuration may still apply. Task Runners refuses nested server startup
++  MCP configuration may still apply. Tosi refuses nested server startup
+   in worker processes.
+ 
+ Both use authentication available to the installed CLI in the server's launch
+@@ -43,8 +43,8 @@
+ confirmed account-wide logout. The diagnostic makes no model call and exposes
+ credential-variable presence only, never their values.
+ 
+-Task Runners starts plain processes without loading a login shell. If necessary,
+-configure absolute `TASK_RUNNERS_CLAUDE_BIN` / `TASK_RUNNERS_CODEX_BIN` paths and
++Tosi starts plain processes without loading a login shell. If necessary,
++configure absolute `TOSI_CLAUDE_BIN` / `TOSI_CODEX_BIN` paths and
+ consistent `HOME`, `CLAUDE_CONFIG_DIR`, and `CODEX_HOME` in the host environment.
+ On macOS, Claude's credential storage uses Keychain, so access to that store is
+ one possible cause of different auth status across launch contexts. See
+--- before/resources/skills/delegate/references/model-effort.md
++++ after/resources/skills/delegate/references/model-effort.md
+@@ -48,7 +48,7 @@
+   token counts, or result prose.
+ 
+ The provider CLI may resolve aliases, apply defaults or caps, or otherwise change
+-effective settings. Task Runners does not downgrade, substitute, fall back, or
++effective settings. Tosi does not downgrade, substitute, fall back, or
+ retry on its own, and cannot attest the effective settings. `continue_task`
+ retains the original backend/model/effort and output schema, with no override.
+ Start a fresh task to change them. Reusing an alias or an omitted setting does
+--- before/resources/skills/delegate/references/parallel-tasks.md
++++ after/resources/skills/delegate/references/parallel-tasks.md
+@@ -10,7 +10,7 @@
+    files to inspect, constraints, and the evidence expected in the result.
+ 2. Use `read_only` for investigation. For authorized parallel edits, create
+    separate worktrees through the parent host's tools or assign disjoint file
+-   ownership. Task Runners does not create worktrees or merge changes.
++   ownership. Tosi does not create worktrees or merge changes.
+ 3. Call `spawn_task` once per assignment and retain every task ID. A task starts
+    immediately or is rejected when the concurrency limit is reached; it is not
+    queued. Wait for capacity before resubmitting a rejected assignment.
+@@ -28,6 +28,6 @@
+ 
+ Each host connection has its own task registry and concurrency limit. Records
+ last only for that server process. There is no shared daemon, cross-machine
+-handoff, automatic retry, or nested Task Runners server. A server retains at most
++handoff, automatic retry, or nested Tosi server. A server retains at most
+ 1024 task records; start a new server session after reaching that limit, once
+ the current work is settled and its results are retained elsewhere.
+--- before/scripts/package.sh
++++ after/scripts/package.sh
+@@ -1,5 +1,5 @@
+ #!/bin/sh
+ set -eu
+ 
+-task_runners_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+-exec cargo run --manifest-path "$task_runners_root/xtask/Cargo.toml" --package xtask -- package "$@"
++tosi_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
++exec cargo run --manifest-path "$tosi_root/xtask/Cargo.toml" --package xtask -- package "$@"
+--- before/scripts/smoke.py
++++ after/scripts/smoke.py
+@@ -29,7 +29,7 @@
+         threading.Thread(target=read, daemon=True).start()
+         self.initialization = self.rpc("initialize", {
+             "protocolVersion": "2025-11-25", "capabilities": {},
+-            "clientInfo": {"name": "task-runners-smoke", "version": "0.1.0"},
++            "clientInfo": {"name": "tosi-smoke", "version": "0.1.0"},
+         })
+         self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+ 
+@@ -148,28 +148,29 @@
+ 
+ def main():
+     parser = argparse.ArgumentParser(description=__doc__)
+-    parser.add_argument("--binary", type=Path, default=Path(__file__).resolve().parents[1] / "target/debug/task-runners")
++    parser.add_argument("--binary", type=Path, default=Path(__file__).resolve().parents[1] / "target/debug/tosi")
+     parser.add_argument("--live", action="store_true")
+     parser.add_argument("--edit-only", action="store_true", help="Test live workspace_write in a disposable directory instead of read/resume")
+     parser.add_argument("--backend", choices=["claude", "codex", "both"], default="both")
+     args = parser.parse_args()
+     backends = ["claude", "codex"] if args.backend == "both" else [args.backend]
+-    with tempfile.TemporaryDirectory(prefix="task-runners-smoke-") as tmp:
++    with tempfile.TemporaryDirectory(prefix="tosi-smoke-") as tmp:
+         directory = Path(tmp).resolve()
+         (directory / "context.txt").write_text("ORBIT-742\n")
+         env = dict(os.environ)
+         if not args.live:
+-            env["TASK_RUNNERS_CLAUDE_BIN"] = fake_cli(directory, "claude")
+-            env["TASK_RUNNERS_CODEX_BIN"] = fake_cli(directory, "codex")
++            env["TOSI_CLAUDE_BIN"] = fake_cli(directory, "claude")
++            env["TOSI_CODEX_BIN"] = fake_cli(directory, "codex")
+         client = Client(args.binary.resolve(), env, directory)
+         try:
++            assert client.initialization["serverInfo"]["name"] == "tosi"
+             names = {tool["name"] for tool in client.rpc("tools/list")["tools"]}
+             assert names == {"check_environment", "spawn_task", "wait_tasks", "continue_task", "cancel_task"}, names
+             print("PASS MCP initialize and five-tool discovery", flush=True)
+-            skill_uri = "skill://task-runners/delegate/SKILL.md"
++            skill_uri = "skill://tosi/delegate/SKILL.md"
+             resources = client.rpc("resources/list")["resources"]
+             assert skill_uri in {resource["uri"] for resource in resources}
+-            effort_uri = "skill://task-runners/delegate/references/model-effort.md"
++            effort_uri = "skill://tosi/delegate/references/model-effort.md"
+             assert len(resources) == 5, resources
+             assert effort_uri in {resource["uri"] for resource in resources}
+             assert skill_uri in client.initialization.get("instructions", "")
+--- before/src/backend.rs
++++ after/src/backend.rs
+@@ -20,7 +20,7 @@
+ use tokio_util::sync::CancellationToken;
+ 
+ use crate::{
+-    selection,
++    config, selection,
+     types::{AccessMode, Backend, Effort, RunOutput, RunSpec, Runner},
+ };
+ 
+@@ -29,8 +29,9 @@
+ 
+ /// Runs installed provider CLIs using their existing authentication.
+ ///
+-/// `TASK_RUNNERS_CLAUDE_BIN` and `TASK_RUNNERS_CODEX_BIN` override executable
+-/// discovery. They are read at construction, not from task input.
++/// `TOSI_CLAUDE_BIN` and `TOSI_CODEX_BIN` override executable
++/// discovery, with legacy TASK_RUNNERS_* fallbacks when absent. They are read
++/// at construction, not from task input.
+ #[derive(Clone, Debug)]
+ pub struct CliRunner {
+     claude_binary: Option<PathBuf>,
+@@ -47,8 +48,8 @@
+     /// Use executable overrides from the environment, falling back to PATH.
+     pub fn new() -> Self {
+         Self {
+-            claude_binary: std::env::var_os("TASK_RUNNERS_CLAUDE_BIN").map(PathBuf::from),
+-            codex_binary: std::env::var_os("TASK_RUNNERS_CODEX_BIN").map(PathBuf::from),
++            claude_binary: config::var_os("CLAUDE_BIN").map(PathBuf::from),
++            codex_binary: config::var_os("CODEX_BIN").map(PathBuf::from),
+         }
+     }
+ 
+@@ -92,6 +93,7 @@
+         let client = Claude::builder()
+             .binary(self.resolved_binary(Backend::Claude)?)
+             .working_dir(&spec.cwd)
++            .env("TOSI_CHILD", "1")
+             .env("TASK_RUNNERS_CHILD", "1")
+             .timeout_secs(spec.timeout_secs)
+             .kill_grace(TERMINATION_GRACE)
+@@ -160,7 +162,7 @@
+         // Keep schema and final-output files alive through awaited child cleanup.
+         // Each turn gets fresh paths, including resumed conversations.
+         let artifacts = tempfile::Builder::new()
+-            .prefix("task-runners-codex-")
++            .prefix("tosi-codex-")
+             .tempdir()
+             .map_err(|error| format!("cannot create Codex output directory: {error}"))?;
+         let final_path = artifacts.path().join("final-message.txt");
+@@ -177,6 +179,7 @@
+         let client = Codex::builder()
+             .binary(self.resolved_binary(Backend::Codex)?)
+             .working_dir(&spec.cwd)
++            .env("TOSI_CHILD", "1")
+             .env("TASK_RUNNERS_CHILD", "1")
+             .timeout_secs(spec.timeout_secs)
+             .termination_grace(TERMINATION_GRACE)
+@@ -277,7 +280,7 @@
+ 
+ fn claude_build_error(error: claude_wrapper::Error) -> String {
+     if matches!(error, claude_wrapper::Error::NotFound) {
+-        missing_binary_error("Claude", "TASK_RUNNERS_CLAUDE_BIN")
++        missing_binary_error("Claude", "TOSI_CLAUDE_BIN")
+     } else {
+         error.to_string()
+     }
+@@ -285,7 +288,7 @@
+ 
+ fn codex_build_error(error: codex_wrapper::Error) -> String {
+     if matches!(error, codex_wrapper::Error::NotFound) {
+-        missing_binary_error("Codex", "TASK_RUNNERS_CODEX_BIN")
++        missing_binary_error("Codex", "TOSI_CODEX_BIN")
+     } else {
+         error.to_string()
+     }
+@@ -295,7 +298,7 @@
+     format!(
+         "{provider} executable was not found on the worker host's PATH. Set \
+          {override_name} to its executable path or check the host PATH, then run \
+-         check_environment or `task-runners doctor`."
++         check_environment or `tosi doctor`."
+     )
+ }
+ 
+@@ -304,7 +307,7 @@
+         Some(claude_wrapper::auth::AuthErrorKind::RateLimit) => format!(
+             "Claude reported a rate or usage limit in this worker context \
+              (rate_limit; executable: {}). Check the provider's usage or billing \
+-             limits; run check_environment or `task-runners doctor` to inspect \
++             limits; run check_environment or `tosi doctor` to inspect \
+              this launch context.",
+             binary.display()
+         ),
+@@ -324,7 +327,7 @@
+ fn auth_context_error(provider: &str, binary: &Path, kind: &str) -> String {
+     format!(
+         "{provider} authentication is unavailable in this worker launch context \
+-         ({kind}; executable: {}). Run check_environment or `task-runners doctor` \
++         ({kind}; executable: {}). Run check_environment or `tosi doctor` \
+          and compare with your normal terminal or host environment. An inherited \
+          sandbox may hide the macOS Keychain; this does not establish that you \
+          are logged out.",
+--- before/src/config.rs
++++ after/src/config.rs
+@@ -0,0 +1,72 @@
++//! Environment compatibility for the Task Runners to Tosi rename.
++
++use std::{env, ffi::OsString};
++
++/// Read a TOSI_* value, using TASK_RUNNERS_* only when the primary key is absent.
++/// Empty and non-Unicode primary values remain authoritative.
++pub fn var_os(suffix: &str) -> Option<OsString> {
++    lookup(suffix, |name| env::var_os(name))
++}
++
++/// Read a text setting without falling back after an invalid primary value.
++pub fn var(suffix: &str) -> Result<String, env::VarError> {
++    var_os(suffix)
++        .ok_or(env::VarError::NotPresent)?
++        .into_string()
++        .map_err(env::VarError::NotUnicode)
++}
++
++/// Either generation's marker blocks nested servers, independently of precedence.
++pub fn is_delegated_child() -> bool {
++    ["TOSI_CHILD", "TASK_RUNNERS_CHILD"]
++        .iter()
++        .any(|name| env::var_os(name).is_some_and(|value| value == "1"))
++}
++
++fn lookup(suffix: &str, get: impl Fn(&str) -> Option<OsString>) -> Option<OsString> {
++    get(&format!("TOSI_{suffix}")).or_else(|| get(&format!("TASK_RUNNERS_{suffix}")))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn live_test_opt_in_and_backend_selection_keep_primary_precedence() {
++        for suffix in ["LIVE_TESTS", "LIVE_BACKENDS"] {
++            let legacy = if suffix == "LIVE_TESTS" {
++                "1"
++            } else {
++                "claude"
++            };
++            for primary in [None, Some(""), Some("0"), Some("invalid")] {
++                let value = lookup(suffix, |key| {
++                    if key.starts_with("TOSI_") {
++                        primary.map(OsString::from)
++                    } else {
++                        Some(OsString::from(legacy))
++                    }
++                });
++                assert_eq!(value, Some(OsString::from(primary.unwrap_or(legacy))));
++            }
++        }
++    }
++
++    #[cfg(unix)]
++    #[test]
++    fn binary_overrides_preserve_non_unicode_paths_for_both_names() {
++        use std::os::unix::ffi::OsStringExt;
++
++        let path = OsString::from_vec(b"/tmp/provider-\xff".to_vec());
++        for primary_exists in [false, true] {
++            let value = lookup("CLAUDE_BIN", |key| {
++                if key.starts_with("TOSI_") == primary_exists {
++                    Some(path.clone())
++                } else {
++                    None
++                }
++            });
++            assert_eq!(value, Some(path.clone()));
++        }
++    }
++}
+--- before/src/lib.rs
++++ after/src/lib.rs
+@@ -1,4 +1,5 @@
+ pub mod backend;
++pub mod config;
+ pub mod diagnostics;
+ pub mod manager;
+ mod output;
+--- before/src/main.rs
++++ after/src/main.rs
+@@ -1,8 +1,8 @@
+ use std::{env, sync::Arc, time::Duration};
+ 
+ use clap::{Parser, Subcommand};
+-use task_runners::{
+-    backend::CliRunner, diagnostics::check_environment, manager::Manager, server::router,
++use tosi::{
++    backend::CliRunner, config, diagnostics::check_environment, manager::Manager, server::router,
+     types::Backend,
+ };
+ use tower_mcp::StdioTransport;
+@@ -58,8 +58,8 @@
+ }
+ 
+ async fn run() -> Result<(), tower_mcp::BoxError> {
+-    if env::var("TASK_RUNNERS_CHILD").as_deref() == Ok("1") {
+-        return Err("task-runners cannot start inside a delegated worker".into());
++    if config::is_delegated_child() {
++        return Err("tosi cannot start inside a delegated worker".into());
+     }
+     tracing_subscriber::fmt()
+         .with_writer(std::io::stderr)
+@@ -68,16 +68,18 @@
+         )
+         .with_ansi(false)
+         .init();
+-    let default_backend = match env::var("TASK_RUNNERS_DEFAULT_BACKEND").as_deref() {
++    let default_backend = match config::var("DEFAULT_BACKEND").as_deref() {
+         Ok("claude") | Err(env::VarError::NotPresent) => Backend::Claude,
+         Ok("codex") => Backend::Codex,
+-        _ => return Err("TASK_RUNNERS_DEFAULT_BACKEND must be claude or codex".into()),
++        _ => return Err("TOSI_DEFAULT_BACKEND must be claude or codex".into()),
+     };
+-    let max_concurrency: usize = env::var("TASK_RUNNERS_MAX_CONCURRENCY")
+-        .unwrap_or_else(|_| "4".into())
+-        .parse()?;
++    let max_concurrency: usize = match config::var("MAX_CONCURRENCY") {
++        Ok(value) => value.parse()?,
++        Err(env::VarError::NotPresent) => 4,
++        Err(_) => return Err("TOSI_MAX_CONCURRENCY must contain a valid number".into()),
++    };
+     if !(1..=32).contains(&max_concurrency) {
+-        return Err("TASK_RUNNERS_MAX_CONCURRENCY must be between 1 and 32".into());
++        return Err("TOSI_MAX_CONCURRENCY must be between 1 and 32".into());
+     }
+     let runner = Arc::new(CliRunner::default());
+     let manager = Manager::new(runner.clone(), default_backend, max_concurrency);
+--- before/src/server.rs
++++ after/src/server.rs
+@@ -8,7 +8,7 @@
+ use crate::{backend::CliRunner, diagnostics::check_environment, types::Backend};
+ 
+ /// The canonical delegation skill is available with or without plugin packaging.
+-pub const DELEGATION_SKILL_URI: &str = "skill://task-runners/delegate/SKILL.md";
++pub const DELEGATION_SKILL_URI: &str = "skill://tosi/delegate/SKILL.md";
+ 
+ const DELEGATION_SKILL: &str = include_str!("../resources/skills/delegate/SKILL.md");
+ 
+@@ -71,7 +71,7 @@
+         .build();
+ 
+     McpRouter::new()
+-        .server_info("task-runners", env!("CARGO_PKG_VERSION"))
++        .server_info("tosi", env!("CARGO_PKG_VERSION"))
+         .instructions(SERVER_INSTRUCTIONS.trim())
+         .resources(skill_resources())
+         .tool(spawn)
+@@ -85,25 +85,25 @@
+     [
+         ResourceBuilder::new(DELEGATION_SKILL_URI)
+             .name("delegate")
+-            .description("General Task Runners guidance and links to detailed patterns. Read first. The same canonical SKILL.md is included in the plugin package.")
++            .description("General Tosi guidance and links to detailed patterns. Read first. The same canonical SKILL.md is included in the plugin package.")
+             .mime_type("text/markdown")
+             .text(DELEGATION_SKILL),
+-        ResourceBuilder::new("skill://task-runners/delegate/references/parallel-tasks.md")
++        ResourceBuilder::new("skill://tosi/delegate/references/parallel-tasks.md")
+             .name("parallel-tasks")
+             .description("Read when delegating independent parallel assignments: bounded briefs, edit ownership, capacity, and collecting outcomes. Also included as a reference in the plugin package.")
+             .mime_type("text/markdown")
+             .text(include_str!("../resources/skills/delegate/references/parallel-tasks.md")),
+-        ResourceBuilder::new("skill://task-runners/delegate/references/implementation-review.md")
++        ResourceBuilder::new("skill://tosi/delegate/references/implementation-review.md")
+             .name("implementation-review")
+             .description("Read when assigning implementation and independent review: provider access limits, repository instructions, diffs, and validation. Also included as a reference in the plugin package.")
+             .mime_type("text/markdown")
+             .text(include_str!("../resources/skills/delegate/references/implementation-review.md")),
+-        ResourceBuilder::new("skill://task-runners/delegate/references/follow-up.md")
++        ResourceBuilder::new("skill://tosi/delegate/references/follow-up.md")
+             .name("follow-up")
+             .description("Read when continuing or stopping work: latest-turn continuity, wait timeouts, settled cancellation, truncated results, and server lifetime. Also included as a reference in the plugin package.")
+             .mime_type("text/markdown")
+             .text(include_str!("../resources/skills/delegate/references/follow-up.md")),
+-        ResourceBuilder::new("skill://task-runners/delegate/references/model-effort.md")
++        ResourceBuilder::new("skill://tosi/delegate/references/model-effort.md")
+             .name("model-effort")
+             .description("Read when selecting backend, model, or effort: user preferences, provider support, omitted settings, continuation, and requested versus reported selection. Also included as a reference in the plugin package.")
+             .mime_type("text/markdown")
+--- before/tests/backend.rs
++++ after/tests/backend.rs
+@@ -3,12 +3,12 @@
+ use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command, time::Duration};
+ 
+ use serde_json::{Value, json};
+-use task_runners::{
++use tempfile::TempDir;
++use tokio_util::sync::CancellationToken;
++use tosi::{
+     backend::CliRunner,
+     types::{AccessMode, Backend, Effort, RunSpec, Runner},
+ };
+-use tempfile::TempDir;
+-use tokio_util::sync::CancellationToken;
+ 
+ const CLAUDE_SUCCESS: &str = r#"{"type":"result","subtype":"success","result":"done","session_id":"claude-session","is_error":false,"total_cost_usd":0.01,"usage":{"input_tokens":5,"output_tokens":3}}"#;
+ const CODEX_SUCCESS: &str = concat!(
+@@ -30,6 +30,7 @@
+             r#"#!/bin/sh
+ fixture=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ printf '%s\n' "$@" > "$fixture/args"
++printf '%s\n' "$TOSI_CHILD" "$TASK_RUNNERS_CHILD" > "$fixture/child-guards"
+ previous=""
+ final_output=""
+ for argument in "$@"; do
+@@ -112,6 +113,24 @@
+ fn has_pair(args: &[String], first: &str, second: &str) -> bool {
+     args.windows(2)
+         .any(|pair| pair[0] == first && pair[1] == second)
++}
++
++#[tokio::test]
++async fn both_worker_backends_propagate_new_and_legacy_child_guards() {
++    for (backend, response) in [
++        (Backend::Claude, CLAUDE_SUCCESS),
++        (Backend::Codex, CODEX_SUCCESS),
++    ] {
++        let fake = FakeCli::new(backend, response, false);
++        fake.runner
++            .run(fake.spec(backend), CancellationToken::new())
++            .await
++            .unwrap();
++        assert_eq!(
++            fs::read_to_string(fake.dir.path().join("child-guards")).unwrap(),
++            "1\n1\n"
++        );
++    }
+ }
+ 
+ #[test]
+@@ -163,7 +182,7 @@
+             "{error}"
+         );
+         assert!(error.contains("check_environment"), "{error}");
+-        assert!(error.contains("task-runners doctor"), "{error}");
++        assert!(error.contains("tosi doctor"), "{error}");
+         assert!(error.contains("inherited sandbox"), "{error}");
+         assert!(error.contains("normal terminal or host"), "{error}");
+         assert!(!error.contains(canary), "{error}");
+--- before/tests/diagnostics.rs
++++ after/tests/diagnostics.rs
+@@ -11,14 +11,14 @@
+ };
+ 
+ use serde_json::{Value, json};
+-use task_runners::{
++use tempfile::TempDir;
++use tosi::{
+     backend::CliRunner,
+     diagnostics::{Authentication, check_environment},
+     manager::Manager,
+     server::router,
+     types::Backend,
+ };
+-use tempfile::TempDir;
+ use tower_mcp::testing::TestClient;
+ use tracing::instrument::WithSubscriber;
+ 
+@@ -413,8 +413,8 @@
+ #[tokio::test]
+ async fn doctor_succeeds_for_authenticated_recognized_prereleases() {
+     for (backend, name, override_name) in [
+-        (Backend::Claude, "claude", "TASK_RUNNERS_CLAUDE_BIN"),
+-        (Backend::Codex, "codex", "TASK_RUNNERS_CODEX_BIN"),
++        (Backend::Claude, "claude", "TOSI_CLAUDE_BIN"),
++        (Backend::Codex, "codex", "TOSI_CODEX_BIN"),
+     ] {
+         let fixture = Fixture::new(
+             backend,
+@@ -425,7 +425,7 @@
+         fixture.set_version(backend, "0.158.0-alpha.2");
+         let output = tokio::time::timeout(
+             Duration::from_secs(5),
+-            tokio::process::Command::new(env!("CARGO_BIN_EXE_task-runners"))
++            tokio::process::Command::new(env!("CARGO_BIN_EXE_tosi"))
+                 .args(["doctor", "--backend", name])
+                 .env(override_name, &fixture.binary)
+                 .kill_on_drop(true)
+@@ -454,9 +454,9 @@
+     );
+     let output = tokio::time::timeout(
+         Duration::from_secs(5),
+-        tokio::process::Command::new(env!("CARGO_BIN_EXE_task-runners"))
++        tokio::process::Command::new(env!("CARGO_BIN_EXE_tosi"))
+             .args(["doctor", "--backend", "claude"])
+-            .env("TASK_RUNNERS_CLAUDE_BIN", &fixture.binary)
++            .env("TOSI_CLAUDE_BIN", &fixture.binary)
+             .env("ANTHROPIC_API_KEY", SECRET)
+             .env("CODEX_SANDBOX", "test-sandbox")
+             .env("CODEX_SANDBOX_NETWORK_DISABLED", "1")
+@@ -485,3 +485,61 @@
+     assert!(!String::from_utf8_lossy(&output.stdout).contains(SECRET));
+     assert!(!String::from_utf8_lossy(&output.stderr).contains(SECRET));
+ }
++
++#[tokio::test]
++async fn doctor_honors_legacy_binary_overrides_only_when_the_primary_is_absent() {
++    for (backend, name, suffix, auth) in [
++        (
++            Backend::Claude,
++            "claude",
++            "CLAUDE_BIN",
++            r#"{"loggedIn":true}"#,
++        ),
++        (
++            Backend::Codex,
++            "codex",
++            "CODEX_BIN",
++            "Logged in using ChatGPT\n",
++        ),
++    ] {
++        let fixture = Fixture::new(backend, auth, "", 0);
++        let primary_key = format!("TOSI_{suffix}");
++        let legacy_key = format!("TASK_RUNNERS_{suffix}");
++        for scenario in ["legacy", "primary", "empty", "missing"] {
++            let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_tosi"));
++            command
++                .args(["doctor", "--backend", name])
++                .env_remove(&primary_key)
++                .env(&legacy_key, &fixture.binary)
++                .kill_on_drop(true);
++            match scenario {
++                "primary" => {
++                    command
++                        .env(&primary_key, &fixture.binary)
++                        .env(&legacy_key, fixture.dir.path().join("missing-legacy"));
++                }
++                "empty" => {
++                    command.env(&primary_key, "");
++                }
++                "missing" => {
++                    command.env(&primary_key, fixture.dir.path().join("missing-primary"));
++                }
++                _ => {}
++            }
++            let output = tokio::time::timeout(Duration::from_secs(5), command.output())
++                .await
++                .unwrap()
++                .unwrap();
++            let report: Value = serde_json::from_slice(&output.stdout).unwrap();
++            let expected = matches!(scenario, "legacy" | "primary");
++            assert_eq!(output.status.success(), expected, "{name}: {scenario}");
++            assert_eq!(report["ready"], expected, "{name}: {scenario}");
++            if expected {
++                assert_eq!(
++                    report["providers"][0]["executable"],
++                    fixture.binary.to_str().unwrap()
++                );
++            }
++        }
++    }
++}
+--- before/tests/lifecycle.rs
++++ after/tests/lifecycle.rs
+@@ -2,12 +2,12 @@
+ 
+ use async_trait::async_trait;
+ use serde_json::{Value, json};
+-use task_runners::{
++use tokio::sync::Mutex;
++use tokio_util::sync::CancellationToken;
++use tosi::{
+     manager::{CancelTask, ContinueTask, Manager, SpawnTask, Status, WaitTasks},
+     types::{Backend, Effort, RunOutput, RunSpec, Runner},
+ };
+-use tokio::sync::Mutex;
+-use tokio_util::sync::CancellationToken;
+ 
+ #[derive(Default)]
+ struct FakeRunner {
+@@ -57,7 +57,7 @@
+     }
+ }
+ 
+-async fn wait(manager: &Manager, id: &str) -> task_runners::manager::TaskSnapshot {
++async fn wait(manager: &Manager, id: &str) -> tosi::manager::TaskSnapshot {
+     manager
+         .wait_tasks(WaitTasks {
+             task_ids: vec![id.into()],
+--- before/tests/live.rs
++++ after/tests/live.rs
+@@ -11,20 +11,22 @@
+ type TestResult<T = ()> = Result<T, String>;
+ 
+ fn enabled(backend: &str) -> TestResult<bool> {
+-    match env::var("TASK_RUNNERS_LIVE_TESTS").as_deref() {
++    match tosi::config::var("LIVE_TESTS").as_deref() {
+         Err(env::VarError::NotPresent) | Ok("0") => return Ok(false),
+         Ok("1") => {}
+-        _ => return Err("TASK_RUNNERS_LIVE_TESTS must be unset, 0, or 1".into()),
+-    }
+-    let backends = env::var("TASK_RUNNERS_LIVE_BACKENDS").unwrap_or_else(|_| "claude,codex".into());
++        _ => return Err("TOSI_LIVE_TESTS must be unset, 0, or 1".into()),
++    }
++    let backends = match tosi::config::var("LIVE_BACKENDS") {
++        Ok(value) => value,
++        Err(env::VarError::NotPresent) => "claude,codex".into(),
++        Err(_) => return Err("TOSI_LIVE_BACKENDS must contain valid text".into()),
++    };
+     let selected: Vec<_> = backends.split(',').map(str::trim).collect();
+     if selected
+         .iter()
+         .any(|name| !matches!(*name, "claude" | "codex"))
+     {
+-        return Err(
+-            "TASK_RUNNERS_LIVE_BACKENDS must contain claude and/or codex, comma separated".into(),
+-        );
++        return Err("TOSI_LIVE_BACKENDS must contain claude and/or codex, comma separated".into());
+     }
+     Ok(selected.contains(&backend))
+ }
+@@ -96,7 +98,7 @@
+     let read = client
+         .rpc(
+             "resources/read",
+-            json!({"uri": "skill://task-runners/delegate/SKILL.md"}),
++            json!({"uri": "skill://tosi/delegate/SKILL.md"}),
+         )
+         .await?;
+     check(
+@@ -218,15 +220,13 @@
+ 
+ async fn run_case(backend: &str, structured: bool) -> TestResult {
+     if !enabled(backend)? {
+-        eprintln!(
+-            "SKIP {backend} live test: set TASK_RUNNERS_LIVE_TESTS=1 and select this backend"
+-        );
++        eprintln!("SKIP {backend} live test: set TOSI_LIVE_TESTS=1 and select this backend");
+         return Ok(());
+     }
+     let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
+     // Initialization failures clean themselves up. Every subsequent failure
+     // goes through finish to allow server cleanup before removing the fixture.
+-    let mut client = Client::start(env!("CARGO_BIN_EXE_task-runners")).await?;
++    let mut client = Client::start(env!("CARGO_BIN_EXE_tosi")).await?;
+     let result = if structured {
+         structured_follow_up(&mut client, backend, directory.path()).await
+     } else {
+--- before/tests/resources.rs
++++ after/tests/resources.rs
+@@ -1,13 +1,13 @@
+ use std::sync::Arc;
+ 
+ use async_trait::async_trait;
+-use task_runners::{
++use tokio_util::sync::CancellationToken;
++use tosi::{
+     backend::CliRunner,
+     manager::Manager,
+     server::{DELEGATION_SKILL_URI, router},
+     types::{Backend, RunOutput, RunSpec, Runner},
+ };
+-use tokio_util::sync::CancellationToken;
+ use tower_mcp::testing::TestClient;
+ 
+ struct NoWorkers;
+@@ -24,6 +24,7 @@
+     let manager = Manager::new(Arc::new(NoWorkers), Backend::Claude, 1);
+     let mut client = TestClient::from_router(router(manager, Arc::new(CliRunner::new())));
+     let initialized = client.initialize().await;
++    assert_eq!(initialized["serverInfo"]["name"], "tosi");
+     assert!(initialized["capabilities"].get("resources").is_some());
+     let instructions = initialized["instructions"].as_str().unwrap();
+     assert!(instructions.contains(DELEGATION_SKILL_URI));
+@@ -35,31 +36,31 @@
+     let expected = [
+         (
+             "delegate",
+-            "skill://task-runners/delegate/SKILL.md",
++            "skill://tosi/delegate/SKILL.md",
+             canonical_skill,
+             None,
+         ),
+         (
+             "parallel-tasks",
+-            "skill://task-runners/delegate/references/parallel-tasks.md",
++            "skill://tosi/delegate/references/parallel-tasks.md",
+             include_str!("../resources/skills/delegate/references/parallel-tasks.md"),
+             Some("references/parallel-tasks.md"),
+         ),
+         (
+             "implementation-review",
+-            "skill://task-runners/delegate/references/implementation-review.md",
++            "skill://tosi/delegate/references/implementation-review.md",
+             include_str!("../resources/skills/delegate/references/implementation-review.md"),
+             Some("references/implementation-review.md"),
+         ),
+         (
+             "follow-up",
+-            "skill://task-runners/delegate/references/follow-up.md",
++            "skill://tosi/delegate/references/follow-up.md",
+             include_str!("../resources/skills/delegate/references/follow-up.md"),
+             Some("references/follow-up.md"),
+         ),
+         (
+             "model-effort",
+-            "skill://task-runners/delegate/references/model-effort.md",
++            "skill://tosi/delegate/references/model-effort.md",
+             include_str!("../resources/skills/delegate/references/model-effort.md"),
+             Some("references/model-effort.md"),
+         ),
+--- before/tests/shutdown.rs
++++ after/tests/shutdown.rs
+@@ -26,25 +26,34 @@
+ 
+ impl Server {
+     async fn start(backend: &str) -> Self {
++        Self::start_config(&[
++            ("TOSI_DEFAULT_BACKEND", backend),
++            ("TOSI_MAX_CONCURRENCY", "1"),
++        ])
++        .await
++    }
++
++    async fn start_config(settings: &[(&str, &str)]) -> Self {
+         let dir = tempfile::tempdir().unwrap();
+         let fake = dir.path().join("fake-provider");
+         fs::write(
+             &fake,
+-            "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \"$$\" > \"$TASK_RUNNERS_TEST_PID_FILE\"\nexec /bin/sleep 60\n",
++            "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \"$$\" > \"$TOSI_TEST_PID_FILE\"\nexec /bin/sleep 60\n",
+         )
+         .unwrap();
+         fs::set_permissions(&fake, fs::Permissions::from_mode(0o700)).unwrap();
+-        let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_task-runners"))
++        let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_tosi"))
+             .arg("--stdio")
++            .env_remove("TOSI_CHILD")
+             .env_remove("TASK_RUNNERS_CHILD")
+-            .env("TASK_RUNNERS_DEFAULT_BACKEND", backend)
+-            .env("TASK_RUNNERS_MAX_CONCURRENCY", "1")
+-            .env("TASK_RUNNERS_CLAUDE_BIN", &fake)
+-            .env("TASK_RUNNERS_CODEX_BIN", &fake)
+-            .env(
+-                "TASK_RUNNERS_TEST_PID_FILE",
+-                dir.path().join("provider-pid"),
+-            )
++            .env_remove("TOSI_DEFAULT_BACKEND")
++            .env_remove("TASK_RUNNERS_DEFAULT_BACKEND")
++            .env_remove("TOSI_MAX_CONCURRENCY")
++            .env_remove("TASK_RUNNERS_MAX_CONCURRENCY")
++            .envs(settings.iter().copied())
++            .env("TOSI_CLAUDE_BIN", &fake)
++            .env("TOSI_CODEX_BIN", &fake)
++            .env("TOSI_TEST_PID_FILE", dir.path().join("provider-pid"))
+             .env("RUST_LOG", "warn")
+             .stdin(Stdio::piped())
+             .stdout(Stdio::piped())
+@@ -103,7 +112,7 @@
+         .expect("server did not finish the pending request during shutdown")
+     }
+ 
+-    async fn start_worker_and_wait(&mut self) {
++    async fn start_worker_and_wait(&mut self) -> Value {
+         self.send(json!({
+             "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+             "params": {"name": "spawn_task", "arguments": {
+@@ -136,6 +145,7 @@
+             }}
+         }))
+         .await;
++        snapshot
+     }
+ 
+     fn signal(&self, signal: &str) {
+@@ -216,3 +226,109 @@
+         server.assert_clean_shutdown().await;
+     }
+ }
++
++#[tokio::test]
++async fn legacy_server_defaults_apply_only_when_primary_keys_are_absent() {
++    for primary_present in [false, true] {
++        let mut settings = vec![
++            ("TASK_RUNNERS_DEFAULT_BACKEND", "codex"),
++            ("TASK_RUNNERS_MAX_CONCURRENCY", "1"),
++        ];
++        let backend = if primary_present {
++            settings[1].1 = "2";
++            settings.extend([
++                ("TOSI_DEFAULT_BACKEND", "claude"),
++                ("TOSI_MAX_CONCURRENCY", "1"),
++            ]);
++            "claude"
++        } else {
++            "codex"
++        };
++        let mut server = Server::start_config(&settings).await;
++        let snapshot = server.start_worker_and_wait().await;
++        assert_eq!(snapshot["backend"], backend);
++        server.send(json!({
++            "jsonrpc":"2.0", "id":4, "method":"tools/call",
++            "params":{"name":"spawn_task", "arguments":{
++                "task":"Must be rejected at capacity", "cwd":server.dir.path().canonicalize().unwrap()
++            }}
++        })).await;
++        let response = server.response(4).await;
++        assert_eq!(response["result"]["isError"], true);
++        assert!(
++            response["result"]["content"][0]["text"]
++                .as_str()
++                .unwrap()
++                .contains("concurrency limit (1)")
++        );
++        drop(server.stdin.take());
++        server.assert_clean_shutdown().await;
++    }
++}
++
++fn clean_server_command() -> tokio::process::Command {
++    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_tosi"));
++    command
++        .arg("--stdio")
++        .stdin(Stdio::null())
++        .kill_on_drop(true);
++    for suffix in ["CHILD", "DEFAULT_BACKEND", "MAX_CONCURRENCY"] {
++        command.env_remove(format!("TOSI_{suffix}"));
++        command.env_remove(format!("TASK_RUNNERS_{suffix}"));
++    }
++    command
++}
++
++#[tokio::test]
++async fn either_child_guard_rejects_startup_even_when_the_other_disagrees() {
++    for (primary, legacy, rejected) in [
++        (None, Some("1"), true),
++        (Some("1"), None, true),
++        (Some("0"), Some("1"), true),
++        (Some("1"), Some("0"), true),
++        (Some(""), Some("1"), true),
++        (Some("1"), Some(""), true),
++        (Some("0"), Some("0"), false),
++    ] {
++        let mut command = clean_server_command();
++        if let Some(value) = primary {
++            command.env("TOSI_CHILD", value);
++        }
++        if let Some(value) = legacy {
++            command.env("TASK_RUNNERS_CHILD", value);
++        }
++        let output = tokio::time::timeout(TEST_TIMEOUT, command.output())
++            .await
++            .unwrap()
++            .unwrap();
++        assert_eq!(!output.status.success(), rejected);
++        if rejected {
++            assert!(
++                String::from_utf8_lossy(&output.stderr)
++                    .contains("cannot start inside a delegated worker")
++            );
++        }
++    }
++}
++
++#[tokio::test]
++async fn empty_or_invalid_primary_settings_do_not_fall_back_to_legacy_values() {
++    for (suffix, legacy) in [("DEFAULT_BACKEND", "claude"), ("MAX_CONCURRENCY", "1")] {
++        for primary in ["", "invalid"] {
++            let output = tokio::time::timeout(
++                TEST_TIMEOUT,
++                clean_server_command()
++                    .env(format!("TOSI_{suffix}"), primary)
++                    .env(format!("TASK_RUNNERS_{suffix}"), legacy)
++                    .output(),
++            )
++            .await
++            .unwrap()
++            .unwrap();
++            assert!(
++                !output.status.success(),
++                "accepted invalid primary {suffix}"
++            );
++        }
++    }
++}
+--- before/tests/support/mod.rs
++++ after/tests/support/mod.rs
+@@ -58,7 +58,7 @@
+                     json!({
+                         "protocolVersion": "2025-11-25",
+                         "capabilities": {},
+-                        "clientInfo": {"name": "task-runners-live-test", "version": "1"}
++                        "clientInfo": {"name": "tosi-live-test", "version": "1"}
+                     }),
+                 )
+                 .await?;
+--- before/xtask/src/main.rs
++++ after/xtask/src/main.rs
+@@ -34,7 +34,7 @@
+ #[command(
+     name = "xtask",
+     bin_name = "cargo xtask",
+-    about = "Build Task Runners plugin packages"
++    about = "Build Tosi plugin packages"
+ )]
+ struct Cli {
+     #[command(subcommand)]
+@@ -43,7 +43,7 @@
+ 
+ #[derive(Debug, Subcommand)]
+ enum Action {
+-    /// Generate plugin/task-runners and a host-specific archive in dist; does not install.
++    /// Generate plugin/tosi and a host-specific archive in dist; does not install.
+     Package(PackageOptions),
+ }
+ 
+@@ -137,7 +137,7 @@
+     if !child.wait()?.success() {
+         return Err("release build failed".into());
+     }
+-    executable.ok_or_else(|| "cargo did not report a task-runners executable".into())
++    executable.ok_or_else(|| "cargo did not report a tosi executable".into())
+ }
+ 
+ fn select_binary(root: &Path, package: &Package, options: &PackageOptions) -> Result<PathBuf> {
+@@ -179,8 +179,8 @@
+ 
+ fn marketplace(package: &Package, source: &str) -> Value {
+     json!({
+-        "name": "task-runners-local",
+-        "description": "Personal local Claude and Codex task delegation.",
++        "name": "tosi-local",
++        "description": "Personal local Claude and Codex delegation with Tosi.",
+         "owner": { "name": "Josh Rotenberg" },
+         "plugins": [{ "name": package.name, "description": package.description,
+             "version": package.version, "source": source }]
+@@ -222,7 +222,7 @@
+                 "author": { "name": "Josh Rotenberg" },
+                 "keywords": ["claude", "codex", "delegation", "local"],
+                 "extensions": { "com.openai": { "interface": {
+-                    "displayName": "Task Runners", "shortDescription": "Claude and Codex task runners",
++                    "displayName": "Tosi", "shortDescription": "Claude and Codex task delegation",
+                     "longDescription": "Run, wait for, continue, and cancel bounded tasks using locally authenticated Claude and Codex command-line tools.",
+                     "developerName": "Josh Rotenberg", "category": "Engineering", "capabilities": ["Read", "Write"],
+                     "defaultPrompt": "Delegate an independent review of this project to Claude."
+@@ -372,7 +372,7 @@
+             "claude",
+             "--skip-build",
+             "--binary",
+-            "build/task-runners",
++            "build/tosi",
+         ])
+         .unwrap()
+         .command
+@@ -381,10 +381,10 @@
+         };
+         assert_eq!(explicit.host, Host::Claude);
+         assert!(explicit.skip_build);
+-        assert_eq!(explicit.binary, Some(PathBuf::from("build/task-runners")));
++        assert_eq!(explicit.binary, Some(PathBuf::from("build/tosi")));
+         for args in [
+             vec!["xtask", "package", "--skip-build"],
+-            vec!["xtask", "package", "--binary", "build/task-runners"],
++            vec!["xtask", "package", "--binary", "build/tosi"],
+         ] {
+             assert_eq!(
+                 Cli::try_parse_from(args).unwrap_err().kind(),
+@@ -418,7 +418,7 @@
+ 
+         let temp = tempfile::tempdir().unwrap();
+         let caller = temp.path().join("caller workspace");
+-        let relative_binary = "chosen build/task-runners";
++        let relative_binary = "chosen build/tosi";
+         fs::create_dir_all(caller.join("chosen build")).unwrap();
+         fs::write(caller.join(relative_binary), "caller-selected binary\n").unwrap();
+         let mock_bin = temp.path().join("mock bin");
+@@ -473,14 +473,14 @@
+         )
+         .unwrap();
+         fs::write(root.join("README.md"), "readme\n").unwrap();
+-        let stale_binary = root.join("target/release/task-runners");
++        let stale_binary = root.join("target/release/tosi");
+         fs::create_dir_all(stale_binary.parent().unwrap()).unwrap();
+         fs::write(stale_binary, "stale executable").unwrap();
+-        let chosen_binary = root.join("target/native-triple/release/task-runners");
++        let chosen_binary = root.join("target/native-triple/release/tosi");
+         fs::create_dir_all(chosen_binary.parent().unwrap()).unwrap();
+         fs::write(&chosen_binary, "chosen executable").unwrap();
+         let metadata = Package {
+-            name: "task-runners".into(),
++            name: "tosi".into(),
+             version: "9.8.7".into(),
+             description: "fixture".into(),
+         };
+@@ -499,9 +499,9 @@
+         let binary = select_binary(root, &metadata, &options).unwrap();
+         for host in [Host::Both, Host::Codex, Host::Claude] {
+             let archive = package(root, &metadata, &binary, host).unwrap();
+-            let plugin = root.join("plugin/task-runners");
++            let plugin = root.join("plugin/tosi");
+             assert_eq!(
+-                fs::read(plugin.join("bin/task-runners")).unwrap(),
++                fs::read(plugin.join("bin/tosi")).unwrap(),
+                 b"chosen executable"
+             );
+             assert_eq!(
+@@ -523,17 +523,36 @@
+                 if plugin.join(manifest).exists() {
+                     let value: Value =
+                         serde_json::from_slice(&fs::read(plugin.join(manifest)).unwrap()).unwrap();
++                    assert_eq!(value["name"], "tosi");
+                     assert_eq!(value["version"], "9.8.7");
++                    if manifest == "plugin.json" {
++                        assert_eq!(
++                            value["extensions"]["com.openai"]["interface"]["displayName"],
++                            "Tosi"
++                        );
++                    }
+                 }
+             }
++            for (catalog, source) in [
++                (
++                    root.join(".claude-plugin/marketplace.json"),
++                    "./plugin/tosi",
++                ),
++                (plugin.join(".claude-plugin/marketplace.json"), "./"),
++            ] {
++                let value: Value = serde_json::from_slice(&fs::read(catalog).unwrap()).unwrap();
++                assert_eq!(value["name"], "tosi-local");
++                assert_eq!(value["plugins"][0]["name"], "tosi");
++                assert_eq!(value["plugins"][0]["source"], source);
++            }
+             for (config, command) in [
+-                ("mcp.json", "./bin/task-runners"),
+-                (".mcp.json", "${CLAUDE_PLUGIN_ROOT}/bin/task-runners"),
++                ("mcp.json", "./bin/tosi"),
++                (".mcp.json", "${CLAUDE_PLUGIN_ROOT}/bin/tosi"),
+             ] {
+                 if plugin.join(config).exists() {
+                     let value: Value =
+                         serde_json::from_slice(&fs::read(plugin.join(config)).unwrap()).unwrap();
+-                    assert_eq!(value["mcpServers"]["task-runners"]["command"], command);
++                    assert_eq!(value["mcpServers"]["tosi"]["command"], command);
+                 }
+             }
+             let entries = Command::new("tar")
+@@ -543,29 +562,26 @@
+                 .unwrap();
+             assert!(entries.status.success());
+             let entries = String::from_utf8(entries.stdout).unwrap();
+-            assert!(
+-                entries
+-                    .lines()
+-                    .all(|entry| entry.starts_with("task-runners/"))
+-            );
+-            assert!(entries.contains("task-runners/bin/task-runners\n"));
+-            assert!(entries.contains("task-runners/.claude-plugin/marketplace.json\n"));
+-            assert!(!entries.contains("run-task-runners.sh"));
++            assert!(entries.lines().all(|entry| entry.starts_with("tosi/")));
++            assert!(entries.contains("tosi/bin/tosi\n"));
++            assert!(entries.contains("tosi/.claude-plugin/marketplace.json\n"));
++            assert!(!entries.contains("run-tosi.sh"));
+             let archived_binary = Command::new("tar")
+                 .arg("-xOzf")
+                 .arg(&archive)
+-                .arg("task-runners/bin/task-runners")
++                .arg("tosi/bin/tosi")
+                 .output()
+                 .unwrap();
+             assert!(archived_binary.status.success());
+             assert_eq!(archived_binary.stdout, b"chosen executable");
+-            assert!(
+-                archive
+-                    .file_name()
+-                    .unwrap()
+-                    .to_str()
+-                    .unwrap()
+-                    .contains(host.label())
++            assert_eq!(
++                archive.file_name().unwrap().to_str().unwrap(),
++                format!(
++                    "tosi-9.8.7-{}-{}-{}.tar.gz",
++                    host.label(),
++                    env::consts::OS,
++                    env::consts::ARCH
++                )
+             );
+         }
+     }
+@@ -574,28 +590,26 @@
+     fn missing_binary_preserves_existing_plugin() {
+         let temp = tempfile::tempdir().unwrap();
+         let root = temp.path();
+-        fs::create_dir_all(root.join("plugin/task-runners")).unwrap();
+-        fs::write(root.join("plugin/task-runners/keep"), "existing package").unwrap();
++        fs::create_dir_all(root.join("plugin/tosi")).unwrap();
++        fs::write(root.join("plugin/tosi/keep"), "existing package").unwrap();
+         let metadata = Package {
+-            name: "task-runners".into(),
++            name: "tosi".into(),
+             version: "1.0.0".into(),
+             description: "fixture".into(),
+         };
+         let options = PackageOptions {
+             host: Host::Both,
+             skip_build: true,
+-            binary: Some(PathBuf::from("missing-task-runners-executable")),
++            binary: Some(PathBuf::from("missing-tosi-executable")),
+         };
+         let binary = select_binary(root, &metadata, &options).unwrap();
+         assert_eq!(
+             binary,
+-            env::current_dir()
+-                .unwrap()
+-                .join("missing-task-runners-executable")
++            env::current_dir().unwrap().join("missing-tosi-executable")
+         );
+         assert!(package(root, &metadata, &binary, options.host).is_err());
+         assert_eq!(
+-            fs::read_to_string(root.join("plugin/task-runners/keep")).unwrap(),
++            fs::read_to_string(root.join("plugin/tosi/keep")).unwrap(),
+             "existing package"
+         );
+         assert_eq!(fs::read_dir(root.join("plugin")).unwrap().count(), 1);

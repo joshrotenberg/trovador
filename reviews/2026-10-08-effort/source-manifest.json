@@ -1,0 +1,229 @@
+{
+  "snapshot": "/private/tmp/task-runners-effort-review-xs8zchs4",
+  "snapshot_sha256": "65b1c3fb29f8b6edb267c17bf3a314430e6f7dadafa04bd796b84f9082fac707",
+  "files": [
+    {
+      "path": ".cargo/config.toml",
+      "sha256": "783fdc447abb5b8f8b5652157aa9ede64da640813fa89679c29c5251c8e0cbe6",
+      "bytes": 41
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "66e519d1d8d9cd975e412a70eb7a2f935f67f1ee9cec475010a9119b374323a5",
+      "bytes": 77
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "1e50ecaad868d188813ff7ad2a807f3630f89e073b9e8d1b7d679a37dccc1601",
+      "bytes": 3931
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "1c9653dc693daffaec3ec12263b3649778f77812b3c52e46e4e68b938b6f0285",
+      "bytes": 36517
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "d4c009b2dcf847191a266db1e2184532a1275dccb99fdc91f2f8096a00379363",
+      "bytes": 969
+    },
+    {
+      "path": "README.md",
+      "sha256": "7a9d474994cfa179599e990848b190513b5cd72d8d2e2f6f26d3d23fa97b18de",
+      "bytes": 20217
+    },
+    {
+      "path": "ROADMAP.md",
+      "sha256": "43fe3b25423e3f25edf704439b00f34a07fa9b56de67611697f6e232eca6961c",
+      "bytes": 18547
+    },
+    {
+      "path": "resources/cli/after-help.txt",
+      "sha256": "c1d4675a76d12747617e715960fe8d1bfc691305ed087183636989f1979def68",
+      "bytes": 637
+    },
+    {
+      "path": "resources/mcp/instructions.md",
+      "sha256": "39bb4f5a21df3c6abc1ea21b864218b259f449bb2af1f724a83b3b0a3999a05a",
+      "bytes": 2300
+    },
+    {
+      "path": "resources/mcp/tools/cancel_task.md",
+      "sha256": "d3bd43596ea2f08e952d279c76aaf213b393f3b0aff464bf41bc04a2f4f8b9a1",
+      "bytes": 254
+    },
+    {
+      "path": "resources/mcp/tools/check_environment.md",
+      "sha256": "fd1aa6067b96a702be1594b3db67e69720632b4efa177459bf6b2485472b6344",
+      "bytes": 763
+    },
+    {
+      "path": "resources/mcp/tools/continue_task.md",
+      "sha256": "2c5fe77d5317901df4965851c9df1656fbc304630d0ee14bd2437e22c1ce3b5c",
+      "bytes": 812
+    },
+    {
+      "path": "resources/mcp/tools/spawn_task.md",
+      "sha256": "f58b4ae75191a55e0eb6a898b3e23b585430af2808c47cc5c365b3a343496e81",
+      "bytes": 1834
+    },
+    {
+      "path": "resources/mcp/tools/wait_tasks.md",
+      "sha256": "a4d53720545e323a5c17a76c3ddfb9c0566840b98a1656bbd8c7cc21ecae320b",
+      "bytes": 411
+    },
+    {
+      "path": "resources/model-capabilities.json",
+      "sha256": "39a37ed67ed8d9da303d8786e6e1e0f3a1ecf63fc1135597643b63393e0e4c9c",
+      "bytes": 920
+    },
+    {
+      "path": "resources/skills/delegate/SKILL.md",
+      "sha256": "419f6285a673ffd1df9c371ff32c57e3c2e2e763e513f0b461173d141139e39c",
+      "bytes": 4495
+    },
+    {
+      "path": "resources/skills/delegate/references/follow-up.md",
+      "sha256": "629db37efe529b958953b5ea36706d9a279e13d7774307fcc0feb53fb922e0ce",
+      "bytes": 3088
+    },
+    {
+      "path": "resources/skills/delegate/references/implementation-review.md",
+      "sha256": "c49b55654f03a6bc6df4a5c696d8e78d00760c2f8ffc8598f2ceeb8eaa6ebf42",
+      "bytes": 3639
+    },
+    {
+      "path": "resources/skills/delegate/references/model-effort.md",
+      "sha256": "59801eb7cfcf208f9a499181e6aa076b2a76f1c6967cd3ce556992ba884c0546",
+      "bytes": 3694
+    },
+    {
+      "path": "resources/skills/delegate/references/parallel-tasks.md",
+      "sha256": "36732b77ff5fbe504cebcb19fa7d09a487195edbcd6c93e4c463f41b623d7735",
+      "bytes": 2089
+    },
+    {
+      "path": "scripts/package.sh",
+      "sha256": "87b532ef362dea8acf5759f664029cc5fcfc4f525fe5a630aa73ac26835ef9c7",
+      "bytes": 186
+    },
+    {
+      "path": "scripts/smoke.py",
+      "sha256": "c42396a1036da8fc3c15cc9a9854be66aec3f18a283c90e116a1bc03074a300f",
+      "bytes": 13083
+    },
+    {
+      "path": "src/backend.rs",
+      "sha256": "05fec663043f585aee7635655afa09c16f375072e68767076df5c057d1f540d0",
+      "bytes": 16328
+    },
+    {
+      "path": "src/diagnostics.rs",
+      "sha256": "bf929ab04c160b85db806db247fb64ea6d9e56aa2e8fd7e47a41013be88bfa9b",
+      "bytes": 12663
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "26feb3486d91b48894c956dbdbdfddc2a413343a3419b259361709214074ad02",
+      "bytes": 117
+    },
+    {
+      "path": "src/main.rs",
+      "sha256": "50681a0d4f6569c5579046cf9124dd542cc101c519ea22b03576ac0ba85355e9",
+      "bytes": 4249
+    },
+    {
+      "path": "src/manager.rs",
+      "sha256": "0e9b9536be9ff2945b2daef2318baa14b024b8074c2dd03210f7e9f4349655a4",
+      "bytes": 16933
+    },
+    {
+      "path": "src/output.rs",
+      "sha256": "f3cc792eaeeafc9b7a6633edc8a19a4827149aca3c07773dfe26c41afba227eb",
+      "bytes": 2282
+    },
+    {
+      "path": "src/selection.rs",
+      "sha256": "218cfdf0049e171dece8f1236556590228f1b9942ae325f3b93098a041de1404",
+      "bytes": 3551
+    },
+    {
+      "path": "src/server.rs",
+      "sha256": "01fb9b7b00f2497809a98a6419dd6147b7963aa4fb37786eac7d21d3be4513da",
+      "bytes": 5795
+    },
+    {
+      "path": "src/types.rs",
+      "sha256": "3d686bdcc00dc605d27d5f0be324f4ba745966f91a4a42484ce648daae41fd0e",
+      "bytes": 2785
+    },
+    {
+      "path": "tests/backend.rs",
+      "sha256": "fde8530d1e23a869565f3a2eefd6bc7d460f955a77f609caa06146a3143e6f8c",
+      "bytes": 25060
+    },
+    {
+      "path": "tests/diagnostics.rs",
+      "sha256": "7dc3b632353780da5c8fed9c8d86d68944dd1301c56e643d3141522f20785bf6",
+      "bytes": 16482
+    },
+    {
+      "path": "tests/lifecycle.rs",
+      "sha256": "a98ebe97108b02840508a19188254854fb3d350d79d8975a780aa37b930afa9d",
+      "bytes": 16341
+    },
+    {
+      "path": "tests/live.rs",
+      "sha256": "909433f0a50d2437d453781176c0e6ffc5b4d7f0ee1c1e3d7aafac86f5cf7d65",
+      "bytes": 9517
+    },
+    {
+      "path": "tests/resources.rs",
+      "sha256": "91cc4483f14576913051e7ae571c09f3ff346eed9028a40114093d728f6b4b41",
+      "bytes": 4334
+    },
+    {
+      "path": "tests/shutdown.rs",
+      "sha256": "1c790b28389f19e1dc0dd107ca8927c8d0be5730934ca645ed63004595562cad",
+      "bytes": 7248
+    },
+    {
+      "path": "tests/support/mod.rs",
+      "sha256": "6e4dfde3c9b9e32609cd5469790d771fa76f06d0863f29f89fe6a3c5b080735b",
+      "bytes": 8579
+    },
+    {
+      "path": "xtask/Cargo.toml",
+      "sha256": "4ef9325852a481079120ad10863921d235003d493eb99a445f60bbcb5a93054d",
+      "bytes": 166
+    },
+    {
+      "path": "xtask/src/main.rs",
+      "sha256": "bb6f611db1e617dfe9a88b8383d24f3168adbb6a332c8406d92e2647e7d730b2",
+      "bytes": 21614
+    }
+  ],
+  "changed_files": [
+    "README.md",
+    "resources/mcp/instructions.md",
+    "resources/mcp/tools/continue_task.md",
+    "resources/mcp/tools/spawn_task.md",
+    "resources/mcp/tools/wait_tasks.md",
+    "resources/model-capabilities.json",
+    "resources/skills/delegate/SKILL.md",
+    "resources/skills/delegate/references/follow-up.md",
+    "resources/skills/delegate/references/implementation-review.md",
+    "resources/skills/delegate/references/model-effort.md",
+    "scripts/smoke.py",
+    "src/backend.rs",
+    "src/lib.rs",
+    "src/manager.rs",
+    "src/selection.rs",
+    "src/server.rs",
+    "src/types.rs",
+    "tests/backend.rs",
+    "tests/lifecycle.rs",
+    "tests/live.rs",
+    "tests/resources.rs"
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "effort_schema": {
+    "description": "Literal provider effort. Omitted leaves the CLI default; not inherited from this chat.\nClaude: low/medium/high/xhigh/max. Codex also accepts none/minimal/ultra, model-dependent.",
+    "anyOf": [
+      {
+        "$ref": "#/$defs/Effort"
+      },
+      {
+        "type": "null"
+      }
+    ]
+  },
+  "effort_enum": [
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra"
+  ],
+  "canonical_resource_parity": 5,
+  "fake_provider_outcomes": {
+    "claude": "low effort, schema, selection and continuation passed",
+    "codex": "low effort, schema, selection and continuation passed"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "release": {
+    "path": "/Users/joshrotenberg/Code/github.com/genagent/task-runners/target/release/task-runners",
+    "sha256": "37a07d15ace406af9c3f843ee87ec954a0d16685938f686602098e8da58c625a"
+  },
+  "generated": {
+    "path": "/Users/joshrotenberg/Code/github.com/genagent/task-runners/plugin/task-runners/bin/task-runners",
+    "sha256": "37a07d15ace406af9c3f843ee87ec954a0d16685938f686602098e8da58c625a"
+  },
+  "codex": {
+    "path": "/Users/joshrotenberg/.codex/plugins/cache/task-runners-local/task-runners/0.1.0/bin/task-runners",
+    "sha256": "37a07d15ace406af9c3f843ee87ec954a0d16685938f686602098e8da58c625a"
+  },
+  "claude": {
+    "path": "/Users/joshrotenberg/.claude/plugins/cache/task-runners-local/task-runners/0.1.0/bin/task-runners",
+    "sha256": "37a07d15ace406af9c3f843ee87ec954a0d16685938f686602098e8da58c625a"
+  },
+  "archive": {
+    "path": "/Users/joshrotenberg/Code/github.com/genagent/task-runners/dist/task-runners-0.1.0-both-macos-aarch64.tar.gz",
+    "member": "task-runners/bin/task-runners",
+    "sha256": "37a07d15ace406af9c3f843ee87ec954a0d16685938f686602098e8da58c625a"
+  }
+}

@@ -1,0 +1,196 @@
+{
+  "snapshot": "/private/tmp/task-runners-alias-fix-tw3zg1ce",
+  "source": "/Users/joshrotenberg/Code/github.com/genagent/task-runners",
+  "snapshot_sha256": "f9268181b70d268d200d98007a9b45a5058e47dbbcf6dce3946af883d0d1fde9",
+  "changed_files": [
+    "scripts/package.sh",
+    "xtask/src/main.rs"
+  ],
+  "files": [
+    {
+      "path": ".cargo/config.toml",
+      "sha256": "783fdc447abb5b8f8b5652157aa9ede64da640813fa89679c29c5251c8e0cbe6",
+      "bytes": 41
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "66e519d1d8d9cd975e412a70eb7a2f935f67f1ee9cec475010a9119b374323a5",
+      "bytes": 77
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "ac4506528506217fc6e062f4473da65c03a8480d01a524dddabe9f4a666ce9c2",
+      "bytes": 3718
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "1c9653dc693daffaec3ec12263b3649778f77812b3c52e46e4e68b938b6f0285",
+      "bytes": 36517
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "d4c009b2dcf847191a266db1e2184532a1275dccb99fdc91f2f8096a00379363",
+      "bytes": 969
+    },
+    {
+      "path": "README.md",
+      "sha256": "98a9eb0c63c669766f462fab2a6f7da162846bad3b3a250204f403143a4a1550",
+      "bytes": 17448
+    },
+    {
+      "path": "ROADMAP.md",
+      "sha256": "1bb6b86587a5eb5dfd29bc7b38c37e859fa4fa5e25674d73a73c1295d4c86ed0",
+      "bytes": 17085
+    },
+    {
+      "path": "resources/cli/after-help.txt",
+      "sha256": "c1d4675a76d12747617e715960fe8d1bfc691305ed087183636989f1979def68",
+      "bytes": 637
+    },
+    {
+      "path": "resources/mcp/instructions.md",
+      "sha256": "740800f7d2bc1cca9bd2f1537f4a59bca0bc204ff646e09f7201bdae7210065e",
+      "bytes": 1701
+    },
+    {
+      "path": "resources/mcp/tools/cancel_task.md",
+      "sha256": "d3bd43596ea2f08e952d279c76aaf213b393f3b0aff464bf41bc04a2f4f8b9a1",
+      "bytes": 254
+    },
+    {
+      "path": "resources/mcp/tools/check_environment.md",
+      "sha256": "fd1aa6067b96a702be1594b3db67e69720632b4efa177459bf6b2485472b6344",
+      "bytes": 763
+    },
+    {
+      "path": "resources/mcp/tools/continue_task.md",
+      "sha256": "8fd699e3ad97496201d7a05f1d3087113434bf673d6b4f8cccb251c2b197cc0b",
+      "bytes": 677
+    },
+    {
+      "path": "resources/mcp/tools/spawn_task.md",
+      "sha256": "9e024cf9fce0dfd436fd3d6ddbb29f9ee3a5bfd094680c9d7728806c9fd69a04",
+      "bytes": 1026
+    },
+    {
+      "path": "resources/mcp/tools/wait_tasks.md",
+      "sha256": "5a8c1b403e7b7066a00110d2e49d202f84dfd93aa430202644f36951880bb3a0",
+      "bytes": 223
+    },
+    {
+      "path": "resources/skills/delegate/SKILL.md",
+      "sha256": "17c8c05277a8b2c69a6eb1e409294e9aa7e533841817ee09365508601be1d7f6",
+      "bytes": 3903
+    },
+    {
+      "path": "resources/skills/delegate/references/follow-up.md",
+      "sha256": "3f8ba7317b65336251ec0a684fcef344476bed23865b6d9664c7e9914f80579f",
+      "bytes": 2921
+    },
+    {
+      "path": "resources/skills/delegate/references/implementation-review.md",
+      "sha256": "2a3588c0aab682abe729030177f77a693b9830ee6d44b30ccdb5a9bfb8fc5c4b",
+      "bytes": 3632
+    },
+    {
+      "path": "resources/skills/delegate/references/parallel-tasks.md",
+      "sha256": "36732b77ff5fbe504cebcb19fa7d09a487195edbcd6c93e4c463f41b623d7735",
+      "bytes": 2089
+    },
+    {
+      "path": "scripts/package.sh",
+      "sha256": "87b532ef362dea8acf5759f664029cc5fcfc4f525fe5a630aa73ac26835ef9c7",
+      "bytes": 186
+    },
+    {
+      "path": "scripts/smoke.py",
+      "sha256": "bfa553472cec1403066c524da41d213ea540b93bdd70f96c85d328133020e9b8",
+      "bytes": 12694
+    },
+    {
+      "path": "src/backend.rs",
+      "sha256": "34220f452ad40a7a3175dc6b4a97fec3b3e79873a781aec89c41c65fed894087",
+      "bytes": 15217
+    },
+    {
+      "path": "src/diagnostics.rs",
+      "sha256": "bf929ab04c160b85db806db247fb64ea6d9e56aa2e8fd7e47a41013be88bfa9b",
+      "bytes": 12663
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "be592c34314f4ff54ec010fb70b734c2f7b3b31fbe85daaaf20108d8faceed47",
+      "bytes": 98
+    },
+    {
+      "path": "src/main.rs",
+      "sha256": "50681a0d4f6569c5579046cf9124dd542cc101c519ea22b03576ac0ba85355e9",
+      "bytes": 4249
+    },
+    {
+      "path": "src/manager.rs",
+      "sha256": "219e6a2e1aae3a6209ffe739b24ef0b414c8fcb4dbb9338d92fac51d652716a5",
+      "bytes": 15611
+    },
+    {
+      "path": "src/output.rs",
+      "sha256": "f3cc792eaeeafc9b7a6633edc8a19a4827149aca3c07773dfe26c41afba227eb",
+      "bytes": 2282
+    },
+    {
+      "path": "src/server.rs",
+      "sha256": "5a91bac54ca2be621e6e03e7d30171ed72130d9c9c71f981bb2593f05cae91b9",
+      "bytes": 5304
+    },
+    {
+      "path": "src/types.rs",
+      "sha256": "84f45b3d19ef62047c90ce0cc0aeb0d86f88966b00b60aa45a8c961e1a5ee75f",
+      "bytes": 1294
+    },
+    {
+      "path": "tests/backend.rs",
+      "sha256": "6d64b2c2271bdbf49c7a7999e96360b72f749c42fcb143249f4c50eb51e4c1e9",
+      "bytes": 19811
+    },
+    {
+      "path": "tests/diagnostics.rs",
+      "sha256": "7dc3b632353780da5c8fed9c8d86d68944dd1301c56e643d3141522f20785bf6",
+      "bytes": 16482
+    },
+    {
+      "path": "tests/lifecycle.rs",
+      "sha256": "f0bd07bbbbda86092da10d756da48266226b7e2647a00ab4ecb903a5b9b73727",
+      "bytes": 12399
+    },
+    {
+      "path": "tests/live.rs",
+      "sha256": "7e7ac9b55d578fa9d76ee5eac947dd66a457c98cd4baeb24b5d7ea4143b77b10",
+      "bytes": 8491
+    },
+    {
+      "path": "tests/resources.rs",
+      "sha256": "56ecc03572e5f891bf08d2a14673add55dd927299537df72574d5892b950daae",
+      "bytes": 4080
+    },
+    {
+      "path": "tests/shutdown.rs",
+      "sha256": "1c790b28389f19e1dc0dd107ca8927c8d0be5730934ca645ed63004595562cad",
+      "bytes": 7248
+    },
+    {
+      "path": "tests/support/mod.rs",
+      "sha256": "6e4dfde3c9b9e32609cd5469790d771fa76f06d0863f29f89fe6a3c5b080735b",
+      "bytes": 8579
+    },
+    {
+      "path": "xtask/Cargo.toml",
+      "sha256": "4ef9325852a481079120ad10863921d235003d493eb99a445f60bbcb5a93054d",
+      "bytes": 166
+    },
+    {
+      "path": "xtask/src/main.rs",
+      "sha256": "bb6f611db1e617dfe9a88b8383d24f3168adbb6a332c8406d92e2647e7d730b2",
+      "bytes": 21614
+    }
+  ]
+}

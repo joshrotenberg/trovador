@@ -1,0 +1,52 @@
+[
+  {
+    "status": "fulfilled",
+    "value": {
+      "backend": "claude",
+      "data": {
+        "task_id": "93a427ce-5ae3-4307-956e-7f6ca58fe035",
+        "conversation_id": "1a380629-9e0e-442b-89e2-4bde00ac2453",
+        "parent_task_id": null,
+        "backend": "claude",
+        "status": "running",
+        "cwd": "/private/tmp/task-runners-effort-review-xs8zchs4",
+        "model": null,
+        "access": "read_only",
+        "timeout_secs": 300,
+        "started_at_ms": 1791503722020,
+        "finished_at_ms": null,
+        "result": null,
+        "structured_result": null,
+        "result_truncated": false,
+        "error": null,
+        "provider_session_id": null,
+        "usage": null
+      }
+    }
+  },
+  {
+    "status": "fulfilled",
+    "value": {
+      "backend": "codex",
+      "data": {
+        "task_id": "602fa10e-aaeb-4b29-94de-686e1664aa5f",
+        "conversation_id": "abdb683e-0a0d-4207-9a97-18ff86c0171a",
+        "parent_task_id": null,
+        "backend": "codex",
+        "status": "running",
+        "cwd": "/private/tmp/task-runners-effort-review-xs8zchs4",
+        "model": null,
+        "access": "read_only",
+        "timeout_secs": 300,
+        "started_at_ms": 1791503723103,
+        "finished_at_ms": null,
+        "result": null,
+        "structured_result": null,
+        "result_truncated": false,
+        "error": null,
+        "provider_session_id": null,
+        "usage": null
+      }
+    }
+  }
+]

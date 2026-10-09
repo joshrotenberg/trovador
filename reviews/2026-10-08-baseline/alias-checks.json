@@ -1,0 +1,54 @@
+[
+  {
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "exit_code": 0,
+    "log": "alias-check-1.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "clippy",
+      "--offline",
+      "--locked",
+      "--workspace",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "log": "alias-check-2.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "--locked",
+      "-p",
+      "xtask"
+    ],
+    "exit_code": 0,
+    "log": "alias-check-3.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "xtask",
+      "package",
+      "--host",
+      "both",
+      "--skip-build",
+      "--binary",
+      "target/release/task-runners"
+    ],
+    "exit_code": 0,
+    "log": "alias-check-4.log"
+  }
+]

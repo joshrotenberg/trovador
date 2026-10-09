@@ -1,0 +1,121 @@
+{
+  "tasks": [
+    {
+      "task_id": "93a427ce-5ae3-4307-956e-7f6ca58fe035",
+      "conversation_id": "1a380629-9e0e-442b-89e2-4bde00ac2453",
+      "parent_task_id": null,
+      "backend": "claude",
+      "status": "completed",
+      "cwd": "/private/tmp/task-runners-effort-review-xs8zchs4",
+      "model": null,
+      "access": "read_only",
+      "timeout_secs": 300,
+      "started_at_ms": 1791503722020,
+      "finished_at_ms": 1791503783759,
+      "result": "{\"summary\":\"I found no correctness, security or contract bugs in the effort-control change. Effort is an optional, strictly parsed enum where `null` and `\\\"none\\\"` stay different. Validation (backend/value and the small exact-model table, including Claude dated and `[1m]` forms) runs in Manager::spawn_task before admission and again in CliRunner::run before any process starts. Claude gets the wrapper's typed `--effort` flag, with an extra guard against unsupported values. Codex gets literal `model_reasoning_effort=\\\"…\\\"` config on both fresh and resumed commands. Omitting effort adds no override. Continuation clones the prior RunSpec and the requested selection, so backend, model, effort and schema carry over; ContinueTask still rejects override fields. Snapshots keep top-level backend/model, add effort, and record requested (caller omissions stay null), selected (only backend resolved locally) and reported (always null). Nothing normalizes, falls back, retries or changes permissions. The new reference is the fifth resource, embedded via include_str! and packaged by copy_tree of resources/skills. I found two low-priority documentation problems: ROADMAP.md was not updated and still says there is no effort parameter, and README.md has a new relative link that breaks in the packaged plugin.\",\"findings\":[{\"priority\":\"P3\",\"file\":\"ROADMAP.md\",\"line\":30,\"title\":\"ROADMAP still says there is no effort parameter and calls effort controls the next milestone\",\"scenario\":\"Someone reading the source checkout after this change looks at ROADMAP.md, which README.md (line 7) still points to for planned work.\",\"evidence\":\"ROADMAP.md:30 says \\\"There is no explicit effort parameter, routing policy engine, or release CI yet.\\\" Lines 34-35 say \\\"Explicit effort controls are the next planned implementation milestone.\\\" Section 2 (line 65) is still written as future work. The diff removes effort from README's roadmap summary but does not touch ROADMAP.md.\",\"impact\":\"The roadmap contradicts the shipped tool contract (spawn_task now takes `effort`). This could mislead reviewers or later planning. This is documentation only, with no runtime effect.\",\"suggested_correction\":\"Update ROADMAP.md's current-state paragraph and section 2 to say effort controls are implemented. Real-run verification can stay listed as pending until the paid tests finish, if that is why the roadmap was left unchanged on purpose.\"},{\"priority\":\"P3\",\"file\":\"README.md\",\"line\":181,\"title\":\"New README link to the model-effort reference breaks in the packaged plugin\",\"scenario\":\"`cargo xtask package` copies README.md to the plugin root (xtask/src/main.rs:215) and copies resources/skills to `skills/` (line 214). Someone opens the packaged README and follows the link.\",\"evidence\":\"README.md:181 links `(resources/skills/delegate/references/model-effort.md)`. In the plugin the file is at `skills/delegate/references/model-effort.md`. As far as I could find, this is the only relative markdown link in README; other source-checkout references are plain text.\",\"impact\":\"The link is dead in the packaged plugin. The MCP resource URI on the next line still works, so the impact is small.\",\"suggested_correction\":\"Match the README's existing style: name the path as plain text instead of linking it, or rely on the `skill://…/model-effort.md` URI.\"}],\"coverage\":[\"CHANGES.diff in full (README, resources, smoke.py, src/backend.rs, lib.rs, manager.rs, selection.rs, server.rs, types.rs, tests/backend.rs, lifecycle.rs, live.rs, resources.rs)\",\"AGENTS.md review workflow\",\"Current src/backend.rs: Claude typed effort mapping, Codex config on both ExecCommand and ExecResumeCommand, runner-level validation order\",\"Current src/manager.rs: SpawnTask/ContinueTask deny_unknown_fields, spawn validation before capacity check and insert, continuation copying spec and requested selection, snapshot construction\",\"src/selection.rs: Claude canonicalization (strip [1m], then an 8-digit date suffix), exact-match lookup for Codex, pass-through for omitted, alias and unknown models\",\"resources/model-capabilities.json is embedded via include_str! and doesn't depend on Cargo package include lists (none defined)\",\"xtask packaging copies resources/skills wholesale, so the new reference ships from the same source\",\"ROADMAP.md consistency check\"],\"limitations\":[\"Source review only. I did not run any tests, builds, smoke checks or live runs; I relied on the parent's test evidence, and the paid low-effort runs were not assumed.\",\"Did not check claude-wrapper 0.14.4 or codex-wrapper 0.4.4 sources (Effort enum, --effort with --resume, Codex -c handling on exec resume); I relied on the parent's verification.\",\"Did not check the capability table's model and effort entries against provider documentation or `codex debug models --bundled` output.\",\"Did not inspect the generated JSON input schema for the `effort` field at runtime.\"]}",
+      "structured_result": {
+        "summary": "I found no correctness, security or contract bugs in the effort-control change. Effort is an optional, strictly parsed enum where `null` and `\"none\"` stay different. Validation (backend/value and the small exact-model table, including Claude dated and `[1m]` forms) runs in Manager::spawn_task before admission and again in CliRunner::run before any process starts. Claude gets the wrapper's typed `--effort` flag, with an extra guard against unsupported values. Codex gets literal `model_reasoning_effort=\"…\"` config on both fresh and resumed commands. Omitting effort adds no override. Continuation clones the prior RunSpec and the requested selection, so backend, model, effort and schema carry over; ContinueTask still rejects override fields. Snapshots keep top-level backend/model, add effort, and record requested (caller omissions stay null), selected (only backend resolved locally) and reported (always null). Nothing normalizes, falls back, retries or changes permissions. The new reference is the fifth resource, embedded via include_str! and packaged by copy_tree of resources/skills. I found two low-priority documentation problems: ROADMAP.md was not updated and still says there is no effort parameter, and README.md has a new relative link that breaks in the packaged plugin.",
+        "findings": [
+          {
+            "priority": "P3",
+            "file": "ROADMAP.md",
+            "line": 30,
+            "title": "ROADMAP still says there is no effort parameter and calls effort controls the next milestone",
+            "scenario": "Someone reading the source checkout after this change looks at ROADMAP.md, which README.md (line 7) still points to for planned work.",
+            "evidence": "ROADMAP.md:30 says \"There is no explicit effort parameter, routing policy engine, or release CI yet.\" Lines 34-35 say \"Explicit effort controls are the next planned implementation milestone.\" Section 2 (line 65) is still written as future work. The diff removes effort from README's roadmap summary but does not touch ROADMAP.md.",
+            "impact": "The roadmap contradicts the shipped tool contract (spawn_task now takes `effort`). This could mislead reviewers or later planning. This is documentation only, with no runtime effect.",
+            "suggested_correction": "Update ROADMAP.md's current-state paragraph and section 2 to say effort controls are implemented. Real-run verification can stay listed as pending until the paid tests finish, if that is why the roadmap was left unchanged on purpose."
+          },
+          {
+            "priority": "P3",
+            "file": "README.md",
+            "line": 181,
+            "title": "New README link to the model-effort reference breaks in the packaged plugin",
+            "scenario": "`cargo xtask package` copies README.md to the plugin root (xtask/src/main.rs:215) and copies resources/skills to `skills/` (line 214). Someone opens the packaged README and follows the link.",
+            "evidence": "README.md:181 links `(resources/skills/delegate/references/model-effort.md)`. In the plugin the file is at `skills/delegate/references/model-effort.md`. As far as I could find, this is the only relative markdown link in README; other source-checkout references are plain text.",
+            "impact": "The link is dead in the packaged plugin. The MCP resource URI on the next line still works, so the impact is small.",
+            "suggested_correction": "Match the README's existing style: name the path as plain text instead of linking it, or rely on the `skill://…/model-effort.md` URI."
+          }
+        ],
+        "coverage": [
+          "CHANGES.diff in full (README, resources, smoke.py, src/backend.rs, lib.rs, manager.rs, selection.rs, server.rs, types.rs, tests/backend.rs, lifecycle.rs, live.rs, resources.rs)",
+          "AGENTS.md review workflow",
+          "Current src/backend.rs: Claude typed effort mapping, Codex config on both ExecCommand and ExecResumeCommand, runner-level validation order",
+          "Current src/manager.rs: SpawnTask/ContinueTask deny_unknown_fields, spawn validation before capacity check and insert, continuation copying spec and requested selection, snapshot construction",
+          "src/selection.rs: Claude canonicalization (strip [1m], then an 8-digit date suffix), exact-match lookup for Codex, pass-through for omitted, alias and unknown models",
+          "resources/model-capabilities.json is embedded via include_str! and doesn't depend on Cargo package include lists (none defined)",
+          "xtask packaging copies resources/skills wholesale, so the new reference ships from the same source",
+          "ROADMAP.md consistency check"
+        ],
+        "limitations": [
+          "Source review only. I did not run any tests, builds, smoke checks or live runs; I relied on the parent's test evidence, and the paid low-effort runs were not assumed.",
+          "Did not check claude-wrapper 0.14.4 or codex-wrapper 0.4.4 sources (Effort enum, --effort with --resume, Codex -c handling on exec resume); I relied on the parent's verification.",
+          "Did not check the capability table's model and effort entries against provider documentation or `codex debug models --bundled` output.",
+          "Did not inspect the generated JSON input schema for the `effort` field at runtime."
+        ]
+      },
+      "result_truncated": false,
+      "error": null,
+      "provider_session_id": "aaeca719-24d5-46c2-9ceb-331ed2e3d880",
+      "usage": {
+        "tokens": {
+          "input_tokens": 20,
+          "cached_input_tokens": 301383,
+          "cache_write_input_tokens": 43495,
+          "output_tokens": 6219,
+          "reasoning_output_tokens": null,
+          "total_tokens": null
+        },
+        "cost_usd": 0.5326966,
+        "num_turns": 13
+      }
+    },
+    {
+      "task_id": "602fa10e-aaeb-4b29-94de-686e1664aa5f",
+      "conversation_id": "abdb683e-0a0d-4207-9a97-18ff86c0171a",
+      "parent_task_id": null,
+      "backend": "codex",
+      "status": "completed",
+      "cwd": "/private/tmp/task-runners-effort-review-xs8zchs4",
+      "model": null,
+      "access": "read_only",
+      "timeout_secs": 300,
+      "started_at_ms": 1791503723103,
+      "finished_at_ms": 1791503747595,
+      "result": "{\n  \"summary\": \"No concrete correctness, security, or contract bugs found in the bounded effort-control change identified by snapshot SHA-256 65b1c3fb29f8b6edb267c17bf3a314430e6f7dadafa04bd796b84f9082fac707.\",\n  \"findings\": [],\n  \"coverage\": [\n    \"Read AGENTS.md, CHANGES.diff, and relevant current source, tests, and resources.\",\n    \"Checked effort serialization, omission semantics, backend/model compatibility validation before admission and launch, and unknown-model passthrough.\",\n    \"Checked Claude typed effort forwarding and literal Codex configuration on fresh and resumed workers.\",\n    \"Checked continuation preservation of backend, model, effort, schema, and original requested selection metadata; reported settings remain null.\",\n    \"Reviewed surrounding isolation, cancellation, and structured-result paths for regressions introduced by the change.\",\n    \"Checked fifth-resource registration, canonical guidance, recursive packaging source, and changed test/smoke assertions.\"\n  ],\n  \"limitations\": [\n    \"Source review only; no edits, delegation, tests, builds, project scripts, or network access performed.\",\n    \"Snapshot hash was supplied by the parent and was not independently recomputed.\",\n    \"Passing formatting, clippy, workspace tests, builds, and fake-provider smoke results are parent-provided evidence.\",\n    \"Dedicated live effort/schema/continuation results were unavailable; no success is assumed.\",\n    \"Provider capability and wrapper API verification relies on parent-supplied evidence. Actual effective per-turn model/effort and fresh packaged-host behavior were not independently verified.\"\n  ]\n}",
+      "structured_result": {
+        "summary": "No concrete correctness, security, or contract bugs found in the bounded effort-control change identified by snapshot SHA-256 65b1c3fb29f8b6edb267c17bf3a314430e6f7dadafa04bd796b84f9082fac707.",
+        "findings": [],
+        "coverage": [
+          "Read AGENTS.md, CHANGES.diff, and relevant current source, tests, and resources.",
+          "Checked effort serialization, omission semantics, backend/model compatibility validation before admission and launch, and unknown-model passthrough.",
+          "Checked Claude typed effort forwarding and literal Codex configuration on fresh and resumed workers.",
+          "Checked continuation preservation of backend, model, effort, schema, and original requested selection metadata; reported settings remain null.",
+          "Reviewed surrounding isolation, cancellation, and structured-result paths for regressions introduced by the change.",
+          "Checked fifth-resource registration, canonical guidance, recursive packaging source, and changed test/smoke assertions."
+        ],
+        "limitations": [
+          "Source review only; no edits, delegation, tests, builds, project scripts, or network access performed.",
+          "Snapshot hash was supplied by the parent and was not independently recomputed.",
+          "Passing formatting, clippy, workspace tests, builds, and fake-provider smoke results are parent-provided evidence.",
+          "Dedicated live effort/schema/continuation results were unavailable; no success is assumed.",
+          "Provider capability and wrapper API verification relies on parent-supplied evidence. Actual effective per-turn model/effort and fresh packaged-host behavior were not independently verified."
+        ]
+      },
+      "result_truncated": false,
+      "error": null,
+      "provider_session_id": "01a11df1-6b4a-7b10-8d39-2b0898d836ff",
+      "usage": {
+        "tokens": {
+          "input_tokens": 173369,
+          "cached_input_tokens": 118272,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 871,
+          "reasoning_output_tokens": 12,
+          "total_tokens": null
+        }
+      }
+    }
+  ],
+  "timed_out": false
+}

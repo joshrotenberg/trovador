@@ -1,0 +1,356 @@
+--- reviewed/Cargo.lock
++++ fixed/Cargo.lock
+@@ -1043,6 +1043,90 @@
+ checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
+ 
+ [[package]]
++name = "tempfile"
++version = "3.27.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
++dependencies = [
++ "fastrand",
++ "getrandom 0.4.3",
++ "once_cell",
++ "rustix",
++ "windows-sys",
++]
++
++[[package]]
++name = "thiserror"
++version = "2.0.21"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
++dependencies = [
++ "thiserror-impl",
++]
++
++[[package]]
++name = "thiserror-impl"
++version = "2.0.21"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 3.0.6",
++]
++
++[[package]]
++name = "thread_local"
++version = "1.1.10"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
++dependencies = [
++ "cfg-if",
++]
++
++[[package]]
++name = "tokio"
++version = "1.53.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
++dependencies = [
++ "bytes",
++ "libc",
++ "mio",
++ "parking_lot",
++ "pin-project-lite",
++ "signal-hook-registry",
++ "socket2",
++ "tokio-macros",
++ "windows-sys",
++]
++
++[[package]]
++name = "tokio-macros"
++version = "2.7.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 3.0.6",
++]
++
++[[package]]
++name = "tokio-util"
++version = "0.7.19"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "494815d09bf52b5548659851081238f0ca39ff638363907596da739561c62c52"
++dependencies = [
++ "bytes",
++ "futures-core",
++ "futures-sink",
++ "futures-util",
++ "pin-project-lite",
++ "tokio",
++]
++
++[[package]]
+ name = "tosi"
+ version = "0.1.0"
+ dependencies = [
+@@ -1061,90 +1145,6 @@
+  "tracing",
+  "tracing-subscriber",
+  "uuid",
+-]
+-
+-[[package]]
+-name = "tempfile"
+-version = "3.27.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+-dependencies = [
+- "fastrand",
+- "getrandom 0.4.3",
+- "once_cell",
+- "rustix",
+- "windows-sys",
+-]
+-
+-[[package]]
+-name = "thiserror"
+-version = "2.0.21"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
+-dependencies = [
+- "thiserror-impl",
+-]
+-
+-[[package]]
+-name = "thiserror-impl"
+-version = "2.0.21"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
+-dependencies = [
+- "proc-macro2",
+- "quote",
+- "syn 3.0.6",
+-]
+-
+-[[package]]
+-name = "thread_local"
+-version = "1.1.10"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
+-dependencies = [
+- "cfg-if",
+-]
+-
+-[[package]]
+-name = "tokio"
+-version = "1.53.2"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
+-dependencies = [
+- "bytes",
+- "libc",
+- "mio",
+- "parking_lot",
+- "pin-project-lite",
+- "signal-hook-registry",
+- "socket2",
+- "tokio-macros",
+- "windows-sys",
+-]
+-
+-[[package]]
+-name = "tokio-macros"
+-version = "2.7.2"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+-dependencies = [
+- "proc-macro2",
+- "quote",
+- "syn 3.0.6",
+-]
+-
+-[[package]]
+-name = "tokio-util"
+-version = "0.7.19"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "494815d09bf52b5548659851081238f0ca39ff638363907596da739561c62c52"
+-dependencies = [
+- "bytes",
+- "futures-core",
+- "futures-sink",
+- "futures-util",
+- "pin-project-lite",
+- "tokio",
+ ]
+ 
+ [[package]]
+--- reviewed/README.md
++++ fixed/README.md
+@@ -112,8 +112,19 @@
+ The source directory is now `tosi` instead of `task-runners`, and the executable,
+ plugin, and generated package use `tosi`. Rebuild from the renamed checkout and
+ update explicit launch paths. Install `tosi@tosi-local` through the host's normal
+-plugin management, then remove or disable the old Task Runners installation to
+-avoid loading both servers. Refresh the host session and rediscover the tools;
++plugin management, then remove the old plugin and its catalog registration. The
++old catalog points at the moved source directory and will otherwise remain stale.
++For the previous user-scoped installations:
++
++```sh
++codex plugin remove task-runners@task-runners-local
++codex plugin marketplace remove task-runners-local
++claude plugin uninstall task-runners@task-runners-local --scope user --keep-data
++claude plugin marketplace remove task-runners-local --scope user
++```
++
++This avoids loading both servers and preserves Claude's plugin data. Refresh the
++host session and rediscover the tools;
+ existing host caches do not rename themselves. MCP resource URIs now start with
+ `skill://tosi/`.
+ 
+--- reviewed/src/main.rs
++++ fixed/src/main.rs
+@@ -71,15 +71,30 @@
+     let default_backend = match config::var("DEFAULT_BACKEND").as_deref() {
+         Ok("claude") | Err(env::VarError::NotPresent) => Backend::Claude,
+         Ok("codex") => Backend::Codex,
+-        _ => return Err("TOSI_DEFAULT_BACKEND must be claude or codex".into()),
++        _ => {
++            return Err(
++                "TOSI_DEFAULT_BACKEND (or legacy TASK_RUNNERS_DEFAULT_BACKEND) must be claude or codex"
++                    .into(),
++            );
++        }
+     };
+     let max_concurrency: usize = match config::var("MAX_CONCURRENCY") {
+-        Ok(value) => value.parse()?,
++        Ok(value) => value.parse().map_err(|_| {
++            "TOSI_MAX_CONCURRENCY (or legacy TASK_RUNNERS_MAX_CONCURRENCY) must contain a valid number"
++        })?,
+         Err(env::VarError::NotPresent) => 4,
+-        Err(_) => return Err("TOSI_MAX_CONCURRENCY must contain a valid number".into()),
++        Err(_) => {
++            return Err(
++                "TOSI_MAX_CONCURRENCY (or legacy TASK_RUNNERS_MAX_CONCURRENCY) must contain a valid number"
++                    .into(),
++            );
++        }
+     };
+     if !(1..=32).contains(&max_concurrency) {
+-        return Err("TOSI_MAX_CONCURRENCY must be between 1 and 32".into());
++        return Err(
++            "TOSI_MAX_CONCURRENCY (or legacy TASK_RUNNERS_MAX_CONCURRENCY) must be between 1 and 32"
++                .into(),
++        );
+     }
+     let runner = Arc::new(CliRunner::default());
+     let manager = Manager::new(runner.clone(), default_backend, max_concurrency);
+--- reviewed/tests/diagnostics.rs
++++ fixed/tests/diagnostics.rs
+@@ -411,7 +411,7 @@
+ }
+ 
+ #[tokio::test]
+-async fn doctor_succeeds_for_authenticated_recognized_prereleases() {
++async fn doctor_succeeds_for_authenticated_prereleases_even_inside_delegated_workers() {
+     for (backend, name, override_name) in [
+         (Backend::Claude, "claude", "TOSI_CLAUDE_BIN"),
+         (Backend::Codex, "codex", "TOSI_CODEX_BIN"),
+@@ -423,24 +423,29 @@
+             0,
+         );
+         fixture.set_version(backend, "0.158.0-alpha.2");
+-        let output = tokio::time::timeout(
+-            Duration::from_secs(5),
+-            tokio::process::Command::new(env!("CARGO_BIN_EXE_tosi"))
++        for child_guard in [None, Some("TOSI_CHILD"), Some("TASK_RUNNERS_CHILD")] {
++            let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_tosi"));
++            command
+                 .args(["doctor", "--backend", name])
+                 .env(override_name, &fixture.binary)
+-                .kill_on_drop(true)
+-                .output(),
+-        )
+-        .await
+-        .unwrap()
+-        .unwrap();
+-        assert!(output.status.success(), "{backend:?}");
+-        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+-        assert_eq!(report["ready"], true);
+-        assert_eq!(report["providers"][0]["version"], "0.158.0-alpha.2");
+-        assert_eq!(report["providers"][0]["authentication"], "authenticated");
+-        assert!(!String::from_utf8_lossy(&output.stdout).contains(SECRET));
+-        assert!(!String::from_utf8_lossy(&output.stderr).contains(SECRET));
++                .env_remove("TOSI_CHILD")
++                .env_remove("TASK_RUNNERS_CHILD")
++                .kill_on_drop(true);
++            if let Some(child_guard) = child_guard {
++                command.env(child_guard, "1");
++            }
++            let output = tokio::time::timeout(Duration::from_secs(5), command.output())
++                .await
++                .unwrap()
++                .unwrap();
++            assert!(output.status.success(), "{backend:?} {child_guard:?}");
++            let report: Value = serde_json::from_slice(&output.stdout).unwrap();
++            assert_eq!(report["ready"], true);
++            assert_eq!(report["providers"][0]["version"], "0.158.0-alpha.2");
++            assert_eq!(report["providers"][0]["authentication"], "authenticated");
++            assert!(!String::from_utf8_lossy(&output.stdout).contains(SECRET));
++            assert!(!String::from_utf8_lossy(&output.stderr).contains(SECRET));
++        }
+     }
+ }
+ 
+--- reviewed/tests/shutdown.rs
++++ fixed/tests/shutdown.rs
+@@ -313,7 +313,10 @@
+ 
+ #[tokio::test]
+ async fn empty_or_invalid_primary_settings_do_not_fall_back_to_legacy_values() {
+-    for (suffix, legacy) in [("DEFAULT_BACKEND", "claude"), ("MAX_CONCURRENCY", "1")] {
++    for (suffix, legacy, expected_reason) in [
++        ("DEFAULT_BACKEND", "claude", "must be claude or codex"),
++        ("MAX_CONCURRENCY", "1", "must contain a valid number"),
++    ] {
+         for primary in ["", "invalid"] {
+             let output = tokio::time::timeout(
+                 TEST_TIMEOUT,
+@@ -329,6 +332,10 @@
+                 !output.status.success(),
+                 "accepted invalid primary {suffix}"
+             );
+-        }
+-    }
+-}
++            let stderr = String::from_utf8_lossy(&output.stderr);
++            let expected_message =
++                format!("TOSI_{suffix} (or legacy TASK_RUNNERS_{suffix}) {expected_reason}");
++            assert!(stderr.contains(&expected_message), "{stderr}");
++        }
++    }
++}
+--- reviewed/xtask/src/main.rs
++++ fixed/xtask/src/main.rs
+@@ -222,7 +222,7 @@
+                 "author": { "name": "Josh Rotenberg" },
+                 "keywords": ["claude", "codex", "delegation", "local"],
+                 "extensions": { "com.openai": { "interface": {
+-                    "displayName": "Tosi", "shortDescription": "Claude and Codex task delegation",
++                    "displayName": "Tosi", "shortDescription": "Claude and Codex delegation",
+                     "longDescription": "Run, wait for, continue, and cancel bounded tasks using locally authenticated Claude and Codex command-line tools.",
+                     "developerName": "Josh Rotenberg", "category": "Engineering", "capabilities": ["Read", "Write"],
+                     "defaultPrompt": "Delegate an independent review of this project to Claude."
+@@ -526,6 +526,14 @@
+                     assert_eq!(value["name"], "tosi");
+                     assert_eq!(value["version"], "9.8.7");
+                     if manifest == "plugin.json" {
++                        assert!(
++                            value["extensions"]["com.openai"]["interface"]["shortDescription"]
++                                .as_str()
++                                .unwrap()
++                                .chars()
++                                .count()
++                                <= 30
++                        );
+                         assert_eq!(
+                             value["extensions"]["com.openai"]["interface"]["displayName"],
+                             "Tosi"

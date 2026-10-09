@@ -1,0 +1,46 @@
+[
+  {
+    "backend": "claude",
+    "data": {
+      "task_id": "e1a2fd38-3dd9-40cd-af1c-223a8999acfb",
+      "conversation_id": "1321e4bf-bb5d-43bf-8081-5f6c7a0dbcd3",
+      "parent_task_id": "4bf9e653-f3dc-4129-8b1a-db33bf96c432",
+      "backend": "claude",
+      "status": "running",
+      "cwd": "/private/tmp/task-runners-baseline-6l1yecmw",
+      "model": null,
+      "access": "read_only",
+      "timeout_secs": 300,
+      "started_at_ms": 1791502561507,
+      "finished_at_ms": null,
+      "result": null,
+      "structured_result": null,
+      "result_truncated": false,
+      "error": null,
+      "provider_session_id": null,
+      "usage": null
+    }
+  },
+  {
+    "backend": "codex",
+    "data": {
+      "task_id": "d55874fe-d6cc-4526-bcb3-11f213ef7325",
+      "conversation_id": "9493b6d7-cedf-41f3-aba5-a5607c6fa3b3",
+      "parent_task_id": "b93bbf2c-a6eb-4032-be08-aa9519993226",
+      "backend": "codex",
+      "status": "running",
+      "cwd": "/private/tmp/task-runners-baseline-6l1yecmw",
+      "model": null,
+      "access": "read_only",
+      "timeout_secs": 300,
+      "started_at_ms": 1791502562906,
+      "finished_at_ms": null,
+      "result": null,
+      "structured_result": null,
+      "result_truncated": false,
+      "error": null,
+      "provider_session_id": null,
+      "usage": null
+    }
+  }
+]

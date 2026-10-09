@@ -1,0 +1,109 @@
+{
+  "tasks": [
+    {
+      "task_id": "25940bf4-1cfc-4d86-b878-356a8d8c2991",
+      "conversation_id": "1321e4bf-bb5d-43bf-8081-5f6c7a0dbcd3",
+      "parent_task_id": null,
+      "backend": "claude",
+      "status": "completed",
+      "cwd": "/private/tmp/task-runners-baseline-6l1yecmw",
+      "model": null,
+      "access": "read_only",
+      "timeout_secs": 300,
+      "started_at_ms": 1791501717678,
+      "finished_at_ms": 1791501845804,
+      "result": "{\"summary\":\"Read-only baseline review of the Task Runners snapshot. Task lifecycle (admission, continuation, wait, cancel, shutdown), both provider adapters, structured-output validation, diagnostics redaction, server startup and xtask packaging were reviewed against the README, skill and tool contract. Only one low-priority issue was found: provider readiness depends on a strict X.Y.Z version format, so working pre-release CLIs are reported as not ready. No higher-priority bugs were found in the code inspected. Wrapper internals and real host plugin-manifest behaviour could not be verified from this snapshot.\",\"findings\":[{\"priority\":\"P3\",\"file\":\"src/diagnostics.rs\",\"line\":275,\"title\":\"Readiness requires a strict X.Y.Z version, so authenticated pre-release CLIs are reported not ready\",\"scenario\":\"A user runs a Codex pre-release build whose `--version` prints `codex-cli 0.158.0-alpha.2` (or any version with a suffix) and is logged in. They call check_environment or run `task-runners doctor`.\",\"evidence\":\"parse_version (src/diagnostics.rs:275-291) splits the token on '.' and returns None unless there are exactly three all-digit parts; `0.158.0-alpha.2` yields 4 parts, and a part such as `0-alpha` is non-digit. check_provider then sets `report.ready = report.version.is_some() && authentication == Authenticated` (src/diagnostics.rs:173-174), and main.rs:45-49 makes doctor exit with status 1 when not ready.\",\"impact\":\"The tool reports the provider as not ready and doctor exits with status 1, even though the CLI launches, is authenticated, and tasks would run. Anyone relying on these checks may wrongly troubleshoot or skip a usable backend. The raw version is correctly withheld, but readiness is conflated with the format of the version string.\",\"suggested_correction\":\"Decide readiness from a successful version probe plus Authenticated, not from parse success. Alternatively, accept an optional pre-release/build suffix made of a safe character class ([0-9A-Za-z.-+]) after the numeric core, or report only the numeric core while still marking the provider ready. Add a diagnostics test with a suffixed version.\"}],\"coverage\":[\"src/manager.rs: spawn/continue admission, capacity and closing checks, conversation latest/active tracking, monitor task and finish, wait_tasks watch loop and deadline, cancel_task, shutdown\",\"src/backend.rs: Claude tool/permission/isolation flags, stdin prompt, resume, json_schema, error and auth classification; Codex exec vs resume sandbox, ignore_user_config, disable plugins, per-run tempdir schema and final-message files, turn.failed/turn.completed handling, final-file reading limits\",\"src/output.rs: schema root type and size checks, offline compile, structured result validation\",\"src/types.rs: RunSpec, RunOutput, Runner contract\",\"src/diagnostics.rs: environment report fields, probe redaction/NoSubscriber, version and auth parsing, readiness\",\"src/main.rs: recursion guard, env parsing, EOF/signal shutdown ordering, doctor exit code\",\"src/server.rs: tool and resource registration with canonical include_str! skill text\",\"xtask/src/main.rs: metadata, release build artifact discovery, generate/copy_tree, staged swap and rollback, marketplace and archive naming, unit tests\",\"tests/lifecycle.rs, tests/backend.rs, tests/diagnostics.rs, tests/shutdown.rs, tests/support/mod.rs\",\"README.md, AGENTS.md, Cargo.toml, .cargo/config.toml, scripts/package.sh, resources/mcp/instructions.md, resources/mcp/tools/cancel_task.md, resources/mcp/tools/continue_task.md, resources/skills/delegate/SKILL.md, resources/skills/delegate/references/follow-up.md\"],\"limitations\":[\"Pinned wrapper and transport source (claude-wrapper 0.14.4, codex-wrapper 0.4.4, tower-mcp 0.23.2) is outside the snapshot. The following could not be verified: what safe_mode() emits, timeout and cancellation kill semantics, kill-on-drop when the inner spawned run task panics, failure_kind/auth_kind classification, and whether non-auth error strings include raw stderr (tests/backend.rs:202 asserts stderr is included for unrelated errors, which is intentional but could carry sensitive provider text).\",\"Real host plugin formats were not verified. This covers whether Codex accepts root-level plugin.json/mcp.json with a relative './bin/task-runners' command, and whether Codex reads .claude-plugin/marketplace.json as the README claims. The brief states installed-host usage was previously verified.\",\"Unverified concern, not reported as a bug: if cancel_task or shutdown cancels the token after the provider has already exited successfully but before Manager::finish runs, finish (src/manager.rs:303-305) records Cancelled and discards the result, including completed workspace_write edits and the provider session. This matches the documented conservative semantics, so it is listed only for awareness.\",\"Unverified: if Codex emits turn.failed with a 401 and exits 0, or Claude returns is_error JSON for an auth failure with exit 0, those paths (src/backend.rs:131-137, 221-226) return the provider's raw message rather than the launch-context auth guidance. Actual CLI exit codes for these cases were not checked.\",\"Did not read tests/resources.rs, tests/live.rs, ROADMAP.md, PARENT_CHECKS.json, resources/cli/after-help.txt, the remaining tool description files, the parallel-tasks and implementation-review references, or most of scripts/smoke.py (only its structure was searched).\",\"No tests, builds or commands were run; parent-supplied check results were relied upon as stated in the brief.\"]}",
+      "structured_result": {
+        "summary": "Read-only baseline review of the Task Runners snapshot. Task lifecycle (admission, continuation, wait, cancel, shutdown), both provider adapters, structured-output validation, diagnostics redaction, server startup and xtask packaging were reviewed against the README, skill and tool contract. Only one low-priority issue was found: provider readiness depends on a strict X.Y.Z version format, so working pre-release CLIs are reported as not ready. No higher-priority bugs were found in the code inspected. Wrapper internals and real host plugin-manifest behaviour could not be verified from this snapshot.",
+        "findings": [
+          {
+            "priority": "P3",
+            "file": "src/diagnostics.rs",
+            "line": 275,
+            "title": "Readiness requires a strict X.Y.Z version, so authenticated pre-release CLIs are reported not ready",
+            "scenario": "A user runs a Codex pre-release build whose `--version` prints `codex-cli 0.158.0-alpha.2` (or any version with a suffix) and is logged in. They call check_environment or run `task-runners doctor`.",
+            "evidence": "parse_version (src/diagnostics.rs:275-291) splits the token on '.' and returns None unless there are exactly three all-digit parts; `0.158.0-alpha.2` yields 4 parts, and a part such as `0-alpha` is non-digit. check_provider then sets `report.ready = report.version.is_some() && authentication == Authenticated` (src/diagnostics.rs:173-174), and main.rs:45-49 makes doctor exit with status 1 when not ready.",
+            "impact": "The tool reports the provider as not ready and doctor exits with status 1, even though the CLI launches, is authenticated, and tasks would run. Anyone relying on these checks may wrongly troubleshoot or skip a usable backend. The raw version is correctly withheld, but readiness is conflated with the format of the version string.",
+            "suggested_correction": "Decide readiness from a successful version probe plus Authenticated, not from parse success. Alternatively, accept an optional pre-release/build suffix made of a safe character class ([0-9A-Za-z.-+]) after the numeric core, or report only the numeric core while still marking the provider ready. Add a diagnostics test with a suffixed version."
+          }
+        ],
+        "coverage": [
+          "src/manager.rs: spawn/continue admission, capacity and closing checks, conversation latest/active tracking, monitor task and finish, wait_tasks watch loop and deadline, cancel_task, shutdown",
+          "src/backend.rs: Claude tool/permission/isolation flags, stdin prompt, resume, json_schema, error and auth classification; Codex exec vs resume sandbox, ignore_user_config, disable plugins, per-run tempdir schema and final-message files, turn.failed/turn.completed handling, final-file reading limits",
+          "src/output.rs: schema root type and size checks, offline compile, structured result validation",
+          "src/types.rs: RunSpec, RunOutput, Runner contract",
+          "src/diagnostics.rs: environment report fields, probe redaction/NoSubscriber, version and auth parsing, readiness",
+          "src/main.rs: recursion guard, env parsing, EOF/signal shutdown ordering, doctor exit code",
+          "src/server.rs: tool and resource registration with canonical include_str! skill text",
+          "xtask/src/main.rs: metadata, release build artifact discovery, generate/copy_tree, staged swap and rollback, marketplace and archive naming, unit tests",
+          "tests/lifecycle.rs, tests/backend.rs, tests/diagnostics.rs, tests/shutdown.rs, tests/support/mod.rs",
+          "README.md, AGENTS.md, Cargo.toml, .cargo/config.toml, scripts/package.sh, resources/mcp/instructions.md, resources/mcp/tools/cancel_task.md, resources/mcp/tools/continue_task.md, resources/skills/delegate/SKILL.md, resources/skills/delegate/references/follow-up.md"
+        ],
+        "limitations": [
+          "Pinned wrapper and transport source (claude-wrapper 0.14.4, codex-wrapper 0.4.4, tower-mcp 0.23.2) is outside the snapshot. The following could not be verified: what safe_mode() emits, timeout and cancellation kill semantics, kill-on-drop when the inner spawned run task panics, failure_kind/auth_kind classification, and whether non-auth error strings include raw stderr (tests/backend.rs:202 asserts stderr is included for unrelated errors, which is intentional but could carry sensitive provider text).",
+          "Real host plugin formats were not verified. This covers whether Codex accepts root-level plugin.json/mcp.json with a relative './bin/task-runners' command, and whether Codex reads .claude-plugin/marketplace.json as the README claims. The brief states installed-host usage was previously verified.",
+          "Unverified concern, not reported as a bug: if cancel_task or shutdown cancels the token after the provider has already exited successfully but before Manager::finish runs, finish (src/manager.rs:303-305) records Cancelled and discards the result, including completed workspace_write edits and the provider session. This matches the documented conservative semantics, so it is listed only for awareness.",
+          "Unverified: if Codex emits turn.failed with a 401 and exits 0, or Claude returns is_error JSON for an auth failure with exit 0, those paths (src/backend.rs:131-137, 221-226) return the provider's raw message rather than the launch-context auth guidance. Actual CLI exit codes for these cases were not checked.",
+          "Did not read tests/resources.rs, tests/live.rs, ROADMAP.md, PARENT_CHECKS.json, resources/cli/after-help.txt, the remaining tool description files, the parallel-tasks and implementation-review references, or most of scripts/smoke.py (only its structure was searched).",
+          "No tests, builds or commands were run; parent-supplied check results were relied upon as stated in the brief."
+        ]
+      },
+      "result_truncated": false,
+      "error": null,
+      "provider_session_id": "637ee6a8-5d90-4459-82d0-ec96ff1c10b3",
+      "usage": {
+        "tokens": {
+          "input_tokens": 26,
+          "cached_input_tokens": 410479,
+          "cache_write_input_tokens": 86242,
+          "output_tokens": 12866,
+          "reasoning_output_tokens": null,
+          "total_tokens": null
+        },
+        "cost_usd": 1.0294558,
+        "num_turns": 28
+      }
+    },
+    {
+      "task_id": "3140030b-e74f-481c-a8f4-af3030e5e1d4",
+      "conversation_id": "9493b6d7-cedf-41f3-aba5-a5607c6fa3b3",
+      "parent_task_id": null,
+      "backend": "codex",
+      "status": "completed",
+      "cwd": "/private/tmp/task-runners-baseline-6l1yecmw",
+      "model": null,
+      "access": "read_only",
+      "timeout_secs": 300,
+      "started_at_ms": 1791501716364,
+      "finished_at_ms": 1791501734606,
+      "result": "{\n  \"summary\": \"Review could not be performed: no available non-shell tool can read the local snapshot. The empty findings array does not establish correctness.\",\n  \"findings\": [],\n  \"coverage\": [\n    \"Checked available tools and MCP resources for local file reading access.\"\n  ],\n  \"limitations\": [\n    \"Could not read REVIEW_BRIEF.md, source files, tests, or parent-run test evidence.\",\n    \"All requested review areas remain unassessed: task lifecycle and cancellation, provider adapters, structured results and continuation, environment/auth diagnostics, plugin packaging, and test coverage.\",\n    \"No files were edited, shell commands or tests run, or work delegated, in accordance with the assignment.\",\n    \"Completing the review requires a local file reading/search tool or the snapshot contents supplied directly.\"\n  ]\n}",
+      "structured_result": {
+        "summary": "Review could not be performed: no available non-shell tool can read the local snapshot. The empty findings array does not establish correctness.",
+        "findings": [],
+        "coverage": [
+          "Checked available tools and MCP resources for local file reading access."
+        ],
+        "limitations": [
+          "Could not read REVIEW_BRIEF.md, source files, tests, or parent-run test evidence.",
+          "All requested review areas remain unassessed: task lifecycle and cancellation, provider adapters, structured results and continuation, environment/auth diagnostics, plugin packaging, and test coverage.",
+          "No files were edited, shell commands or tests run, or work delegated, in accordance with the assignment.",
+          "Completing the review requires a local file reading/search tool or the snapshot contents supplied directly."
+        ]
+      },
+      "result_truncated": false,
+      "error": null,
+      "provider_session_id": "01a11dd2-cdbb-7631-885d-41bd3711aa0d",
+      "usage": {
+        "tokens": {
+          "input_tokens": 71458,
+          "cached_input_tokens": 22016,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 333,
+          "reasoning_output_tokens": 17,
+          "total_tokens": null
+        }
+      }
+    }
+  ],
+  "timed_out": false
+}
