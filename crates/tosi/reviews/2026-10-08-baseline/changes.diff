@@ -1,0 +1,463 @@
+--- before/AGENTS.md
++++ after/AGENTS.md
+@@ -28,6 +28,9 @@
+    Give both the same review scope and evidence, without the other's findings.
+    Reviewers must not edit files or delegate further. The parent supplies test
+    evidence; Claude cannot run shell commands through this adapter.
++   Allow Codex read-only inspection commands such as `rg`, `cat`, and `sed`;
++   a blanket shell prohibition can prevent it from reading the source. Keep
++   test/build execution with the parent unless the assignment says otherwise.
+ 4. Request `output_schema` with structured findings containing priority,
+    file/line, failure scenario, evidence, impact, and suggested correction.
+    Include review limitations separately. An empty findings array is valid;
+--- before/README.md
++++ after/README.md
+@@ -8,6 +8,8 @@
+ The source checkout's `ROADMAP.md` tracks planned effort controls, routing,
+ delegation guidance, dogfood reviews, distribution work, and a second-round
+ orchestration candidate covering workflows, debate, consensus, and pipelines.
++Naming candidates and verified meanings are recorded in the source checkout's
++`NAMING.md`; Zenta is the current front-runner while the choice remains open.
+ 
+ ## Build and package
+ 
+@@ -41,10 +43,12 @@
+ effect.
+ 
+ For packaging changes that do not require recompilation, use
+-`cargo xtask package --host both --skip-build`. It uses the existing native
+-`target/release/task-runners` executable (respecting Cargo's target directory)
+-and does not check whether that binary is current. The old `scripts/package.sh`
+-is a thin alias that forwards these options.
++`cargo xtask package --host both --skip-build --binary /path/to/task-runners`.
++These two options must be supplied together. The binary must be an existing
++native executable; you are responsible for its freshness and architecture.
++Relative binary paths resolve from your current working directory. The normal
++build uses the executable path reported by Cargo, including target-specific
++directories. The old `scripts/package.sh` is a thin alias that forwards these options.
+ 
+ Build separately on machines with different operating systems or CPU
+ architectures. A matching archive can be copied to the other machine; it contains
+@@ -204,6 +208,11 @@
+ status (`authenticated`, `unavailable`, or `unknown`) with hints. It makes no
+ model call and returns no credential values. `doctor` exits with status 1 if any
+ selected provider is not ready; select one backend if only that CLI is needed.
++Recognized versions are numeric `X.Y.Z` releases, optionally followed by
++`-alpha.N`, `-beta.N`, or `-rc.N` with a numeric ordinal. Other version formats
++remain unrecognized; raw probe output is withheld rather than returned as a
++version. Readiness also requires an authenticated status and does not prove
++network access or model availability.
+ 
+ An authentication error describes the checked process's launch context, not
+ necessarily the user's login. Compare the executable, configuration paths, and
+--- before/src/diagnostics.rs
++++ after/src/diagnostics.rs
+@@ -278,13 +278,20 @@
+         Backend::Claude => line.strip_suffix(" (Claude Code)")?,
+         Backend::Codex => line.strip_prefix("codex-cli ")?,
+     };
+-    // Return only the numeric release, never an arbitrary suffix or extra line.
+-    let parts: Vec<_> = token.split('.').collect();
+-    if parts.len() != 3
+-        || parts
+-            .iter()
+-            .any(|part| part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()))
+-    {
++    // Return numeric releases and only known prerelease labels with a numeric
++    // ordinal. Arbitrary SemVer identifiers could expose unrelated CLI output.
++    let numeric = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
++    let release = if let Some((release, prerelease)) = token.split_once('-') {
++        let (label, ordinal) = prerelease.split_once('.')?;
++        if !matches!(label, "alpha" | "beta" | "rc") || !numeric(ordinal) {
++            return None;
++        }
++        release
++    } else {
++        token
++    };
++    let parts: Vec<_> = release.split('.').collect();
++    if parts.len() != 3 || parts.iter().any(|part| !numeric(part)) {
+         return None;
+     }
+     Some(token.to_owned())
+--- before/tests/diagnostics.rs
++++ after/tests/diagnostics.rs
+@@ -76,6 +76,14 @@
+         CliRunner::new().with_binary(backend, &self.binary)
+     }
+ 
++    fn set_version(&self, backend: Backend, version: &str) {
++        fs::write(
++            self.dir.path().join("version"),
++            version_output(backend, version),
++        )
++        .unwrap();
++    }
++
+     fn hang(&self) {
+         fs::write(self.dir.path().join("hang"), "").unwrap();
+     }
+@@ -94,6 +102,13 @@
+     }
+ }
+ 
++fn version_output(backend: Backend, version: &str) -> String {
++    match backend {
++        Backend::Claude => format!("{version} (Claude Code)\n"),
++        Backend::Codex => format!("codex-cli {version}\n"),
++    }
++}
++
+ #[tokio::test]
+ async fn reports_only_whitelisted_status_and_version_fields() {
+     let claude = Fixture::new(
+@@ -221,23 +236,91 @@
+ }
+ 
+ #[tokio::test]
++async fn authenticated_recognized_prereleases_are_ready_for_both_providers() {
++    for backend in [Backend::Claude, Backend::Codex] {
++        for version in ["0.158.0-alpha.2", "0.158.0-beta.12", "0.158.0-rc.1"] {
++            let fixture = Fixture::new(
++                backend,
++                r#"{"loggedIn":true}"#,
++                "Logged in using ChatGPT",
++                0,
++            );
++            fixture.set_version(backend, version);
++            let report = check_environment(&fixture.runner(backend), Some(backend)).await;
++            assert!(report.is_ready(), "{backend:?} {version}: {report:?}");
++            assert_eq!(report.providers[0].version.as_deref(), Some(version));
++            assert_eq!(
++                report.providers[0].authentication,
++                Authentication::Authenticated
++            );
++            assert!(!serde_json::to_string(&report).unwrap().contains(SECRET));
++        }
++    }
++}
++
++#[tokio::test]
++async fn arbitrary_or_malformed_prerelease_versions_are_withheld() {
++    let versions = [
++        format!("0.158.0-{SECRET}"),
++        format!("0.158.0-alpha.{SECRET}"),
++        format!("0.158.0+{SECRET}"),
++        format!("0.158.0-alpha.2+{SECRET}"),
++        "0.158.0-preview.2".into(),
++        "0.158.0-alpha".into(),
++        "0.158.0-alpha.".into(),
++        "0.158.0-alpha.2.3".into(),
++        "0.158-alpha.2".into(),
++        "0.158.0.1-alpha.2".into(),
++        "0.158.x-alpha.2".into(),
++        "0.158.0-alpha. 2".into(),
++        "0.158. 0-alpha.2".into(),
++        "0.158.0- alpha.2".into(),
++        "0.158.0-alpha.\t2".into(),
++    ];
++    for backend in [Backend::Claude, Backend::Codex] {
++        for version in &versions {
++            let fixture = Fixture::new(
++                backend,
++                r#"{"loggedIn":true}"#,
++                "Logged in using ChatGPT",
++                0,
++            );
++            fixture.set_version(backend, version);
++            let report = check_environment(&fixture.runner(backend), Some(backend)).await;
++            assert!(!report.is_ready(), "{backend:?} {version}");
++            assert!(
++                report.providers[0].version.is_none(),
++                "{backend:?} {version}"
++            );
++            assert_eq!(
++                report.providers[0].authentication,
++                Authentication::Authenticated
++            );
++            assert!(!serde_json::to_string(&report).unwrap().contains(SECRET));
++        }
++    }
++}
++
++#[tokio::test]
+ async fn suspicious_version_output_is_not_returned_as_a_version() {
+     for backend in [Backend::Claude, Backend::Codex] {
+-        let fixture = Fixture::new(
+-            backend,
+-            r#"{"loggedIn":true}"#,
+-            "Logged in using ChatGPT",
+-            0,
+-        );
+-        fs::write(
+-            fixture.dir.path().join("version"),
+-            format!("codex-cli 0.157.1\n{SECRET}"),
+-        )
+-        .unwrap();
+-        let report = check_environment(&fixture.runner(backend), Some(backend)).await;
+-        assert!(!report.is_ready());
+-        assert!(report.providers[0].version.is_none());
+-        assert!(!serde_json::to_string(&report).unwrap().contains(SECRET));
++        for version in ["0.158.0", "0.158.0-alpha.2"] {
++            let fixture = Fixture::new(
++                backend,
++                r#"{"loggedIn":true}"#,
++                "Logged in using ChatGPT",
++                0,
++            );
++            fs::write(
++                fixture.dir.path().join("version"),
++                format!("{}{SECRET}", version_output(backend, version)),
++            )
++            .unwrap();
++            let report = check_environment(&fixture.runner(backend), Some(backend)).await;
++            assert!(!report.is_ready());
++            assert!(report.providers[0].version.is_none());
++            assert!(!serde_json::to_string(&report).unwrap().contains(SECRET));
++        }
+     }
+ }
+ 
+@@ -328,6 +411,40 @@
+ }
+ 
+ #[tokio::test]
++async fn doctor_succeeds_for_authenticated_recognized_prereleases() {
++    for (backend, name, override_name) in [
++        (Backend::Claude, "claude", "TASK_RUNNERS_CLAUDE_BIN"),
++        (Backend::Codex, "codex", "TASK_RUNNERS_CODEX_BIN"),
++    ] {
++        let fixture = Fixture::new(
++            backend,
++            r#"{"loggedIn":true}"#,
++            "Logged in using ChatGPT",
++            0,
++        );
++        fixture.set_version(backend, "0.158.0-alpha.2");
++        let output = tokio::time::timeout(
++            Duration::from_secs(5),
++            tokio::process::Command::new(env!("CARGO_BIN_EXE_task-runners"))
++                .args(["doctor", "--backend", name])
++                .env(override_name, &fixture.binary)
++                .kill_on_drop(true)
++                .output(),
++        )
++        .await
++        .unwrap()
++        .unwrap();
++        assert!(output.status.success(), "{backend:?}");
++        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
++        assert_eq!(report["ready"], true);
++        assert_eq!(report["providers"][0]["version"], "0.158.0-alpha.2");
++        assert_eq!(report["providers"][0]["authentication"], "authenticated");
++        assert!(!String::from_utf8_lossy(&output.stdout).contains(SECRET));
++        assert!(!String::from_utf8_lossy(&output.stderr).contains(SECRET));
++    }
++}
++
++#[tokio::test]
+ async fn doctor_emits_json_and_nonzero_status_when_auth_is_unavailable() {
+     let fixture = Fixture::new(
+         Backend::Claude,
+--- before/xtask/src/main.rs
++++ after/xtask/src/main.rs
+@@ -52,16 +52,18 @@
+     /// Plugin host format; every binary still supports both worker backends.
+     #[arg(long, value_enum, default_value = "both")]
+     host: Host,
+-    /// Reuse the existing native target/release binary without checking freshness.
+-    #[arg(long)]
++    /// Package --binary without building; you are responsible for freshness and native architecture.
++    #[arg(long, requires = "binary")]
+     skip_build: bool,
++    /// Existing native executable; relative paths use the caller's working directory.
++    #[arg(long, value_name = "PATH", requires = "skip_build")]
++    binary: Option<PathBuf>,
+ }
+ 
+ struct Package {
+     name: String,
+     version: String,
+     description: String,
+-    target_dir: PathBuf,
+ }
+ 
+ fn cargo(root: &Path) -> Command {
+@@ -106,11 +108,6 @@
+             .as_str()
+             .unwrap_or("Local Claude and Codex tasks")
+             .into(),
+-        target_dir: PathBuf::from(
+-            metadata["target_directory"]
+-                .as_str()
+-                .ok_or("target directory missing")?,
+-        ),
+     })
+ }
+ 
+@@ -143,6 +140,18 @@
+     executable.ok_or_else(|| "cargo did not report a task-runners executable".into())
+ }
+ 
++fn select_binary(root: &Path, package: &Package, options: &PackageOptions) -> Result<PathBuf> {
++    if options.skip_build {
++        let binary = options
++            .binary
++            .as_ref()
++            .ok_or("--skip-build requires --binary PATH")?;
++        Ok(std::path::absolute(binary)?)
++    } else {
++        build(root, package)
++    }
++}
++
+ fn write_json(path: &Path, value: Value) -> Result<()> {
+     fs::create_dir_all(path.parent().ok_or("missing parent directory")?)?;
+     let mut file = fs::File::create(path)?;
+@@ -187,7 +196,7 @@
+ ) -> Result<()> {
+     if !binary.is_file() {
+         return Err(format!(
+-            "release executable missing: {}; run without --skip-build",
++            "executable missing: {}; supply an existing --binary or run without --skip-build",
+             binary.display()
+         )
+         .into());
+@@ -325,11 +334,7 @@
+         .parent()
+         .ok_or("missing workspace root")?;
+     let metadata = metadata(root)?;
+-    let binary = if options.skip_build {
+-        metadata.target_dir.join("release").join(&metadata.name)
+-    } else {
+-        build(root, &metadata)?
+-    };
++    let binary = select_binary(root, &metadata, &options)?;
+     let archive = package(root, &metadata, &binary, options.host)?;
+     println!(
+         "Generated {}",
+@@ -359,15 +364,33 @@
+         };
+         assert_eq!(defaults.host, Host::Both);
+         assert!(!defaults.skip_build);
+-        let Some(Action::Package(explicit)) =
+-            Cli::try_parse_from(["xtask", "package", "--host", "claude", "--skip-build"])
+-                .unwrap()
+-                .command
++        assert!(defaults.binary.is_none());
++        let Some(Action::Package(explicit)) = Cli::try_parse_from([
++            "xtask",
++            "package",
++            "--host",
++            "claude",
++            "--skip-build",
++            "--binary",
++            "build/task-runners",
++        ])
++        .unwrap()
++        .command
+         else {
+             panic!("package subcommand missing");
+         };
+         assert_eq!(explicit.host, Host::Claude);
+         assert!(explicit.skip_build);
++        assert_eq!(explicit.binary, Some(PathBuf::from("build/task-runners")));
++        for args in [
++            vec!["xtask", "package", "--skip-build"],
++            vec!["xtask", "package", "--binary", "build/task-runners"],
++        ] {
++            assert_eq!(
++                Cli::try_parse_from(args).unwrap_err().kind(),
++                clap::error::ErrorKind::MissingRequiredArgument
++            );
++        }
+         for args in [
+             vec!["xtask", "package", "--host", "unknown"],
+             vec!["xtask", "package", "--host"],
+@@ -384,6 +407,7 @@
+             let help = Cli::try_parse_from(args).unwrap_err();
+             assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+             assert!(help.to_string().contains("--skip-build"));
++            assert!(help.to_string().contains("--binary <PATH>"));
+         }
+     }
+ 
+@@ -403,17 +427,37 @@
+         )
+         .unwrap();
+         fs::write(root.join("README.md"), "readme\n").unwrap();
+-        let binary = root.join("binary");
+-        fs::write(&binary, "test executable").unwrap();
++        let stale_binary = root.join("target/release/task-runners");
++        fs::create_dir_all(stale_binary.parent().unwrap()).unwrap();
++        fs::write(stale_binary, "stale executable").unwrap();
++        let chosen_binary = root.join("target/native-triple/release/task-runners");
++        fs::create_dir_all(chosen_binary.parent().unwrap()).unwrap();
++        fs::write(&chosen_binary, "chosen executable").unwrap();
+         let metadata = Package {
+             name: "task-runners".into(),
+             version: "9.8.7".into(),
+             description: "fixture".into(),
+-            target_dir: root.join("target"),
+         };
++        let Some(Action::Package(options)) = Cli::try_parse_from([
++            "xtask",
++            "package",
++            "--skip-build",
++            "--binary",
++            chosen_binary.to_str().unwrap(),
++        ])
++        .unwrap()
++        .command
++        else {
++            panic!("package subcommand missing");
++        };
++        let binary = select_binary(root, &metadata, &options).unwrap();
+         for host in [Host::Both, Host::Codex, Host::Claude] {
+             let archive = package(root, &metadata, &binary, host).unwrap();
+             let plugin = root.join("plugin/task-runners");
++            assert_eq!(
++                fs::read(plugin.join("bin/task-runners")).unwrap(),
++                b"chosen executable"
++            );
+             assert_eq!(
+                 fs::read_to_string(plugin.join("skills/delegate/SKILL.md")).unwrap(),
+                 "canonical skill\n"
+@@ -461,6 +505,14 @@
+             assert!(entries.contains("task-runners/bin/task-runners\n"));
+             assert!(entries.contains("task-runners/.claude-plugin/marketplace.json\n"));
+             assert!(!entries.contains("run-task-runners.sh"));
++            let archived_binary = Command::new("tar")
++                .arg("-xOzf")
++                .arg(&archive)
++                .arg("task-runners/bin/task-runners")
++                .output()
++                .unwrap();
++            assert!(archived_binary.status.success());
++            assert_eq!(archived_binary.stdout, b"chosen executable");
+             assert!(
+                 archive
+                     .file_name()
+@@ -482,9 +534,20 @@
+             name: "task-runners".into(),
+             version: "1.0.0".into(),
+             description: "fixture".into(),
+-            target_dir: root.join("target"),
+         };
+-        assert!(package(root, &metadata, &root.join("missing"), Host::Both).is_err());
++        let options = PackageOptions {
++            host: Host::Both,
++            skip_build: true,
++            binary: Some(PathBuf::from("missing-task-runners-executable")),
++        };
++        let binary = select_binary(root, &metadata, &options).unwrap();
++        assert_eq!(
++            binary,
++            env::current_dir()
++                .unwrap()
++                .join("missing-task-runners-executable")
++        );
++        assert!(package(root, &metadata, &binary, options.host).is_err());
+         assert_eq!(
+             fs::read_to_string(root.join("plugin/task-runners/keep")).unwrap(),
+             "existing package"

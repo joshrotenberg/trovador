@@ -1,0 +1,23 @@
+{
+  "release": {
+    "path": "/Users/joshrotenberg/Code/github.com/genagent/tosi/target/release/tosi",
+    "sha256": "b6d4353be3f46bcf1134dc5f1d138a5e839efa92770114867fdb5a27192b5c16"
+  },
+  "package": {
+    "path": "/Users/joshrotenberg/Code/github.com/genagent/tosi/plugin/tosi/bin/tosi",
+    "sha256": "b6d4353be3f46bcf1134dc5f1d138a5e839efa92770114867fdb5a27192b5c16"
+  },
+  "codex": {
+    "path": "/Users/joshrotenberg/.codex/plugins/cache/tosi-local/tosi/0.1.0/bin/tosi",
+    "sha256": "b6d4353be3f46bcf1134dc5f1d138a5e839efa92770114867fdb5a27192b5c16"
+  },
+  "claude": {
+    "path": "/Users/joshrotenberg/.claude/plugins/cache/tosi-local/tosi/0.1.0/bin/tosi",
+    "sha256": "b6d4353be3f46bcf1134dc5f1d138a5e839efa92770114867fdb5a27192b5c16"
+  },
+  "archive": {
+    "path": "/Users/joshrotenberg/Code/github.com/genagent/tosi/dist/tosi-0.1.0-both-macos-aarch64.tar.gz",
+    "member": "tosi/bin/tosi",
+    "sha256": "b6d4353be3f46bcf1134dc5f1d138a5e839efa92770114867fdb5a27192b5c16"
+  }
+}

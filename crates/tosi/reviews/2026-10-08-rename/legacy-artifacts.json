@@ -1,0 +1,18 @@
+[
+  {
+    "from": "/Users/joshrotenberg/Code/github.com/genagent/tosi/plugin/task-runners",
+    "preserved_at": "/private/var/folders/kr/h7p0086n6vd22zbkwc2gvhjw0000gn/T/tosi-rename-before-nufvp6t6/generated-prior/plugin/task-runners"
+  },
+  {
+    "from": "/Users/joshrotenberg/Code/github.com/genagent/tosi/dist/task-runners-0.1.0-both-macos-aarch64.tar.gz",
+    "preserved_at": "/private/var/folders/kr/h7p0086n6vd22zbkwc2gvhjw0000gn/T/tosi-rename-before-nufvp6t6/generated-prior/dist/task-runners-0.1.0-both-macos-aarch64.tar.gz"
+  },
+  {
+    "from": "/Users/joshrotenberg/Code/github.com/genagent/tosi/dist/task-runners-0.1.0-claude-macos-aarch64.tar.gz",
+    "preserved_at": "/private/var/folders/kr/h7p0086n6vd22zbkwc2gvhjw0000gn/T/tosi-rename-before-nufvp6t6/generated-prior/dist/task-runners-0.1.0-claude-macos-aarch64.tar.gz"
+  },
+  {
+    "from": "/Users/joshrotenberg/Code/github.com/genagent/tosi/dist/task-runners-0.1.0-codex-macos-aarch64.tar.gz",
+    "preserved_at": "/private/var/folders/kr/h7p0086n6vd22zbkwc2gvhjw0000gn/T/tosi-rename-before-nufvp6t6/generated-prior/dist/task-runners-0.1.0-codex-macos-aarch64.tar.gz"
+  }
+]

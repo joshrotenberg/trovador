@@ -1,0 +1,14 @@
+Environment:
+  TOSI_DEFAULT_BACKEND  claude (default) or codex
+  TOSI_MAX_CONCURRENCY  1..32 (default 4)
+  TOSI_CLAUDE_BIN       Claude CLI path
+  TOSI_CODEX_BIN        Codex CLI path
+  RUST_LOG              stderr log filter
+
+Legacy TASK_RUNNERS_* configuration names remain fallbacks; TOSI_* takes precedence.
+
+Tools: check_environment, spawn_task, wait_tasks, continue_task, cancel_task
+Diagnostics: tosi doctor [--backend claude|codex]
+Doctor prints non-secret JSON; exit 1 means a selected provider is not ready.
+No login shell is loaded. Workers inherit the server's environment and sandbox.
+Task records live for this server process; provider histories remain on disk.

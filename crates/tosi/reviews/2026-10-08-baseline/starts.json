@@ -1,0 +1,42 @@
+{
+  "snapshot": "/private/tmp/task-runners-baseline-6l1yecmw",
+  "model_selection": "No explicit model; provider CLI defaults. Effective model/effort not reported by current task snapshots.",
+  "claude": {
+    "task_id": "25940bf4-1cfc-4d86-b878-356a8d8c2991",
+    "conversation_id": "1321e4bf-bb5d-43bf-8081-5f6c7a0dbcd3",
+    "parent_task_id": null,
+    "backend": "claude",
+    "status": "running",
+    "cwd": "/private/tmp/task-runners-baseline-6l1yecmw",
+    "model": null,
+    "access": "read_only",
+    "timeout_secs": 300,
+    "started_at_ms": 1791501717678,
+    "finished_at_ms": null,
+    "result": null,
+    "structured_result": null,
+    "result_truncated": false,
+    "error": null,
+    "provider_session_id": null,
+    "usage": null
+  },
+  "codex": {
+    "task_id": "3140030b-e74f-481c-a8f4-af3030e5e1d4",
+    "conversation_id": "9493b6d7-cedf-41f3-aba5-a5607c6fa3b3",
+    "parent_task_id": null,
+    "backend": "codex",
+    "status": "running",
+    "cwd": "/private/tmp/task-runners-baseline-6l1yecmw",
+    "model": null,
+    "access": "read_only",
+    "timeout_secs": 300,
+    "started_at_ms": 1791501716364,
+    "finished_at_ms": null,
+    "result": null,
+    "structured_result": null,
+    "result_truncated": false,
+    "error": null,
+    "provider_session_id": null,
+    "usage": null
+  }
+}

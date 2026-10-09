@@ -1,0 +1,15 @@
+{
+  "command": [
+    "/Users/joshrotenberg/Code/github.com/genagent/task-runners/scripts/package.sh",
+    "--host",
+    "both",
+    "--skip-build",
+    "--binary",
+    "target/release/task-runners"
+  ],
+  "caller_cwd": "/var/folders/kr/h7p0086n6vd22zbkwc2gvhjw0000gn/T/task-runners-external-caller-aiqam3na",
+  "exit_code": 0,
+  "intended_caller_binary_packaged": true,
+  "distinct_checkout_binary_ignored": true,
+  "packaged_sha256": "cb156bdde219104504a8d0498b90fc6e8745896dae91af0b7640291bd593568b"
+}

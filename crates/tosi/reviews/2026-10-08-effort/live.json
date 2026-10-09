@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--test",
+    "live",
+    "structured_output_and_follow_up",
+    "--",
+    "--nocapture"
+  ],
+  "backends": [
+    "claude",
+    "codex"
+  ],
+  "effort": "low",
+  "model": null,
+  "paid_turns_requested": 4,
+  "exit_code": 0,
+  "provider_reported_settings": "unavailable; not inferred"
+}

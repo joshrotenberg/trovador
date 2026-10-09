@@ -1,0 +1,60 @@
+{
+  "package_command": [
+    "cargo",
+    "xtask",
+    "package",
+    "--host",
+    "both",
+    "--skip-build",
+    "--binary",
+    "target/release/task-runners"
+  ],
+  "binary_sha256": {
+    "release": "5605a9d62c0cbe2de6a4df3073f72c92f2a81bf60321b72365172367a0a6d219",
+    "generated_plugin": "5605a9d62c0cbe2de6a4df3073f72c92f2a81bf60321b72365172367a0a6d219",
+    "archive_binary": "5605a9d62c0cbe2de6a4df3073f72c92f2a81bf60321b72365172367a0a6d219"
+  },
+  "archive": "/Users/joshrotenberg/Code/github.com/genagent/task-runners/dist/task-runners-0.1.0-both-macos-aarch64.tar.gz",
+  "smoke": {
+    "command": [
+      "python3",
+      "scripts/smoke.py",
+      "--binary",
+      "plugin/task-runners/bin/task-runners"
+    ],
+    "exit_code": 0,
+    "mode": "fake providers; not paid/live verification"
+  },
+  "doctor_regressions": [
+    {
+      "backend": "claude",
+      "recognized_prerelease": true,
+      "ready": true,
+      "exit_code": 0,
+      "credential_output_redacted": true
+    },
+    {
+      "backend": "claude",
+      "recognized_prerelease": false,
+      "ready": false,
+      "exit_code": 1,
+      "credential_output_redacted": true
+    },
+    {
+      "backend": "codex",
+      "recognized_prerelease": true,
+      "ready": true,
+      "exit_code": 0,
+      "credential_output_redacted": true
+    },
+    {
+      "backend": "codex",
+      "recognized_prerelease": false,
+      "ready": false,
+      "exit_code": 1,
+      "credential_output_redacted": true
+    }
+  ],
+  "installed_caches_updated": true,
+  "restored_after_external_caller_check": true
+}

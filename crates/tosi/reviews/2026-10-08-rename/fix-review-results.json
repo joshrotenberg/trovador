@@ -1,0 +1,65 @@
+{
+  "tasks": [
+    {
+      "task_id": "d1656eb7-7111-4fc3-8756-72d34d1a5d9f",
+      "conversation_id": "fac8b6ab-6555-4c29-a67b-5bca5b709ff8",
+      "parent_task_id": "d5c8e27c-1a7a-4427-a9e8-8e4ce9793c46",
+      "backend": "claude",
+      "status": "completed",
+      "cwd": "/private/var/folders/kr/h7p0086n6vd22zbkwc2gvhjw0000gn/T/tosi-rename-review-abwmzp9r",
+      "model": null,
+      "access": "read_only",
+      "timeout_secs": 300,
+      "started_at_ms": 1791505052160,
+      "finished_at_ms": 1791505083497,
+      "result": "{\"summary\":\"All three earlier P3 problems are fixed, and the fixes don't change which values are accepted.\\n\\n- **Startup errors:** they now name both TOSI_* and the legacy TASK_RUNNERS_* variable. This includes the bare ParseIntError case, which now maps to the \\\"must contain a valid number\\\" message. The accept/reject rules in config::var are unchanged.\\n- **Invalid-value test:** for empty and \\\"invalid\\\" values it now checks for the exact message. That proves the failure happens at the intended check and doesn't fall back to the legacy value.\\n- **Doctor test:** it now runs both backends three ways — no marker, TOSI_CHILD=1 and TASK_RUNNERS_CHILD=1 — after clearing both markers from the inherited environment. Each run must exit successfully with ready=true.\\n- **README:** it now gives each host's commands to remove the old plugin and its catalog registration.\\n- **Plugin subtitle:** shortened to 26 characters, and the package test now asserts it is 30 characters or fewer.\\n- **Cargo.lock:** the diff only moves the tosi package entry earlier in the file; the other entries are the same text in a new position.\\n\\nOne minor issue remains: the README migration steps tell users to install tosi before removing the stale task-runners catalog. You've already seen Codex marketplace commands fail with the stale catalog, so that order may not work.\",\"findings\":[{\"priority\":\"P3\",\"file\":\"README.md\",\"line\":114,\"title\":\"Migration steps install the new plugin before removing the stale catalog\",\"scenario\":\"After the source directory moves, a user follows the README in order. They run `codex plugin marketplace add` and `codex plugin add tosi@tosi-local` while task-runners-local is still registered and points at the deleted task-runners path. Only then do they run the removal commands at lines 120-123.\",\"evidence\":\"README.md:114-117 says to \\\"Install `tosi@tosi-local` ... then remove the old plugin and its catalog registration\\\". You reported that `codex marketplace list` already fails because of the stale original directory. I can't see from this snapshot whether `marketplace add` or `plugin add` fail the same way.\",\"impact\":\"If Codex catalog operations check every registered catalog, the documented first step can fail on both machines before the cleanup commands are reached. Even if it succeeds, there is a short window where both plugins are installed.\",\"suggested_correction\":\"Put the removal block first: remove task-runners@task-runners-local, then remove the task-runners-local catalog (both hosts), then add tosi-local and install tosi@tosi-local. The old installation is already broken once the directory moves, so removing it first loses nothing; Claude's `--keep-data` still keeps its plugin data. Alternatively, keep the current order if your actual migration shows it works on both hosts.\"}],\"coverage\":[\"All of FIXES.diff: Cargo.lock, README.md, src/main.rs, tests/diagnostics.rs, tests/shutdown.rs, xtask/src/main.rs\",\"Final src/main.rs error paths and config.rs precedence (unchanged): acceptance rules are the same, and both names now appear in all three configuration errors\",\"Final README.md migration section (lines 110-135)\",\"Checked that each test's expected message matches the actual main.rs text for DEFAULT_BACKEND and MAX_CONCURRENCY with empty and invalid values\",\"The doctor test runs with no marker, TOSI_CHILD=1 and TASK_RUNNERS_CHILD=1 for both backends, after clearing both markers from the inherited environment\",\"Plugin subtitle length (26 characters) and the new package assertion of 30 or fewer\",\"Cargo.lock diff: only the position of the tosi package entry changed; the moved entries are identical\"],\"limitations\":[\"This was a source-only follow-up: no tests, builds or host commands were run. Pass/fail results come from your validation.\",\"I could not check the README's host CLI commands and flags (`codex plugin remove`, `codex plugin marketplace remove`, `claude plugin uninstall --scope user --keep-data`, `claude plugin marketplace remove --scope user`) against the installed host versions without running them.\",\"I couldn't tell from source whether the stale catalog blocks `codex plugin marketplace add` or `plugin add`; the ordering finding depends on that.\",\"I did not confirm the snapshot's SHA-256 myself.\",\"The regenerated package, installed-plugin checks and paid live-provider runs are still pending, and this review doesn't cover them. The end-to-end live-gating test gap remains, as you documented.\"]}",
+      "structured_result": {
+        "summary": "All three earlier P3 problems are fixed, and the fixes don't change which values are accepted.\n\n- **Startup errors:** they now name both TOSI_* and the legacy TASK_RUNNERS_* variable. This includes the bare ParseIntError case, which now maps to the \"must contain a valid number\" message. The accept/reject rules in config::var are unchanged.\n- **Invalid-value test:** for empty and \"invalid\" values it now checks for the exact message. That proves the failure happens at the intended check and doesn't fall back to the legacy value.\n- **Doctor test:** it now runs both backends three ways — no marker, TOSI_CHILD=1 and TASK_RUNNERS_CHILD=1 — after clearing both markers from the inherited environment. Each run must exit successfully with ready=true.\n- **README:** it now gives each host's commands to remove the old plugin and its catalog registration.\n- **Plugin subtitle:** shortened to 26 characters, and the package test now asserts it is 30 characters or fewer.\n- **Cargo.lock:** the diff only moves the tosi package entry earlier in the file; the other entries are the same text in a new position.\n\nOne minor issue remains: the README migration steps tell users to install tosi before removing the stale task-runners catalog. You've already seen Codex marketplace commands fail with the stale catalog, so that order may not work.",
+        "findings": [
+          {
+            "priority": "P3",
+            "file": "README.md",
+            "line": 114,
+            "title": "Migration steps install the new plugin before removing the stale catalog",
+            "scenario": "After the source directory moves, a user follows the README in order. They run `codex plugin marketplace add` and `codex plugin add tosi@tosi-local` while task-runners-local is still registered and points at the deleted task-runners path. Only then do they run the removal commands at lines 120-123.",
+            "evidence": "README.md:114-117 says to \"Install `tosi@tosi-local` ... then remove the old plugin and its catalog registration\". You reported that `codex marketplace list` already fails because of the stale original directory. I can't see from this snapshot whether `marketplace add` or `plugin add` fail the same way.",
+            "impact": "If Codex catalog operations check every registered catalog, the documented first step can fail on both machines before the cleanup commands are reached. Even if it succeeds, there is a short window where both plugins are installed.",
+            "suggested_correction": "Put the removal block first: remove task-runners@task-runners-local, then remove the task-runners-local catalog (both hosts), then add tosi-local and install tosi@tosi-local. The old installation is already broken once the directory moves, so removing it first loses nothing; Claude's `--keep-data` still keeps its plugin data. Alternatively, keep the current order if your actual migration shows it works on both hosts."
+          }
+        ],
+        "coverage": [
+          "All of FIXES.diff: Cargo.lock, README.md, src/main.rs, tests/diagnostics.rs, tests/shutdown.rs, xtask/src/main.rs",
+          "Final src/main.rs error paths and config.rs precedence (unchanged): acceptance rules are the same, and both names now appear in all three configuration errors",
+          "Final README.md migration section (lines 110-135)",
+          "Checked that each test's expected message matches the actual main.rs text for DEFAULT_BACKEND and MAX_CONCURRENCY with empty and invalid values",
+          "The doctor test runs with no marker, TOSI_CHILD=1 and TASK_RUNNERS_CHILD=1 for both backends, after clearing both markers from the inherited environment",
+          "Plugin subtitle length (26 characters) and the new package assertion of 30 or fewer",
+          "Cargo.lock diff: only the position of the tosi package entry changed; the moved entries are identical"
+        ],
+        "limitations": [
+          "This was a source-only follow-up: no tests, builds or host commands were run. Pass/fail results come from your validation.",
+          "I could not check the README's host CLI commands and flags (`codex plugin remove`, `codex plugin marketplace remove`, `claude plugin uninstall --scope user --keep-data`, `claude plugin marketplace remove --scope user`) against the installed host versions without running them.",
+          "I couldn't tell from source whether the stale catalog blocks `codex plugin marketplace add` or `plugin add`; the ordering finding depends on that.",
+          "I did not confirm the snapshot's SHA-256 myself.",
+          "The regenerated package, installed-plugin checks and paid live-provider runs are still pending, and this review doesn't cover them. The end-to-end live-gating test gap remains, as you documented."
+        ]
+      },
+      "result_truncated": false,
+      "error": null,
+      "provider_session_id": "d479183e-669c-45b0-a93f-5c0750dcdac0",
+      "usage": {
+        "tokens": {
+          "input_tokens": 6,
+          "cached_input_tokens": 200266,
+          "cache_write_input_tokens": 14024,
+          "output_tokens": 2899,
+          "reasoning_output_tokens": null,
+          "total_tokens": null
+        },
+        "cost_usd": 0.915971,
+        "num_turns": 5
+      }
+    }
+  ],
+  "timed_out": false
+}

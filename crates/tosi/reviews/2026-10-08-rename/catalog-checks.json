@@ -1,0 +1,28 @@
+[
+  {
+    "host": "codex",
+    "command": [
+      "codex",
+      "plugin",
+      "marketplace",
+      "list",
+      "--json"
+    ],
+    "exit_code": 0,
+    "tosi_local_registered": true,
+    "task_runners_local_absent": true
+  },
+  {
+    "host": "claude",
+    "command": [
+      "claude",
+      "plugin",
+      "marketplace",
+      "list",
+      "--json"
+    ],
+    "exit_code": 0,
+    "tosi_local_registered": true,
+    "task_runners_local_absent": true
+  }
+]
