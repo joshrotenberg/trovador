@@ -455,7 +455,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         )
     });
     let h = &hidden;
-    let hidden_note = (h.active + h.automated + h.excluded > 0).then(|| {
+    let hidden_note = (h.active + h.automated + h.subagents + h.excluded > 0).then(|| {
         let mut parts = Vec::new();
         if h.active > 0 {
             parts.push(format!(
@@ -465,6 +465,9 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         }
         if h.automated > 0 {
             parts.push(format!("{} automated (include_automated)", h.automated));
+        }
+        if h.subagents > 0 {
+            parts.push(format!("{} subagents (include_subagents)", h.subagents));
         }
         if h.excluded > 0 {
             parts.push("the excluded session".to_string());

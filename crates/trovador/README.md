@@ -148,7 +148,7 @@ $ trovador search stdout-check --per-session 1
       …
     }
   ],
-  "hidden": {"active": 1, "automated": 0, "excluded": 0, "unavailable": 0},
+  "hidden": {"active": 1, "automated": 0, "subagents": 0, "excluded": 0, "unavailable": 0},
   "exhaustive": true,
   "note": "matching sessions left out by default: 1 written in the last 600 s (include_active)"
 }
@@ -277,6 +277,13 @@ transcript offset to open it at.
   `absence_is_proof` is false and a note explains why.
 - **Ranking.** Sessions are ordered by their best-matching record (bm25), or by recency with
   `--recent`. Regex results are always newest first.
+- **Hidden matches.** `hidden` counts matching sessions left out: `active` for recent
+  writes, `automated` for automated sessions not started by trovador, `subagents` for
+  sessions started by another session, `excluded` for `exclude_session`, and `unavailable`
+  for unreadable archive roots. Counts can overlap. Use `--include-active`,
+  `--include-automated`, or `--include-subagents` to include the respective defaults.
+  An empty result with hidden matches has `absence_is_proof: false`; its note names
+  the options that can reveal those matches.
 - **Freshness.** A search first brings the index up to date, for at most
   `TROVADOR_INDEX_BUDGET_MS` (15,000). Files only appended to are read from where the last
   pass stopped; anything else changed is read again. `exhaustive` is true only when nothing

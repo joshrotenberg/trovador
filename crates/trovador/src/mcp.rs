@@ -49,8 +49,8 @@ search finds text across every session: words and \"quoted phrases\" by default,
 for FTS5 syntax, regex=true for a regular expression. Each hit gives match indexes to pass \
 as the transcript offset. If exhaustive is false, finding nothing proves nothing; the note \
 says what was not covered. By default search leaves out sessions written in the last few \
-minutes, which always includes your own, and automated sessions trovador did not start; \
-hidden counts them, and include_active and include_automated bring them back.";
+minutes, which always includes your own, automated sessions trovador did not start, and subagent sessions; \
+hidden counts them, and include_active, include_automated, and include_subagents bring them back.";
 
 const RUNS: &str = "
 

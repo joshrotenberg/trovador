@@ -145,6 +145,9 @@ pub struct Hidden {
     pub active: usize,
     /// Automated and not started by trovador; `include_automated` shows them.
     pub automated: usize,
+    /// Started by another session; `include_subagents` shows them.
+    #[serde(default)]
+    pub subagents: usize,
     /// The session named by `exclude_session`.
     pub excluded: usize,
     /// Matched in the index but in an archive root that could not be read, so not
@@ -155,7 +158,7 @@ pub struct Hidden {
 
 impl Hidden {
     pub fn any(&self) -> bool {
-        self.active + self.automated + self.excluded + self.unavailable > 0
+        self.active + self.automated + self.subagents + self.excluded + self.unavailable > 0
     }
 }
 
@@ -1232,9 +1235,6 @@ impl Index {
             args.push(o.to_string().into());
             filters.push(format!("s.origin = ?{}", args.len()));
         }
-        if !opts.include_subagents {
-            filters.push("s.subagent = 0".to_string());
-        }
         if let Some(t) = vis.since_ns {
             args.push(t.into());
             filters.push(format!("s.mtime_ns >= ?{}", args.len()));
@@ -1245,6 +1245,10 @@ impl Index {
         }
         // The defaults, each kept apart so what it hid can be counted.
         let mut defaults: Vec<(&str, String, rusqlite::types::Value)> = Vec::new();
+        // Issue #15: an uncounted subagent filter made hidden matches look provably absent.
+        if !opts.include_subagents {
+            defaults.push(("subagents", "s.subagent = ?".into(), 0.into()));
+        }
         if let Some(t) = vis.active_since_ns {
             defaults.push(("active", "s.mtime_ns < ?".into(), t.into()));
         }
@@ -1311,6 +1315,7 @@ impl Index {
             match *name {
                 "active" => hidden.active = n as usize,
                 "automated" => hidden.automated = n as usize,
+                "subagents" => hidden.subagents = n as usize,
                 _ => hidden.excluded = n as usize,
             }
         }
