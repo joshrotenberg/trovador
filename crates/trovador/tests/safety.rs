@@ -263,7 +263,7 @@ async fn everything_trovador_writes_is_private_to_the_user() {
     trovador::summary::summarize(&ctx, ID_A, None, false, None)
         .await
         .unwrap();
-    trovador::consent::record_spawned(&ctx.paths, trovador::Backend::Claude, ID_B).unwrap();
+    trovador::provenance::record_spawned(&ctx.paths, trovador::Backend::Claude, ID_B).unwrap();
     trovador::gc::gc(&ctx, std::time::Duration::from_secs(86_400 * 365), true).unwrap();
 
     assert_eq!(mode(&home), 0o700, "home");
@@ -280,6 +280,6 @@ async fn everything_trovador_writes_is_private_to_the_user() {
             }
         }
     }
-    // index.db, consent.json, consent.lock, runs.jsonl, runs.lock, and a summary, at least.
+    // index.db, spawned.json, spawned.lock, runs.jsonl, runs.lock, and a summary, at least.
     assert!(files >= 6, "{files} files");
 }

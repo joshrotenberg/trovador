@@ -7,12 +7,12 @@ and the catalog (`.claude-plugin/marketplace.json`).
 | Plugin | What it gives an agent | Source |
 |---|---|---|
 | `trovador` | Search, read, and summarize every past Claude Code and Codex session on the machine | [`crates/trovador`](crates/trovador) |
-| `tosi` | Delegate bounded tasks to local Claude and Codex workers: spawn, wait, continue, cancel, and continue or fork an existing session | [`crates/tosi`](crates/tosi) |
+| `tosi` | Delegate bounded tasks to local Claude and Codex workers: spawn, wait, continue, cancel | [`crates/tosi`](crates/tosi) |
 
-`crates/` is one Cargo workspace. tosi links trovador as a library for session lookup
-and consent, so the rules for which sessions may be continued have one implementation.
-Both tools came from repositories of their own, now archived; their history is kept
-here.
+`crates/` is one Cargo workspace. tosi links trovador to record each session it starts,
+so trovador's list and search include them. Past sessions are read-only history: agents
+read, search, and summarize them, and nothing in the toolkit continues or forks one. Both
+tools came from repositories of their own, now archived; their history is kept here.
 
 ## How it fits together
 

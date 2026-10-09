@@ -26,15 +26,7 @@ pub struct SpawnTask {
     /// A self-contained assignment, relevant context, constraints, and desired output.
     pub task: String,
     /// Absolute path to the worker's existing working directory. Use separate worktrees for parallel edits.
-    /// Required unless session_id is given; then it defaults to that session's project.
-    pub cwd: Option<String>,
-    /// Continue an existing Claude Code or Codex session, by id or unambiguous prefix (as trovador
-    /// search and sessions return them) instead of starting a new one. Allowed for sessions this
-    /// toolkit started, and for others a person approved with `trovador consent approve`.
-    pub session_id: Option<String>,
-    /// With session_id: start a new Claude session from that session's context instead of adding
-    /// a turn to it. Claude only. Needs no consent, since the original conversation is unchanged.
-    pub fork: Option<bool>,
+    pub cwd: String,
     /// Claude or Codex; omitted uses the server's configured default.
     pub backend: Option<Backend>,
     pub model: Option<String>,
@@ -137,46 +129,26 @@ struct State {
     closing: bool,
 }
 
-/// Where the session archives and trovador's consent state are. Continuing a session is
-/// decided by trovador's rules, linked rather than reimplemented, so both tools agree.
+/// Where trovador keeps the record of sessions the toolkit started. Each session this
+/// server starts is recorded there, so trovador's list and search include it although it is
+/// an automated session. Past sessions are read-only history: nothing here continues one.
 #[derive(Clone, Debug)]
 pub struct Sessions {
     pub paths: trovador::paths::Paths,
-    pub limits: trovador::limits::Limits,
 }
 
 impl Sessions {
     pub fn from_env() -> Self {
         Self {
             paths: trovador::paths::Paths::from_env(),
-            limits: trovador::limits::Limits::from_env(),
         }
     }
-}
-
-fn denied(check: &trovador::consent::Check) -> String {
-    let steps = if check.next_steps.is_empty() {
-        "trovador consent status".to_string()
-    } else {
-        check.next_steps.join("; ")
-    };
-    format!(
-        "continuation denied: {}. Consent is changed only by a person at the CLI: {steps}",
-        check.explanation
-    )
 }
 
 fn to_trovador(backend: Backend) -> trovador::Backend {
     match backend {
         Backend::Claude => trovador::Backend::Claude,
         Backend::Codex => trovador::Backend::Codex,
-    }
-}
-
-fn from_trovador(backend: trovador::Backend) -> Backend {
-    match backend {
-        trovador::Backend::Claude => Backend::Claude,
-        trovador::Backend::Codex => Backend::Codex,
     }
 }
 
@@ -214,70 +186,15 @@ impl Manager {
         self
     }
 
-    /// Enables session_id on spawn_task, and records the sessions this server starts.
+    /// Records the sessions this server starts in trovador's provenance record.
     pub fn with_sessions(mut self, sessions: Sessions) -> Self {
         self.sessions = Some(sessions);
         self
     }
 
-    /// The existing session a spawn continues or forks: its canonical id, backend, and the
-    /// directory a resume must run from. Every refusal happens here, before anything runs.
-    fn resolve_session(
-        &self,
-        id: &str,
-        backend: Option<Backend>,
-        fork: bool,
-    ) -> Result<(String, Backend, Option<String>), String> {
-        let sessions = self.sessions.as_ref().ok_or(
-            "session_id needs the trovador session archive, which this server was started without",
-        )?;
-        let entry = trovador::archive::find_session(&sessions.paths, id, backend.map(to_trovador))
-            .map_err(|e| e.to_string())?;
-        let found = from_trovador(entry.backend);
-        if fork && found == Backend::Codex {
-            return Err("fork is supported for Claude sessions only".into());
-        }
-        let resumable = trovador::archive::resumability(&entry, &sessions.limits);
-        if !resumable.resumable {
-            return Err(format!(
-                "{}/{} cannot be continued: {}",
-                entry.backend,
-                entry.session_id,
-                resumable.reason.unwrap_or_default()
-            ));
-        }
-        // A fork leaves the original conversation as it was, so it is not gated; this
-        // matches trovador's own ask.
-        if !fork {
-            let check = trovador::consent::check(&sessions.paths, entry.backend, &entry.session_id);
-            if !check.allowed {
-                return Err(denied(&check));
-            }
-        }
-        let project = trovador::archive::read_meta(&entry, &sessions.limits)
-            .project()
-            .map(str::to_string);
-        Ok((entry.session_id, found, project))
-    }
-
     pub async fn spawn_task(&self, input: SpawnTask) -> Result<TaskSnapshot, String> {
         validate_prompt(&input.task)?;
-        let fork = input.fork.unwrap_or(false);
-        let (session_id, session_backend, project) = match input.session_id.as_deref() {
-            Some(id) if id.trim().is_empty() => return Err("session_id cannot be empty".into()),
-            Some(id) => {
-                let (id, backend, project) = self.resolve_session(id, input.backend, fork)?;
-                (Some(id), Some(backend), project)
-            }
-            None if fork => return Err("fork needs a session_id".into()),
-            None => (None, None, None),
-        };
-        // A resume has to run where the session lives, or the provider cannot find it.
-        let cwd = input
-            .cwd
-            .or(project)
-            .ok_or("cwd is required; with session_id it defaults to the session's project, which is unknown for this session")?;
-        let cwd = PathBuf::from(&cwd);
+        let cwd = PathBuf::from(&input.cwd);
         if !cwd.is_absolute() || !cwd.is_dir() {
             return Err("cwd must be an absolute path to an existing directory".into());
         }
@@ -294,9 +211,7 @@ impl Manager {
         if let Some(schema) = &input.output_schema {
             crate::output::compile_schema(schema)?;
         }
-        let backend = session_backend
-            .or(input.backend)
-            .unwrap_or(self.default_backend);
+        let backend = input.backend.unwrap_or(self.default_backend);
         crate::selection::validate(backend, input.model.as_deref(), input.effort)?;
         let requested = RequestedSettings {
             backend: input.backend,
@@ -311,8 +226,7 @@ impl Manager {
             effort: input.effort,
             output_schema: input.output_schema,
             access: input.access.unwrap_or_default(),
-            session_id,
-            fork,
+            session_id: None,
             timeout_secs,
         };
         let mut state = self.state.lock().await;
@@ -349,25 +263,10 @@ impl Manager {
             .provider_session_id
             .clone()
             .ok_or("provider returned no resumable session ID")?;
-        // Consent is checked on every turn, not only the first: a person may deny the
-        // session, or tighten the level, between turns (found in review).
-        if let Some(sessions) = &self.sessions {
-            let check = trovador::consent::check(
-                &sessions.paths,
-                to_trovador(prior.spec.backend),
-                &session_id,
-            );
-            if !check.allowed {
-                return Err(denied(&check));
-            }
-        }
         let mut spec = prior.spec.clone();
         let requested = prior.snapshot.selection.requested.clone();
         spec.task = input.message;
         spec.session_id = Some(session_id);
-        // The follow-up adds to the session the previous turn produced, even when that turn
-        // was a fork.
-        spec.fork = false;
         let snapshot = self.insert(
             &mut state,
             conversation_id,
@@ -478,24 +377,10 @@ impl Manager {
         if entry.cancel.is_cancelled() {
             entry.snapshot.status = Status::Cancelled;
         } else {
-            // A fork that reports no new session, or the one it resumed, did not fork. Treating
-            // its id as the fork's would record a person's session as the toolkit's own, which
-            // would then pass consent (found in review). The turn fails and nothing is recorded.
-            let outcome = outcome.and_then(|output| {
-                let forked = output
-                    .session_id
-                    .as_deref()
-                    .is_some_and(|id| Some(id) != entry.spec.session_id.as_deref());
-                if entry.spec.fork && !forked {
-                    Err("the fork did not report a new session id; nothing was recorded and the original session is unchanged by tosi".to_string())
-                } else {
-                    Ok(output)
-                }
-            });
             // Redaction runs before validation, so the structured result a caller receives is the
             // one checked against output_schema (found in review: redacting after validation
             // could complete with a result that no longer matched it). The session id is kept
-            // either way, so a turn that fails validation can still be resumed by session_id.
+            // either way, so a turn that fails validation is still recorded as started here.
             let mut session_id = None;
             let outcome = outcome.and_then(|output| {
                 session_id = output.session_id.clone();
@@ -521,11 +406,12 @@ impl Manager {
                     }
                 })
             });
-            // A session this server created (new or forked) is recorded as started by the
-            // toolkit, so it can be continued after a restart and search includes it.
-            if (entry.spec.session_id.is_none() || entry.spec.fork)
+            // A session this server started is recorded as started by the toolkit, so
+            // trovador's list and search include it although it is automated. A follow-up
+            // resumes a session already recorded.
+            if entry.spec.session_id.is_none()
                 && let (Some(sessions), Some(id)) = (&self.sessions, &session_id)
-                && let Err(e) = trovador::consent::record_spawned(
+                && let Err(e) = trovador::provenance::record_spawned(
                     &sessions.paths,
                     to_trovador(entry.spec.backend),
                     id,

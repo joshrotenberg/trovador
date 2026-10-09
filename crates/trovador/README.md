@@ -11,8 +11,9 @@ to its `cleanupPeriodDays` setting, and Codex moves archived threads to
 `~/.codex/archived_sessions`, which trovador also reads. A transcript the provider deleted is
 gone from trovador's list and index on the next refresh.
 
-It can also run turns: start a Claude or Codex session, continue one it started, or fork
-one, with a consent policy deciding which existing sessions it may add a turn to.
+It only reads: past sessions are history. New work is tosi's (`crates/tosi`), and going
+back into a session is a person's `claude --resume` or `codex resume`, which `sessions
+show` prints as `open_with`.
 
 It is the Rust successor to [spike](https://github.com/joshrotenberg/spike); the v0.1 scope
 is tracked in [#1](https://github.com/joshrotenberg/trovador/issues/1).
@@ -23,7 +24,7 @@ is tracked in [#1](https://github.com/joshrotenberg/trovador/issues/1).
 |---|---|
 | Archive reading: list, show, transcript | Done |
 | Full-text index and search | Done |
-| Consent: which sessions may be continued | Done; continuing and forking moved to tosi (`crates/tosi`) |
+| Running turns | Removed: new work is tosi's; past sessions are not continued |
 | Summaries, import from spike | Done; consulting moved to tosi's delegate skill |
 
 ## Install
@@ -33,14 +34,15 @@ From crates.io once published, or from a checkout:
 ```sh
 cargo install trovador --locked        # or: cargo install --path . --locked
 trovador import --dry-run      # optional: see what would come over from spike
-trovador import                # optional: spike's consent records and summaries
+trovador import                # optional: spike's spawned-session records and summaries
 trovador index                 # build the search index once; searches keep it current
 claude mcp add --scope user trovador -- ~/.cargo/bin/trovador serve
 codex mcp add trovador -- ~/.cargo/bin/trovador serve
 ```
 
 `trovador doctor` checks the setup: it finds `claude` and `codex` and their versions,
-reads the archives, and reports the index and consent state, with a fix for each problem.
+reads the archives, and reports the index and the record of sessions the toolkit started,
+with a fix for each problem.
 
 Supported on macOS and Linux. Windows is untested: running a provider relies on Unix
 process groups to stop it on timeout.
@@ -61,10 +63,10 @@ local transcripts held 28 calls to spike's MCP tools across 6 sessions, all to `
 | `list_sessions`, `dump` | `sessions` with `action: list` or `show` |
 | `session://{backend}/{id}/transcript` | `sessions` with `action: transcript`, or the same resource |
 | `search` | `search`, over a full-text index rather than the newest 400 files |
-| `ask` | tosi's `spawn_task`, with `session_id` to continue a session |
+| `ask` | tosi's `spawn_task` for new work; past sessions are not continued |
 | `consult` | `summarize`, then tosi's `spawn_task` (tosi's consult reference) |
 | `summarize`, `session://.../summary` | `summarize`, and the same resource |
-| `agent-sessions consent ...` | `trovador consent ...` |
+| `agent-sessions consent ...` | removed: nothing continues past sessions |
 | `diagnose` | `trovador doctor` (CLI) |
 | `canvass`, `digest`, `board`, `activity`, `windows`, `pin`, `pad`, `pad_set`, `standing_*`, `route`, `runners`, `usage`, `whoami`, `surface`, `operations`, `gc` | not ported |
 
@@ -89,12 +91,9 @@ trovador index                               # bring the index fully up to date
 trovador index --rebuild                     # discard it and build again
 trovador summarize 27d1f434                   # cached until the session changes
 trovador import --dry-run                     # what would come over from spike
-trovador consent status                       # who may be continued
-trovador consent approve 27d1f434             # allow one session trovador did not start
-trovador consent policy approved              # ...and honour approvals
 trovador gc                                  # what cached summaries, saved replies, and run-log lines could go
-trovador gc --apply                          # remove them (consent is never touched)
-trovador doctor                              # providers, archives, index, consent
+trovador gc --apply                          # remove them
+trovador doctor                              # providers, archives, index, provenance
 trovador serve                               # MCP over stdio
 ```
 
@@ -180,8 +179,7 @@ $ trovador summarize 79892eda
 ```
 
 **Ask about it, then keep going.** That is tosi's job now: `summarize` the session, then
-`spawn_task` with the summary in the brief, or with `session_id` to continue it (see
-`crates/tosi`).
+`spawn_task` with the summary in the brief (see `crates/tosi`).
 
 **Check a new machine.**
 
@@ -201,7 +199,7 @@ $ trovador doctor
     {"name": "codex archived", "path": "~/.codex/archived_sessions", "readable": true, "sessions": 73}
   ],
   "index": {"size_bytes": 418643968, "sessions": 5452, "text_indexed": 3694, "records": 671135, …},
-  "consent": {"level": "approved", "source": "file", "spawned": 4, "approved": 2, "denied": 0, …},
+  "provenance": {"spawned": 4, …},
   …
 }
 ```
@@ -269,10 +267,9 @@ Measured on 5,366 local sessions (12.4 GB of JSONL) on 2026-10-07, release build
 
 ## Running turns
 
-trovador only reads sessions. Starting, continuing, or forking one is tosi's `spawn_task`
-(`crates/tosi`), which links trovador to find the session, check that it can still be
-resumed, and apply the consent below before anything runs. The only model calls trovador
-makes are summaries:
+trovador only reads sessions, and nothing in the toolkit continues or forks one. New work
+is tosi's `spawn_task` (`crates/tosi`), which records each session it starts (see
+Provenance). The only model calls trovador makes are summaries:
 
 - **Depth.** A summary runs `claude -p` with `TROVADOR_DEPTH` passed down, and a run at
   `TROVADOR_MAX_DEPTH` (2) is refused.
@@ -303,36 +300,28 @@ resume, use tosi's consult reference: `summarize`, then `spawn_task` with the su
 
 ## Importing from spike
 
-`trovador import` reads spike's `~/.agent-sessions` and never writes to it. Spawned records
-and approvals or denials are merged into trovador's consent state, keeping trovador's own
-decision where both have one; spike's level is adopted only if trovador has none yet.
+`trovador import` reads spike's `~/.agent-sessions` and never writes to it. Its spawned
+records are added to the provenance record; its consent level and decisions have no
+counterpart here and are counted, not imported.
 Summaries come over when the session has not changed since spike made them. Standing
 sessions, pads, blobs, windows, runners, and reports are counted and not imported.
 `--dry-run` reports without changing anything, and a second import changes nothing.
 
-## Consent
+## Provenance
 
-Starting a session is always allowed. Continuing one is decided by `~/.trovador/consent.json`
-(mode 0600):
-
-| Level | May continue |
-|---|---|
-| `deny` | nothing |
-| `spawned` (default) | sessions trovador started |
-| `approved` | those, plus sessions approved with `trovador consent approve` |
-| `all` | everything |
-
-An explicit `trovador consent deny` wins at every level. Consent is checked against the
-canonical session id, which is the only id the provider is given, so a prefix cannot get
-around a denial. A state file that cannot be read denies everything and is never
-overwritten. The policy changes only through the `trovador consent` CLI; the MCP server can
-report a check (`sessions show` includes one) but has no tool that changes it.
+`~/.trovador/spawned.json` (mode 0600) records the sessions the toolkit started; tosi adds
+each session it starts. list and search leave automated sessions (`claude -p`, `codex exec`)
+out by default, except these. `sessions show` reports `spawned`. It is a record, not a
+permission: nothing decides whether a past session may be continued, because nothing
+continues one. An installation from before this record existed carries its spawned list over
+from `consent.json` once. A record that cannot be read is never overwritten; until it is
+repaired, the toolkit's sessions are hidden like any other automated session.
 
 ## Where things live
 
 trovador reads `~/.claude/projects`, `~/.codex/sessions`, and `~/.codex/archived_sessions`
 and never writes to any of them itself; the providers write there when tosi runs them. Its
-own state goes under `~/.trovador`: `index.db`, `consent.json`, `runs.jsonl`, `summaries/`.
+own state goes under `~/.trovador`: `index.db`, `spawned.json`, `runs.jsonl`, `summaries/`.
 `outputs/`, left by `ask` before it moved, is removed by `trovador gc` once old enough.
 `sessions list` reads the index when it exists but never creates it. Override the paths with
 `TROVADOR_CLAUDE_ARCHIVE`, `TROVADOR_CODEX_ARCHIVE`, `TROVADOR_CODEX_ARCHIVED`,

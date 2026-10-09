@@ -3,7 +3,6 @@
 //! answer.
 
 pub mod archive;
-pub mod consent;
 pub mod doctor;
 pub mod gc;
 pub mod hook;
@@ -13,6 +12,7 @@ pub mod limits;
 pub mod mcp;
 pub mod output;
 pub mod paths;
+pub mod provenance;
 pub mod redact;
 pub mod runlog;
 pub mod sessions;

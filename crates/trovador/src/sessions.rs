@@ -169,7 +169,7 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
         .unwrap_or_default();
     let hide_automated = !opts.include_automated && opts.origin.is_none();
     let spawned: std::collections::HashSet<String> = if hide_automated {
-        crate::consent::spawned_keys(&ctx.paths)
+        crate::provenance::spawned_keys(&ctx.paths)
             .into_iter()
             .collect()
     } else {
@@ -239,8 +239,8 @@ pub struct SessionDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_blocked_by: Option<String>,
     pub transcript_resource: String,
-    /// Whether trovador may add a turn to this session, and what would change that.
-    pub consent: crate::consent::Check,
+    /// The toolkit (tosi) started this session.
+    pub spawned: bool,
 }
 
 pub fn show(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<SessionDetail, Error> {
@@ -252,7 +252,7 @@ pub fn show(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<SessionDeta
         size_bytes: e.size_bytes,
         resume_blocked_by: archive::resumability(&e, &ctx.limits).reason,
         transcript_resource: format!("{}/transcript", r.resource),
-        consent: crate::consent::check(&ctx.paths, e.backend, &e.session_id),
+        spawned: crate::provenance::is_spawned(&ctx.paths, e.backend, &e.session_id),
         row: r,
     })
 }
@@ -376,7 +376,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         }),
         exclude_session: opts.exclude_session.clone().filter(|s| !s.is_empty()),
         automated_except: (!opts.include_automated && opts.origin.is_none())
-            .then(|| crate::consent::spawned_keys(&ctx.paths)),
+            .then(|| crate::provenance::spawned_keys(&ctx.paths)),
     };
     let raw = idx
         .search(opts, &vis, limit, per_session, ctx.limits.redact)

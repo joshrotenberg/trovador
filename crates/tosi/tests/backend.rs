@@ -86,7 +86,6 @@ printf '%s' "$$" > "$fixture/pid"
             model: Some("test-model".into()),
             effort: None,
             session_id: None,
-            fork: false,
             output_schema: None,
             timeout_secs: 10,
             access: AccessMode::ReadOnly,
@@ -389,7 +388,6 @@ async fn claude_uses_explicit_tools_and_resumes_without_inherited_customizations
         assert!(args.contains(&"--disable-slash-commands".into()));
         assert!(has_pair(&args, "--mcp-config", r#"{"mcpServers":{}}"#));
         assert!(has_pair(&args, "--resume", "prior-session"));
-        assert!(!args.contains(&"--fork-session".into()));
         assert!(has_pair(&args, "--model", "test-model"));
         assert!(has_pair(
             &args,
@@ -411,47 +409,6 @@ async fn claude_uses_explicit_tools_and_resumes_without_inherited_customizations
         );
         assert!(!args.contains(&expected_prompt));
     }
-}
-
-#[tokio::test]
-async fn a_claude_fork_resumes_the_session_into_a_new_one() {
-    let fake = FakeCli::new(Backend::Claude, CLAUDE_SUCCESS, false);
-    let mut spec = fake.spec(Backend::Claude);
-    spec.session_id = Some("prior-session".into());
-    spec.fork = true;
-    fake.runner
-        .run(spec, CancellationToken::new())
-        .await
-        .unwrap();
-    let args = fake.args();
-    assert!(has_pair(&args, "--resume", "prior-session"));
-    assert!(args.contains(&"--fork-session".into()));
-}
-
-#[tokio::test]
-async fn a_fork_with_no_reported_session_id_does_not_take_the_original() {
-    let fake = FakeCli::new(
-        Backend::Claude,
-        &CLAUDE_SUCCESS.replace("claude-session", ""),
-        false,
-    );
-    let mut spec = fake.spec(Backend::Claude);
-    spec.session_id = Some("prior-session".into());
-    spec.fork = true;
-    let output = fake
-        .runner
-        .run(spec.clone(), CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(output.session_id, None);
-    // A plain resume still reports the session it resumed.
-    spec.fork = false;
-    let output = fake
-        .runner
-        .run(spec, CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(output.session_id.as_deref(), Some("prior-session"));
 }
 
 #[tokio::test]

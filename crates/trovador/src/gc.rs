@@ -1,6 +1,6 @@
 //! Removing what trovador keeps that will never be used again.
 //!
-//! Only derived files are touched: cached summaries, saved replies, and the run log. Consent is never
+//! Only derived files are touched: cached summaries, saved replies, and the run log. The record of sessions the toolkit started is never
 //! touched, because it is the only record of which sessions trovador started.
 
 use std::collections::HashMap;

@@ -200,7 +200,7 @@ async fn a_bad_query_is_a_readable_tool_error() {
 }
 
 #[tokio::test]
-async fn no_mcp_tool_can_change_consent() {
+async fn no_mcp_tool_writes_provenance_or_runs_a_turn() {
     let f = fixture();
     let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
     client.initialize().await;
@@ -214,7 +214,7 @@ async fn no_mcp_tool_can_change_consent() {
     for n in ["sessions", "search", "summarize"] {
         assert!(names.iter().any(|x| x == n));
     }
-    assert!(names.iter().all(|n| !n.contains("consent")));
+    assert!(names.iter().all(|n| !n.contains("consent") && n != "ask"));
 }
 
 #[tokio::test]

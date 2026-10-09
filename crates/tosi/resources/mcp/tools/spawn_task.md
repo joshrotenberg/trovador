@@ -3,15 +3,6 @@ Returns immediately with a task ID. Provide an absolute cwd and all relevant
 context/instructions; this chat is not automatically inherited. Defaults to
 read-only. Use separate worktrees for concurrent edits.
 
-Optional session_id continues an existing Claude Code or Codex session, by id or
-unambiguous prefix (as trovador search returns them), instead of starting a new
-one; the backend follows the session and cwd defaults to its project. Continuing
-is allowed for sessions this toolkit started and for sessions a person approved
-with `trovador consent approve`; anything else is refused with the reason and the
-CLI command that would change it. fork=true (Claude only) starts a new session
-from that context instead and needs no approval. Sessions too large to resume
-are refused.
-
 Optional backend, model, and effort select execution settings. Honor explicit user
 choices. Claude effort accepts low, medium, high, xhigh, max; Codex exposes none,
 minimal, low, medium, high, xhigh, max, ultra, depending on the model. Unsupported

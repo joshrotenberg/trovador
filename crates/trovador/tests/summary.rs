@@ -4,7 +4,7 @@ use std::io::Write;
 
 use common::*;
 use serde_json::json;
-use trovador::consent::{self, Decision, Level};
+use trovador::provenance;
 use trovador::sessions::Ctx;
 use trovador::summary::{self, Summary};
 use trovador::{Backend, Limits};
@@ -69,7 +69,7 @@ fn summary_runs_leave_no_session_behind_and_skip_tools() {
     let call = &f.calls("claude")[0];
     assert!(call.iter().any(|l| l == "arg=--no-session-persistence"));
     assert!(call.iter().any(|l| l == "arg=haiku"));
-    assert_eq!(consent::status(&ctx.paths).spawned, 0);
+    assert_eq!(provenance::status(&ctx.paths).spawned, 0);
     let log = std::fs::read_to_string(ctx.paths.home.join("runs.jsonl")).unwrap();
     assert!(log.contains("\"verb\":\"summarize\""));
 }
@@ -181,7 +181,7 @@ fn snapshot(dir: &std::path::Path) -> Vec<(String, Vec<u8>)> {
 }
 
 #[test]
-fn import_merges_spike_consent_and_fresh_summaries_without_touching_spike() {
+fn import_merges_spikes_spawned_records_and_fresh_summaries_without_touching_spike() {
     let f = Fixture::new();
     let ctx = f.ctx();
     let fresh = f.claude("-w", ID_A, &[claude_user("/w", "a")], 100);
@@ -205,14 +205,13 @@ fn import_merges_spike_consent_and_fresh_summaries_without_touching_spike() {
     let dry = trovador::import::import(&ctx, &spike, true).unwrap();
     assert_eq!(dry.spawned_added, 1);
     assert!(
-        !consent::path(&ctx.paths).exists(),
+        !provenance::path(&ctx.paths).exists(),
         "a dry run changes nothing"
     );
 
     let r = trovador::import::import(&ctx, &spike, false).unwrap();
-    assert_eq!(r.level, Some(Level::Approved));
-    assert!(r.level_adopted);
-    assert_eq!((r.spawned_added, r.decisions_added), (1, 2));
+    // spike's level and decisions have no counterpart here; they are counted, not imported.
+    assert_eq!((r.spawned_added, r.decisions_ignored), (1, 2));
     assert_eq!((r.summaries_imported, r.summaries_stale), (1, 2));
     assert_eq!(r.not_imported.get("pads"), Some(&1));
     assert_eq!(r.not_imported.get("standing"), Some(&2));
@@ -222,38 +221,14 @@ fn import_merges_spike_consent_and_fresh_summaries_without_touching_spike() {
         "spike's directory is never written"
     );
 
-    assert!(consent::check(&ctx.paths, Backend::Claude, ID_A).spawned);
-    assert!(consent::check(&ctx.paths, Backend::Claude, ID_B).allowed);
+    assert!(provenance::is_spawned(&ctx.paths, Backend::Claude, ID_A));
+    assert!(!provenance::is_spawned(&ctx.paths, Backend::Claude, ID_B));
     let e = trovador::archive::find_session(&ctx.paths, ID_A, None).unwrap();
     assert_eq!(summary::cached(&ctx, &e).unwrap().summary, "from spike");
 
     let again = trovador::import::import(&ctx, &spike, false).unwrap();
-    assert_eq!(
-        (
-            again.spawned_added,
-            again.decisions_added,
-            again.summaries_imported
-        ),
-        (0, 0, 0)
-    );
+    assert_eq!((again.spawned_added, again.summaries_imported), (0, 0));
     assert_eq!((again.spawned_present, again.summaries_present), (1, 1));
-}
-
-#[test]
-fn import_never_overrides_a_policy_or_decision_already_chosen_here() {
-    let f = Fixture::new();
-    let ctx = f.ctx();
-    consent::set_level(&ctx.paths, Level::Spawned).unwrap();
-    consent::set_decision(&ctx.paths, Backend::Claude, ID_B, Some(Decision::Denied)).unwrap();
-    let spike = spike_dir(&f);
-    let r = trovador::import::import(&ctx, &spike, false).unwrap();
-    assert!(!r.level_adopted);
-    assert_eq!(r.decisions_kept_trovador, 1);
-    assert_eq!(consent::status(&ctx.paths).level, Level::Spawned);
-    assert_eq!(
-        consent::check(&ctx.paths, Backend::Claude, ID_B).decision,
-        Some(Decision::Denied)
-    );
 }
 
 #[test]

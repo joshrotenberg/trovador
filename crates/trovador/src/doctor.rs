@@ -7,9 +7,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, Backend};
-use crate::consent;
 use crate::index::{self, IndexStatus};
 use crate::limits::Limits;
+use crate::provenance;
 use crate::sessions::Ctx;
 
 /// Printed by the CLI only, so it is serialized but never read back.
@@ -23,7 +23,8 @@ pub struct Report {
     pub archives: Vec<Archive>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<IndexStatus>,
-    pub consent: consent::Status,
+    /// The record of sessions the toolkit started.
+    pub provenance: provenance::Status,
     pub home: String,
     pub limits: Limits,
 }
@@ -184,17 +185,14 @@ pub async fn report(ctx: &Ctx) -> Report {
         });
     }
 
-    let consent = consent::status(p);
-    if consent.source == consent::Source::Invalid {
+    let provenance = provenance::status(p);
+    if let Some(error) = &provenance.error {
         problems.push(Problem {
-            severity: Severity::Error,
-            what: format!(
-                "consent state cannot be read: {}",
-                consent.error.clone().unwrap_or_default()
-            ),
+            severity: Severity::Warn,
+            what: error.clone(),
             fix: format!(
-                "repair or remove {}; until then no existing session can be continued",
-                consent.path
+                "repair or remove {}; until then list and search hide the toolkit's own automated sessions like any others",
+                provenance.path
             ),
         });
     }
@@ -206,7 +204,7 @@ pub async fn report(ctx: &Ctx) -> Report {
         providers,
         archives,
         index,
-        consent,
+        provenance,
         home: p.home.display().to_string(),
         limits: ctx.limits.clone(),
     }

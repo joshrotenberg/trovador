@@ -57,9 +57,9 @@ const RUNS: &str = "
 summarize returns a summary of a session, from the cache when the session has not \
 changed; a miss costs tokens. session://{backend}/{id}/summary returns only a cached one.
 
-trovador only reads sessions. Starting, continuing, or forking one is tosi's spawn_task, \
-under the consent shown by sessions(action=show); consent is changed only by a person at \
-the trovador CLI.";
+trovador only reads sessions: past sessions are history, not something to continue. New \
+work is tosi's spawn_task; to go back into a session, a person resumes it with the \
+open_with command from sessions(action=show).";
 
 const READ_ONLY: &str = "
 

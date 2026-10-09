@@ -89,8 +89,6 @@ pub struct RunSpec {
     pub effort: Option<Effort>,
     pub output_schema: Option<serde_json::Value>,
     pub session_id: Option<String>,
-    /// With `session_id`: resume that session's context into a new session (Claude only).
-    pub fork: bool,
     pub timeout_secs: u64,
     pub access: AccessMode,
 }

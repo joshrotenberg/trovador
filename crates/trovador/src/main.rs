@@ -3,11 +3,10 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
-use trovador::consent::{self, Decision, Level};
+use trovador::Backend;
 use trovador::index::{Order, SearchOpts};
 use trovador::sessions::{self, Ctx, ListOpts};
 use trovador::summary;
-use trovador::{Backend, archive};
 
 /// Local Claude Code and Codex sessions as one MCP server and CLI.
 #[derive(Parser)]
@@ -101,7 +100,7 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         offset: usize,
     },
-    /// Import consent and summaries from spike (agent-sessions). Reads, never writes, the
+    /// Import spawned-session records and summaries from spike (agent-sessions). Reads, never writes, the
     /// spike directory.
     Import {
         /// spike's state directory.
@@ -112,7 +111,7 @@ enum Command {
         dry_run: bool,
     },
     /// Remove cached summaries and run-log lines that will never be used again. A dry run
-    /// unless --apply. Consent is never touched.
+    /// unless --apply. The record of sessions the toolkit started is never touched.
     Gc {
         /// Also remove summaries made, and run-log lines written, longer ago than this.
         #[arg(long, default_value = "90d")]
@@ -121,11 +120,6 @@ enum Command {
         #[arg(long)]
         apply: bool,
     },
-    /// Which existing sessions trovador may continue. Only this command changes it.
-    Consent {
-        #[command(subcommand)]
-        action: ConsentCmd,
-    },
     /// Report paths, limits, the index, and what the archives contain.
     Doctor,
     /// Handlers for Claude Code and Codex hooks, run by a plugin rather than by hand.
@@ -133,38 +127,6 @@ enum Command {
         #[command(subcommand)]
         event: HookCmd,
     },
-}
-
-#[derive(Subcommand)]
-enum ConsentCmd {
-    /// The current level and counts.
-    Status,
-    /// Whether one session may be continued, and why.
-    Check {
-        id: String,
-        #[arg(long)]
-        backend: Option<Backend>,
-    },
-    /// Allow continuing a session trovador did not start (needs level approved).
-    Approve {
-        id: String,
-        #[arg(long)]
-        backend: Option<Backend>,
-    },
-    /// Never continue this session, whatever the level.
-    Deny {
-        id: String,
-        #[arg(long)]
-        backend: Option<Backend>,
-    },
-    /// Remove an approval or denial.
-    Clear {
-        id: String,
-        #[arg(long)]
-        backend: Option<Backend>,
-    },
-    /// Set the level: deny, spawned, approved, or all.
-    Policy { level: Level },
 }
 
 #[derive(Subcommand)]
@@ -365,7 +327,6 @@ fn main() -> ExitCode {
             Ok(r) => print(&json!({ "refresh": r, "index": sessions::index_status(&ctx) })),
             Err(e) => fail(e),
         },
-        Command::Consent { action } => consent_cmd(&ctx, action),
         Command::Gc { older_than, apply } => match humantime::parse_duration(&older_than) {
             Ok(d) => match trovador::gc::gc(&ctx, d, apply) {
                 Ok(r) => print(&r),
@@ -423,38 +384,6 @@ fn main() -> ExitCode {
             let code = print(&report);
             if report.ok { code } else { ExitCode::FAILURE }
         }
-    }
-}
-
-/// Consent decisions are keyed by the canonical archive id, so a prefix given here is
-/// resolved first, the same way `ask` resolves it.
-fn resolve(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<(Backend, String), String> {
-    archive::find_session(&ctx.paths, id, backend)
-        .map(|e| (e.backend, e.session_id))
-        .map_err(|e| e.to_string())
-}
-
-fn consent_cmd(ctx: &Ctx, action: ConsentCmd) -> ExitCode {
-    let decide = |id: &str, backend, d| match resolve(ctx, id, backend) {
-        Ok((b, id)) => match consent::set_decision(&ctx.paths, b, &id, d) {
-            Ok(c) => print(&c),
-            Err(e) => fail(e),
-        },
-        Err(e) => fail(e),
-    };
-    match action {
-        ConsentCmd::Status => print(&consent::status(&ctx.paths)),
-        ConsentCmd::Check { id, backend } => match resolve(ctx, &id, backend) {
-            Ok((b, id)) => print(&consent::check(&ctx.paths, b, &id)),
-            Err(e) => fail(e),
-        },
-        ConsentCmd::Approve { id, backend } => decide(&id, backend, Some(Decision::Approved)),
-        ConsentCmd::Deny { id, backend } => decide(&id, backend, Some(Decision::Denied)),
-        ConsentCmd::Clear { id, backend } => decide(&id, backend, None),
-        ConsentCmd::Policy { level } => match consent::set_level(&ctx.paths, level) {
-            Ok(s) => print(&s),
-            Err(e) => fail(e),
-        },
     }
 }
 

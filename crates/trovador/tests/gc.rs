@@ -71,9 +71,9 @@ fn a_dry_run_reports_and_changes_nothing() {
 }
 
 #[test]
-fn apply_removes_exactly_what_will_never_be_used_and_leaves_consent_alone() {
+fn apply_removes_exactly_what_will_never_be_used_and_leaves_provenance_alone() {
     let (f, log) = fixture();
-    let consent_before = std::fs::read_to_string(trovador::consent::path(&f.paths)).ok();
+    let provenance_before = std::fs::read_to_string(trovador::provenance::path(&f.paths)).ok();
     let r = trovador::gc::gc(&f.ctx(), Duration::from_secs(90 * 86_400), true).unwrap();
     assert!(!r.dry_run);
     let left: Vec<String> = std::fs::read_dir(summary::dir(&f.ctx()))
@@ -94,8 +94,8 @@ fn apply_removes_exactly_what_will_never_be_used_and_leaves_consent_alone() {
     );
     assert_eq!(lines[0], "not json");
     assert_eq!(
-        std::fs::read_to_string(trovador::consent::path(&f.paths)).ok(),
-        consent_before
+        std::fs::read_to_string(trovador::provenance::path(&f.paths)).ok(),
+        provenance_before
     );
     assert!(r.summaries.bytes_removed > 0);
 }

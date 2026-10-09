@@ -11,8 +11,10 @@ orchestration candidate covering workflows, debate, consensus, and pipelines.
 `NAMING.md` records the choice of Tosi and the earlier naming research.
 
 Tosi is intended for personal use on a home machine and laptop. It is one crate in
-the bottega workspace, next to trovador, which it links for session lookup and
-consent; bottega's marketplace installs both as plugins.
+the bottega workspace, next to trovador, which it links to record the sessions it
+starts, so trovador's list and search include them; bottega's marketplace installs
+both as plugins. Workers always start fresh: past sessions are history, never
+continued or forked.
 
 ## Build and install
 
@@ -66,7 +68,7 @@ old identity and paths as evidence of the versions they reviewed.
 | Tool | Arguments | Behavior |
 | --- | --- | --- |
 | `check_environment` | Optional `backend`: `claude` or `codex`; omitted checks both | Report executable, environment, and authentication status without a model call. |
-| `spawn_task` | `task`, absolute `cwd` (optional with `session_id`); optional `backend`, `model`, `effort`, `access`, `timeout_secs`, `output_schema`, `session_id`, `fork` | Start one bounded turn and return its ID. With `session_id`, continue (or with `fork`, branch) an existing Claude Code or Codex session, subject to trovador consent. |
+| `spawn_task` | `task`, absolute `cwd`; optional `backend`, `model`, `effort`, `access`, `timeout_secs`, `output_schema` | Start one bounded turn in a new session and return its ID. |
 | `wait_tasks` | `task_ids`; optional `timeout_ms` | Return when any task finishes or the wait expires; `0` reads a snapshot. Default 30 seconds, maximum 55. |
 | `continue_task` | `task_id`, `message` | Continue the newest successful turn in the same provider conversation; return a new task ID. |
 | `cancel_task` | `task_id` | Cancel and wait up to 55 seconds for cleanup; return `cancelling` if cleanup is still running. |

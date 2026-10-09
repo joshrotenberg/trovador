@@ -49,13 +49,10 @@ Missing, invalid, mismatched, or oversized requested JSON makes a task fail;
 structured results have a 64000-byte limit and are never truncated.
 Follow-ups inherit the schema without an override.
 
-To pick up an existing Claude Code or Codex session rather than starting fresh,
-pass its id or prefix as `session_id` (find it with trovador's `search` or
-`sessions`). The backend follows the session and `cwd` defaults to its project.
-Only sessions this toolkit started, or that a person approved with
-`trovador consent approve`, can be continued; a refusal names the command to run,
-which is the user's to decide, never yours. `fork: true` (Claude only) branches a
-new session from that context without adding to the original.
+Past Claude Code and Codex sessions are history, not something to continue: a
+worker always starts fresh. To build on an earlier session, put what matters from it
+in the brief (see the consult reference). Going back into an old session is the
+user's to do, with `claude --resume` or `codex resume`.
 
 Default to `read_only`; use `workspace_write` only for authorized edits. Access
 modes differ by provider: Claude has a restricted tool list and no Bash tool,

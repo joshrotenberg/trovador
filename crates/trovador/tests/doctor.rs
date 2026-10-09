@@ -61,24 +61,25 @@ fn a_missing_provider_is_a_warning_because_reading_still_works() {
 }
 
 #[test]
-fn unreadable_consent_and_no_archives_are_errors() {
+fn no_archives_is_an_error_and_an_unreadable_provenance_record_a_warning() {
     let f = Fixture::new().with_fakes();
     std::fs::create_dir_all(&f.paths.home).unwrap();
-    std::fs::write(trovador::consent::path(&f.paths), "{ broken").unwrap();
+    std::fs::write(trovador::provenance::path(&f.paths), "{ broken").unwrap();
     let r = report(&f);
     assert!(!r.ok);
+    assert!(
+        r.problems
+            .iter()
+            .any(|p| p.severity == Severity::Warn && p.what.contains("is invalid")),
+        "{:?}",
+        r.problems
+    );
     let errors: Vec<_> = r
         .problems
         .iter()
         .filter(|p| p.severity == Severity::Error)
         .map(|p| p.what.clone())
         .collect();
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.starts_with("consent state cannot be read")),
-        "{errors:?}"
-    );
     assert!(
         errors.iter().any(|e| e == "no session archive can be read"),
         "{errors:?}"

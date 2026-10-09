@@ -43,15 +43,11 @@ impl Runner for FakeRunner {
 fn request(task: &str) -> SpawnTask {
     SpawnTask {
         task: task.into(),
-        cwd: Some(
-            std::env::temp_dir()
-                .canonicalize()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned(),
-        ),
-        session_id: None,
-        fork: None,
+        cwd: std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
         backend: None,
         model: None,
         effort: None,
@@ -319,7 +315,7 @@ async fn bad_input_does_not_start_work_and_shutdown_rejects_new_tasks() {
     let manager = Manager::new(runner.clone(), Backend::Claude, 4);
     assert!(manager.spawn_task(request(" ")).await.is_err());
     let mut bad = request("test");
-    bad.cwd = Some(".".into());
+    bad.cwd = ".".into();
     assert!(manager.spawn_task(bad).await.is_err());
     let mut bad = request("test");
     bad.timeout_secs = Some(3601);

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::archive::{self, Backend};
-use crate::consent::{self, Decision, Level};
+use crate::provenance;
 use crate::sessions::Ctx;
 use crate::summary::{self, Summary};
 
@@ -19,17 +19,12 @@ use crate::summary::{self, Summary};
 pub struct ImportReport {
     pub from: String,
     pub dry_run: bool,
-    /// spike's level, and whether it was adopted. It is adopted only when trovador had no
-    /// consent state of its own, so an import never loosens or tightens a policy that a
-    /// person already chose here.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub level: Option<Level>,
-    pub level_adopted: bool,
+    /// Sessions spike started, added to the record of sessions the toolkit started.
     pub spawned_added: usize,
     pub spawned_present: usize,
-    pub decisions_added: usize,
-    /// spike had a decision for a session trovador also has one for; trovador's was kept.
-    pub decisions_kept_trovador: usize,
+    /// spike's consent level and per-session decisions, which have no counterpart here:
+    /// past sessions are read-only history. Counted, not imported.
+    pub decisions_ignored: usize,
     pub summaries_imported: usize,
     pub summaries_present: usize,
     /// The session changed after spike summarized it, or is gone.
@@ -46,7 +41,7 @@ pub enum ImportError {
     #[error("spike consent state at {path} cannot be read: {reason}")]
     Consent { path: String, reason: String },
     #[error(transparent)]
-    Write(#[from] consent::ConsentError),
+    Write(#[from] provenance::ProvenanceError),
 }
 
 pub fn default_from() -> PathBuf {
@@ -57,24 +52,16 @@ pub fn default_from() -> PathBuf {
 
 #[derive(Deserialize)]
 struct SpikeConsent {
-    level: Level,
     #[serde(default)]
     spawned: Vec<SpikeRecord>,
     #[serde(default)]
-    decisions: Vec<SpikeDecision>,
+    decisions: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
 struct SpikeRecord {
     backend: Backend,
     session_id: String,
-}
-
-#[derive(Deserialize)]
-struct SpikeDecision {
-    backend: Backend,
-    session_id: String,
-    decision: Decision,
 }
 
 pub fn import(ctx: &Ctx, from: &Path, dry_run: bool) -> Result<ImportReport, ImportError> {
@@ -96,31 +83,21 @@ pub fn import(ctx: &Ctx, from: &Path, dry_run: bool) -> Result<ImportReport, Imp
         };
         let raw = std::fs::read_to_string(&consent_file).map_err(|e| bad(e.to_string()))?;
         let spike: SpikeConsent = serde_json::from_str(&raw).map_err(|e| bad(e.to_string()))?;
-        report.level = Some(spike.level);
-        let incoming = consent::Incoming {
-            level: Some(spike.level),
-            spawned: spike
-                .spawned
-                .into_iter()
-                .map(|r| (r.backend, r.session_id))
-                .collect(),
-            decisions: spike
-                .decisions
-                .into_iter()
-                .map(|d| (d.backend, d.session_id, d.decision))
-                .collect(),
-        };
-        let merged = consent::merge(&ctx.paths, &incoming, dry_run).map_err(|e| match e {
-            consent::ConsentError::BadId => bad(format!(
-                "a spawned or decision record has an invalid session id ({e}); nothing was imported"
-            )),
-            other => other.into(),
-        })?;
-        report.level_adopted = merged.level_adopted;
-        report.spawned_added = merged.spawned_added;
-        report.spawned_present = merged.spawned_present;
-        report.decisions_added = merged.decisions_added;
-        report.decisions_kept_trovador = merged.decisions_kept;
+        let spawned: Vec<(Backend, String)> = spike
+            .spawned
+            .into_iter()
+            .map(|r| (r.backend, r.session_id))
+            .collect();
+        let (added, present) =
+            provenance::record_all(&ctx.paths, &spawned, dry_run).map_err(|e| match e {
+                provenance::ProvenanceError::BadId => bad(format!(
+                    "a spawned record has an invalid session id ({e}); nothing was imported"
+                )),
+                other => other.into(),
+            })?;
+        report.spawned_added = added;
+        report.spawned_present = present;
+        report.decisions_ignored = spike.decisions.len();
     }
 
     if let Ok(files) = std::fs::read_dir(&summaries_dir) {
