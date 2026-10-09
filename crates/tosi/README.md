@@ -5,10 +5,9 @@ Claude and Codex through the same five MCP tools. One Rust executable owns the
 task records and CLI processes; a small skill describes how to delegate and
 collect results. It uses `claude-wrapper`, `codex-wrapper`, and `tower-mcp`.
 
-The source checkout's `ROADMAP.md` tracks routing,
-delegation guidance, dogfood reviews, distribution work, and a second-round
-orchestration candidate covering workflows, debate, consensus, and pipelines.
-`NAMING.md` records the choice of Tosi and the earlier naming research.
+Planned work is tracked as bottega issues: routing policies (#54), round robin
+(#55), a workflow executor (#56), and debate, consensus, and pipeline patterns
+(#57). `NAMING.md` records the choice of Tosi and the earlier naming research.
 
 Tosi is intended for personal use on a home machine and laptop. It is one crate in
 the bottega workspace, next to trovador, which it links to record the sessions it
