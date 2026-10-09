@@ -145,6 +145,14 @@ impl Server {
             }}
         }))
         .await;
+        // Issue #51: a signal stops the transport reading stdin, and only requests already
+        // read are drained. Signalling straight after writing the wait could leave it unread
+        // in the pipe, so nothing answered it. Requests are read in order and run
+        // concurrently, so a ping response proves the wait is in flight.
+        self.send(json!({"jsonrpc": "2.0", "id": 90, "method": "ping"}))
+            .await;
+        let pong = self.response(90).await;
+        assert!(pong.get("error").is_none(), "{pong}");
         snapshot
     }
 
