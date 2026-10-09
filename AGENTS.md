@@ -15,6 +15,8 @@ installed with `cargo install`.
   Codex. A change to one host's manifest needs the matching change to the other.
 - Keep hooks out of `hooks/hooks.json`: Codex reads that path too. Claude hooks go in a
   file the Claude manifest names; Codex hooks go in `extensions["com.openai"].hooks`.
+- Skills a tool serves itself (its `resources/skills/`) are copied here with
+  `scripts/sync-skills.sh`; edit them in the tool's repository, never here.
 - No `version` fields. Claude Code uses the git commit instead.
 - Skills are shared by both hosts. Write them for either agent: name MCP tools by their
   tool names, never by a host-specific prefix.

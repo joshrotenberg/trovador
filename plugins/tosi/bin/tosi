@@ -1,0 +1,14 @@
+#!/bin/sh
+# Runs the tosi that cargo installed. The plugin carries no binary, so updating
+# tosi is `cargo install` and nothing in the plugin changes. The desktop apps do not
+# always see the shell's PATH, so cargo's bin directory is tried first.
+for candidate in "${TOSI_BIN:-}" "${CARGO_HOME:-$HOME/.cargo}/bin/tosi"; do
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    exec "$candidate" "$@"
+  fi
+done
+if command -v tosi >/dev/null 2>&1; then
+  exec tosi "$@"
+fi
+echo "bottega: tosi is not installed; run: cargo install --locked --git https://github.com/joshrotenberg/tosi" >&2
+exit 127

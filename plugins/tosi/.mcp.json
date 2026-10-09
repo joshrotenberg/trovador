@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "tosi": {
+      "type": "stdio",
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/tosi",
+      "args": []
+    }
+  }
+}

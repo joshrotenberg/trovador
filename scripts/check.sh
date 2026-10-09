@@ -23,6 +23,16 @@ else
   echo "skip: claude not installed, Claude Code validation not run" >&2
 fi
 
+# A plugin whose tool repository has resources/skills must match it; see sync-skills.sh.
+tools=${TOOLS_ROOT:-$HOME/Code/github.com/joshrotenberg}
+for p in plugins/*/; do
+  name=$(basename "$p")
+  source="$tools/$name/resources/skills"
+  if [ -d "$source" ]; then
+    diff -r "$source" "$p/skills" >/dev/null || fail "$name skills differ from $source; run scripts/sync-skills.sh $name"
+  fi
+done
+
 for shim in plugins/*/bin/*; do
   [ -x "$shim" ] || fail "$shim is not executable"
   "$shim" --version >/dev/null || fail "$shim --version"

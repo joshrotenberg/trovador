@@ -7,13 +7,19 @@ plugin under `plugins/`. Both hosts read the same checkout.
 | Plugin | What it gives an agent | Source |
 |---|---|---|
 | `trovador` | Search, read, and summarize every past Claude Code and Codex session on the machine | [joshrotenberg/trovador](https://github.com/joshrotenberg/trovador) |
+| `tosi` | Delegate bounded tasks to local Claude and Codex workers: spawn, wait, continue, cancel | [joshrotenberg/tosi](https://github.com/joshrotenberg/tosi) |
 
 ## How it fits together
 
 Nothing here is built or released. A plugin directory holds manifests, skills, hooks,
 and a `bin/` shim. The shim runs the tool that `cargo install` put in `~/.cargo/bin`
-(or `$TROVADOR_BIN`, or `PATH`), and prints the install command if it is missing.
+(or `$<TOOL>_BIN`, or `PATH`), and prints the install command if it is missing.
 Updating a tool is `cargo install`; updating a plugin is a commit here.
+
+A tool that also serves its skills as MCP resources keeps them in its own
+`resources/skills/`, and `scripts/sync-skills.sh <plugin>` copies them here. `check.sh`
+fails when a copy has drifted from a local checkout of the tool. trovador's skill is
+written here directly.
 
 Each plugin directory carries both hosts' files side by side:
 
@@ -36,7 +42,9 @@ Both repositories are private, so cargo fetches with the git CLI, which uses you
 GitHub credentials.
 
 ```sh
-CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install --locked --git https://github.com/joshrotenberg/trovador
+export CARGO_NET_GIT_FETCH_WITH_CLI=true
+cargo install --locked --git https://github.com/joshrotenberg/trovador
+cargo install --locked --git https://github.com/joshrotenberg/tosi
 gh repo clone joshrotenberg/bottega ~/Code/github.com/joshrotenberg/bottega
 ```
 
@@ -45,6 +53,7 @@ Claude Code:
 ```sh
 claude plugin marketplace add ~/Code/github.com/joshrotenberg/bottega
 claude plugin install trovador@bottega
+claude plugin install tosi@bottega
 ```
 
 Codex:
@@ -52,20 +61,21 @@ Codex:
 ```sh
 codex plugin marketplace add ~/Code/github.com/joshrotenberg/bottega
 codex plugin add trovador@bottega
+codex plugin add tosi@bottega
 ```
 
-If trovador was registered directly as an MCP server before (`claude mcp add`,
-`[mcp_servers.trovador]` in `~/.codex/config.toml`), remove that entry so the tools
-are not listed twice.
+If a tool was registered some other way before (`claude mcp add`, an
+`[mcp_servers.<name>]` table in `~/.codex/config.toml`, or another local marketplace),
+remove that registration so its tools are not listed twice.
 
 ## Update
 
 ```sh
 git -C ~/Code/github.com/joshrotenberg/bottega pull
-CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install --locked --git https://github.com/joshrotenberg/trovador
+CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install --locked --git https://github.com/joshrotenberg/<tool>
 ```
 
-Then update the plugin in each host (`claude plugin update trovador@bottega`; in Codex,
+Then update the plugin in each host (`claude plugin update <tool>@bottega`; in Codex,
 add it again) and start a new session. A running MCP server never reloads.
 
 ## Check
@@ -75,9 +85,5 @@ scripts/check.sh
 ```
 
 Parses every JSON file, runs `claude plugin validate` on the marketplace and each
-plugin, and starts each shim with `--version`.
-
-## Planned
-
-- The subagent toolset now called task-runners (spawn, wait, continue, cancel), under
-  a new name when it moves here.
+plugin, compares synced skills with the tool checkouts, and starts each shim with
+`--version`.

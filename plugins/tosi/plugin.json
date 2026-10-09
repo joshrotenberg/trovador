@@ -1,0 +1,32 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "tosi",
+  "description": "Delegate bounded tasks to local Claude Code and Codex workers: spawn, wait, continue, cancel",
+  "author": {
+    "name": "Josh Rotenberg"
+  },
+  "keywords": [
+    "claude",
+    "codex",
+    "delegation",
+    "subagents",
+    "local"
+  ],
+  "repository": "https://github.com/joshrotenberg/tosi",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Tosi",
+        "shortDescription": "Claude and Codex delegation",
+        "longDescription": "Run, wait for, continue, and cancel bounded tasks using locally authenticated Claude and Codex command-line tools.",
+        "developerName": "Josh Rotenberg",
+        "category": "Engineering",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "defaultPrompt": "Delegate an independent review of this project to Claude."
+      }
+    }
+  }
+}

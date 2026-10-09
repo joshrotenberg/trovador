@@ -9,6 +9,11 @@
       "name": "trovador",
       "description": "Search and read every past Claude Code and Codex session on this machine",
       "source": "./plugins/trovador"
+    },
+    {
+      "name": "tosi",
+      "description": "Delegate bounded tasks to local Claude Code and Codex workers: spawn, wait, continue, cancel",
+      "source": "./plugins/tosi"
     }
   ]
 }
