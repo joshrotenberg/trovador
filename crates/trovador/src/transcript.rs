@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 /// Bumped whenever the projection changes what it emits, which invalidates every index row.
-pub const PROJECTION_VERSION: i64 = 5;
+pub const PROJECTION_VERSION: i64 = 7;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -268,10 +268,9 @@ pub(crate) fn project_codex(r: &Value, mode: CodexMode, limits: &Limits, out: &m
             if mode == CodexMode::Events
                 && let Some(m) = str_at(p, "message")
             {
-                if is_injected(m) {
-                    out.push(Draft::omitted("injected_context"));
-                } else {
-                    out.push(Draft::new(RecordKind::User, cap(m, rc)));
+                match user_text(m) {
+                    Some(text) => out.push(Draft::new(RecordKind::User, cap(&text, rc))),
+                    None => out.push(Draft::omitted("injected_context")),
                 }
             }
         }
@@ -680,16 +679,41 @@ fn is_injected(text: &str) -> bool {
     t.starts_with('<') || t.starts_with("# AGENTS.md instructions")
 }
 
+fn user_text(text: &str) -> Option<String> {
+    // Issue #37: question replies carry user decisions inside a client wrapper. Only
+    // decode this exact envelope so other injected context remains omitted.
+    if let Some(payload) = text
+        .trim()
+        .strip_prefix("<send_user_message_question_reply>")
+    {
+        let payload = payload.strip_suffix("</send_user_message_question_reply>")?;
+        let replies: Vec<Value> = serde_json::from_str(payload).ok()?;
+        let answers: Vec<String> = replies
+            .iter()
+            .filter_map(|reply| {
+                let answer = reply.get("answer")?.as_str()?;
+                Some(match reply.get("question").and_then(Value::as_str) {
+                    Some(question) => format!("{question} → {answer}"),
+                    None => answer.to_owned(),
+                })
+            })
+            .collect();
+        return (!answers.is_empty()).then(|| answers.join("\n"));
+    }
+    (!is_injected(text)).then(|| text.to_owned())
+}
+
 /// The blocks of a message a person typed, joined.
 fn typed_text(content: &Value) -> String {
     match content {
         Value::Array(blocks) => blocks
             .iter()
             .filter_map(|b| b.get("text").and_then(Value::as_str))
-            .filter(|t| !t.trim().is_empty() && !is_injected(t))
+            .filter(|t| !t.trim().is_empty())
+            .filter_map(user_text)
             .collect::<Vec<_>>()
             .join(" "),
-        Value::String(s) if !is_injected(s) => s.clone(),
+        Value::String(s) => user_text(s).unwrap_or_default(),
         _ => String::new(),
     }
 }
