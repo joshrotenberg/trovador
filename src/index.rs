@@ -44,13 +44,47 @@ pub enum IndexError {
         #[source]
         source: std::io::Error,
     },
+    #[error(
+        "index {path} has not been built or is out of date; run `trovador index` outside the sandbox, or keep it current with the trovador MCP server, which the host starts outside the sandbox"
+    )]
+    Unavailable { path: String },
+    #[error("index {path} changed during the read-only search; retry the search")]
+    SnapshotChanged { path: String },
 }
 
 pub type Result<T> = std::result::Result<T, IndexError>;
 
+impl IndexError {
+    pub(crate) fn is_permission(&self) -> bool {
+        match self {
+            Self::Dir { source, .. } => permission_error(source),
+            Self::Sql(error) => matches!(
+                error.sqlite_error_code(),
+                Some(rusqlite::ErrorCode::ReadOnly | rusqlite::ErrorCode::PermissionDenied)
+            ),
+            _ => false,
+        }
+    }
+}
+
+fn permission_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+    )
+}
+
+fn io_error(path: &std::path::Path, source: std::io::Error) -> IndexError {
+    IndexError::Dir {
+        path: path.display().to_string(),
+        source,
+    }
+}
+
 pub struct Index {
     conn: Connection,
     path: PathBuf,
+    immutable_metadata: Option<std::fs::Metadata>,
 }
 
 pub fn db_path(paths: &Paths) -> PathBuf {
@@ -108,17 +142,74 @@ fn region_hashes(path: &std::path::Path, offset: u64) -> Option<(i64, i64)> {
 fn stored_versions(path: &std::path::Path) -> Option<(i64, i64, i64)> {
     let conn =
         Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    connection_versions(&conn).ok().flatten()
+}
+
+fn connection_versions(conn: &Connection) -> Result<Option<(i64, i64, i64)>> {
+    let has_meta: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'meta')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_meta {
+        return Ok(None);
+    }
     let get = |k: &str| {
         conn.query_row("SELECT value FROM meta WHERE key = ?1", [k], |r| {
             r.get::<_, i64>(0)
         })
-        .ok()
+        .optional()
     };
-    Some((
-        get("schema")?,
-        get("projection").unwrap_or(0),
-        get("settings").unwrap_or(0),
-    ))
+    let Some(schema) = get("schema")? else {
+        return Ok(None);
+    };
+    Ok(Some((
+        schema,
+        get("projection")?.unwrap_or(0),
+        get("settings")?.unwrap_or(0),
+    )))
+}
+
+fn require_writable(path: &std::path::Path) -> Result<()> {
+    match std::fs::metadata(path) {
+        // Tightening private modes must not grant writes that the owner removed.
+        Ok(meta) if meta.permissions().readonly() => Err(io_error(
+            path,
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "path is read-only"),
+        )),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(io_error(path, e)),
+    }
+}
+
+fn same_snapshot(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (
+            before.dev(),
+            before.ino(),
+            before.ctime(),
+            before.ctime_nsec(),
+        ) != (after.dev(), after.ino(), after.ctime(), after.ctime_nsec())
+        {
+            return false;
+        }
+    }
+    before.len() == after.len()
+        && matches!((before.modified(), after.modified()), (Ok(a), Ok(b)) if a == b)
+}
+
+fn nonempty_sidecar(path: &std::path::Path, suffix: &str) -> Result<bool> {
+    let mut sidecar = path.as_os_str().to_owned();
+    sidecar.push(suffix);
+    let sidecar = PathBuf::from(sidecar);
+    match std::fs::metadata(&sidecar) {
+        Ok(meta) => Ok(meta.len() > 0),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(io_error(&sidecar, e)),
+    }
 }
 
 /// Origins of sessions started by a program rather than a person: `claude -p`, `codex
@@ -179,11 +270,17 @@ fn key(backend: Backend, id: &str) -> (Backend, String) {
 impl Index {
     /// Opens the index, creating it and its directory if needed.
     pub fn open(paths: &Paths, limits: &Limits) -> Result<Self> {
+        let path = db_path(paths);
+        require_writable(&paths.home)?;
+        for suffix in ["", "-wal", "-shm"] {
+            let mut p = path.clone().into_os_string();
+            p.push(suffix);
+            require_writable(&PathBuf::from(p))?;
+        }
         crate::paths::private_dir(&paths.home).map_err(|source| IndexError::Dir {
             path: paths.home.display().to_string(),
             source,
         })?;
-        let path = db_path(paths);
         // Everything in the index is derived, so a version change starts a fresh file.
         // Reindexing row by row after a projection change left a 456 MB file and took
         // 20.4 s, against 415 MB and 9.8 s fresh (2026-10-07).
@@ -191,25 +288,36 @@ impl Index {
             for suffix in ["", "-wal", "-shm"] {
                 let mut p = path.clone().into_os_string();
                 p.push(suffix);
-                let _ = std::fs::remove_file(PathBuf::from(p));
+                let p = PathBuf::from(p);
+                match std::fs::remove_file(&p) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(io_error(&p, e)),
+                }
             }
         }
         // SQLite gives the -wal and -shm files the database file's mode, so the file is
         // created 0600 before SQLite sees it, and an older 0644 one is tightened.
-        let _ = crate::paths::private_file()
+        crate::paths::private_file()
             .write(true)
             .create(true)
             .truncate(false)
-            .open(&path);
+            .open(&path)
+            .map_err(|e| io_error(&path, e))?;
         for suffix in ["", "-wal", "-shm"] {
             let mut p = path.clone().into_os_string();
             p.push(suffix);
-            let _ = crate::paths::make_private(&PathBuf::from(p));
+            let p = PathBuf::from(p);
+            crate::paths::make_private(&p).map_err(|e| io_error(&p, e))?;
         }
         let conn = Connection::open(&path)?;
-        let index = Self { conn, path };
-        index.configure()?;
-        index.migrate(limits)?;
+        let index = Self {
+            conn,
+            path,
+            immutable_metadata: None,
+        };
+        index.configure().map_err(|e| index.classify_error(e))?;
+        index.migrate(limits).map_err(|e| index.classify_error(e))?;
         Ok(index)
     }
 
@@ -222,7 +330,11 @@ impl Index {
             return None;
         }
         let conn = Connection::open(&path).ok()?;
-        let index = Self { conn, path };
+        let index = Self {
+            conn,
+            path,
+            immutable_metadata: None,
+        };
         index.configure().ok()?;
         Some(index)
     }
@@ -233,6 +345,10 @@ impl Index {
         self.conn.busy_timeout(Duration::from_secs(5))?;
         self.conn
             .execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
+        self.configure_reader()
+    }
+
+    fn configure_reader(&self) -> Result<()> {
         register_regexp(&self.conn)?;
         self.conn.create_scalar_function(
             "under_archive_root",
@@ -245,6 +361,124 @@ impl Index {
                 Ok(std::path::Path::new(&file).starts_with(root))
             },
         )?;
+        Ok(())
+    }
+
+    pub(crate) fn classify_error(&self, error: IndexError) -> IndexError {
+        if let IndexError::Sql(sql) = &error
+            && matches!(
+                sql.sqlite_error_code(),
+                Some(rusqlite::ErrorCode::CannotOpen | rusqlite::ErrorCode::SystemIoFailure)
+            )
+        {
+            // CANTOPEN and IOERR also mean faults unrelated to permissions. Only the
+            // OS error saved on this connection can justify a read-only fallback.
+            let errno = unsafe { rusqlite::ffi::sqlite3_system_errno(self.conn.handle()) };
+            let source = std::io::Error::from_raw_os_error(errno);
+            if permission_error(&source) {
+                return io_error(&self.path, source);
+            }
+        }
+        error
+    }
+
+    /// Opens read-only without migrating index files. Call `verify_snapshot` after
+    /// all reads and before returning results, since an immutable reader takes no locks.
+    pub fn open_read_only(paths: &Paths, limits: &Limits) -> Result<Self> {
+        let path = db_path(paths);
+        match std::fs::metadata(&path) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(IndexError::Unavailable {
+                    path: path.display().to_string(),
+                });
+            }
+            Err(e) => return Err(io_error(&path, e)),
+        }
+        let index = if nonempty_sidecar(&path, "-wal")? || nonempty_sidecar(&path, "-journal")? {
+            let conn =
+                Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            conn.busy_timeout(Duration::from_secs(5))?;
+            // Keep versions, counts, and excerpts in the same SQLite WAL snapshot.
+            // SQLite's locks allow concurrent commits without mixing their rows.
+            conn.execute_batch("BEGIN")?;
+            Self {
+                conn,
+                path,
+                immutable_metadata: None,
+            }
+        } else {
+            Self::checkpoint_snapshot(path)?
+        };
+        if connection_versions(&index.conn)? != Some(built_with(limits)) {
+            return Err(IndexError::Unavailable {
+                path: index.path.display().to_string(),
+            });
+        }
+        index.configure_reader()?;
+        Ok(index)
+    }
+
+    fn checkpoint_snapshot(path: PathBuf) -> Result<Self> {
+        // A checkpointed WAL database may have no -shm, and a read-only SQLite open
+        // would try to create it. immutable=1 avoids that without copying the database.
+        // Measured 2026-11-02 on a 482,430,976-byte index with 7,919 sessions (release
+        // build, macOS, /usr/bin/time -l): writable search 0.17 s and 27.7 MB peak RSS;
+        // an earlier version that copied the file into memory and deserialized it, 0.21 s
+        // and 453 MB; this direct read, 0.10 s and 17.2 MB.
+        // The tradeoff is no SQLite locking or change detection. WAL commits go to
+        // the sidecar; a concurrent checkpoint can change main-file pages underneath
+        // this reader. verify_snapshot must reject the results after every read is
+        // finished if identity/ctime/mtime/length changed or a nonempty WAL/journal
+        // appeared. Existing WALs and rollback journals use SQLite's locked reader.
+        let before = std::fs::metadata(&path).map_err(|e| io_error(&path, e))?;
+        if nonempty_sidecar(&path, "-wal")? || nonempty_sidecar(&path, "-journal")? {
+            return Err(IndexError::SnapshotChanged {
+                path: path.display().to_string(),
+            });
+        }
+        // Percent-encode path bytes so '?', '#', '%' and non-UTF-8 names cannot be
+        // interpreted as URI options or point SQLite at a different file.
+        let absolute = std::path::absolute(&path).map_err(|e| io_error(&path, e))?;
+        let mut uri = String::from("file:");
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        for byte in absolute.as_os_str().as_encoded_bytes() {
+            uri.push('%');
+            uri.push(HEX[(byte >> 4) as usize] as char);
+            uri.push(HEX[(byte & 15) as usize] as char);
+        }
+        uri.push_str("?mode=ro&immutable=1");
+        let conn = Connection::open_with_flags(
+            uri,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )?;
+        Ok(Self {
+            conn,
+            path,
+            immutable_metadata: Some(before),
+        })
+    }
+
+    /// Rejects immutable reads if the source changed before all results were read.
+    /// Writable connections and locked read-only transactions need no such check.
+    pub fn verify_snapshot(&self) -> Result<()> {
+        let Some(before) = &self.immutable_metadata else {
+            return Ok(());
+        };
+        let changed = || IndexError::SnapshotChanged {
+            path: self.path.display().to_string(),
+        };
+        let after = match std::fs::metadata(&self.path) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(changed()),
+            Err(e) => return Err(io_error(&self.path, e)),
+        };
+        if !same_snapshot(before, &after)
+            || nonempty_sidecar(&self.path, "-wal")?
+            || nonempty_sidecar(&self.path, "-journal")?
+        {
+            return Err(changed());
+        }
         Ok(())
     }
 

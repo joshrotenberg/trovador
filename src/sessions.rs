@@ -374,14 +374,31 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         })?;
     }
     let (since, until) = window(opts.since.as_deref(), opts.until.as_deref())?;
-    let mut idx = Index::open(&ctx.paths, &ctx.limits)?;
-    let refresh = idx.refresh(
-        &ctx.paths,
-        &ctx.limits,
-        &RefreshOpts {
-            budget: Some(Duration::from_millis(ctx.limits.index_budget_ms as u64)),
-        },
-    )?;
+    let updated = (|| {
+        let mut idx = Index::open(&ctx.paths, &ctx.limits)?;
+        let refresh = idx
+            .refresh(
+                &ctx.paths,
+                &ctx.limits,
+                &RefreshOpts {
+                    budget: Some(Duration::from_millis(ctx.limits.index_budget_ms as u64)),
+                },
+            )
+            .map_err(|e| idx.classify_error(e))?;
+        Ok::<_, IndexError>((idx, refresh))
+    })();
+    let (idx, mut refresh, readonly_note) = match updated {
+        Ok((idx, refresh)) => (idx, refresh, None),
+        Err(error) if error.is_permission() => {
+            let idx = Index::open_read_only(&ctx.paths, &ctx.limits)?;
+            let note = format!(
+                "index {} could not be updated: {error}; searching the existing index read-only; sessions written since its last refresh are not covered",
+                index::db_path(&ctx.paths).display()
+            );
+            (idx, RefreshReport::default(), Some(note))
+        }
+        Err(error) => return Err(error.into()),
+    };
     let limit = opts.limit.unwrap_or(ctx.limits.search_default).max(1);
     let per_session = opts
         .per_session
@@ -416,6 +433,9 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         .into_iter()
         .map(|e| ((e.backend, e.session_id.clone()), e))
         .collect();
+    if readonly_note.is_some() {
+        refresh.sessions = entries.len();
+    }
     let found = raw.hits.len();
     let hits: Vec<SearchHit> = raw
         .hits
@@ -438,8 +458,10 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
     // the index was last refreshed.
     hidden.unavailable = found - hits.len();
     let text_excluded = idx.text_excluded()?;
-    let exhaustive =
-        refresh.pending == 0 && refresh.failed == 0 && refresh.unavailable_roots.is_empty();
+    let exhaustive = readonly_note.is_none()
+        && refresh.pending == 0
+        && refresh.failed == 0
+        && refresh.unavailable_roots.is_empty();
     let excluded_note = (opts.include_subagents && !text_excluded.is_empty()).then(|| {
         let mut parts: Vec<String> = text_excluded
             .iter()
@@ -491,6 +513,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
     };
     let query_is_proof = query_note.is_none();
     let note = [
+        readonly_note,
         stale_note,
         unavailable_note,
         excluded_note,
@@ -501,6 +524,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
     .flatten()
     .collect::<Vec<_>>();
     let note = (!note.is_empty()).then(|| note.join("; "));
+    idx.verify_snapshot()?;
     Ok(SearchResult {
         query: opts.query.clone(),
         mode: if opts.regex {
