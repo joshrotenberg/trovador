@@ -4,8 +4,7 @@ use std::io::Write;
 
 use common::*;
 use serde_json::json;
-use trovador::consent::{self, Decision, Level};
-use trovador::run::{self, AskOpts, AskResult, RunError};
+use trovador::provenance;
 use trovador::sessions::Ctx;
 use trovador::summary::{self, Summary};
 use trovador::{Backend, Limits};
@@ -17,10 +16,6 @@ fn rt() -> tokio::runtime::Runtime {
 fn summarize(ctx: &Ctx, id: &str, force: bool) -> Summary {
     rt().block_on(summary::summarize(ctx, id, None, force, None))
         .unwrap()
-}
-
-fn ask(ctx: &Ctx, opts: AskOpts) -> Result<AskResult, RunError> {
-    rt().block_on(run::ask(ctx, &opts))
 }
 
 fn session_with(f: &Fixture, id: &str, turns: usize) -> std::path::PathBuf {
@@ -54,6 +49,42 @@ fn a_small_session_is_summarized_in_one_call_and_then_served_from_the_cache() {
 }
 
 #[test]
+fn an_explicit_model_change_regenerates_but_matching_or_omitted_models_reuse_the_cache() {
+    let f = Fixture::new().with_fakes();
+    let ctx = f.ctx();
+    session_with(&f, ID_A, 3);
+    let runtime = rt();
+    let with_model = |model| {
+        runtime
+            .block_on(summary::summarize(&ctx, ID_A, None, false, model))
+            .unwrap()
+    };
+
+    let initial = with_model(Some("haiku"));
+    assert!(!initial.cached);
+    assert_eq!(initial.model, "haiku");
+
+    let changed = with_model(Some("opus"));
+    assert!(!changed.cached);
+    assert_eq!(changed.model, "opus");
+    let calls = f.calls("claude");
+    assert_eq!(calls.len(), 2);
+    assert!(
+        calls[1]
+            .windows(2)
+            .any(|args| args == ["arg=--model", "arg=opus"])
+    );
+
+    for model in [Some("opus"), None] {
+        let reused = with_model(model);
+        assert!(reused.cached);
+        assert_eq!(reused.model, "opus");
+        assert_eq!(reused.cost_usd, 0.0);
+    }
+    assert_eq!(f.calls("claude").len(), 2);
+}
+
+#[test]
 fn an_append_makes_the_cached_summary_stale() {
     let f = Fixture::new().with_fakes();
     let ctx = f.ctx();
@@ -74,7 +105,7 @@ fn summary_runs_leave_no_session_behind_and_skip_tools() {
     let call = &f.calls("claude")[0];
     assert!(call.iter().any(|l| l == "arg=--no-session-persistence"));
     assert!(call.iter().any(|l| l == "arg=haiku"));
-    assert_eq!(consent::status(&ctx.paths).spawned, 0);
+    assert_eq!(provenance::status(&ctx.paths).spawned, 0);
     let log = std::fs::read_to_string(ctx.paths.home.join("runs.jsonl")).unwrap();
     assert!(log.contains("\"verb\":\"summarize\""));
 }
@@ -133,91 +164,6 @@ fn past_the_chunk_limit_the_start_and_end_are_kept_and_the_gap_is_named() {
 
 // --- consult ---------------------------------------------------------------
 
-#[test]
-fn consulting_asks_the_other_backend_with_the_summary_in_the_source_project() {
-    let f = Fixture::new().with_fakes();
-    let ctx = f.ctx();
-    let project = f.dir.path().join("proj");
-    std::fs::create_dir_all(&project).unwrap();
-    f.claude(
-        "-proj",
-        ID_A,
-        &[claude_user(
-            &project.display().to_string(),
-            "design the cache",
-        )],
-        0,
-    );
-    let r = ask(
-        &ctx,
-        AskOpts {
-            about: Some("aaaa".into()),
-            ..AskOpts {
-                prompt: "what was decided?".into(),
-                ..Default::default()
-            }
-        },
-    )
-    .unwrap();
-    assert_eq!(r.backend, Backend::Codex);
-    assert_eq!(r.verb, "started");
-    let c = r.consulted.unwrap();
-    assert_eq!((c.backend, c.session_id.as_str()), (Backend::Claude, ID_A));
-    assert!(!c.summary_cached);
-
-    let seeded = &f.prompts("codex")[0];
-    assert!(
-        seeded.starts_with("You are being consulted about a prior agent session run by claude")
-    );
-    assert!(seeded.contains("single summary"));
-    assert!(seeded.ends_with("Question: what was decided?"));
-    let cwd = f.calls("codex")[0][0]
-        .strip_prefix("cwd=")
-        .unwrap()
-        .to_string();
-    assert_eq!(
-        std::fs::canonicalize(cwd).unwrap(),
-        std::fs::canonicalize(&project).unwrap()
-    );
-    // The consulting session is trovador's and can be continued; the source was not touched.
-    assert!(r.continuation.unwrap().allowed);
-    assert!(!consent::check(&ctx.paths, Backend::Claude, ID_A).allowed);
-}
-
-#[test]
-fn a_session_too_large_to_resume_can_still_be_consulted() {
-    let f = Fixture::new().with_fakes();
-    let ctx = f.ctx();
-    f.claude("-w", ID_A, &[claude_user("/", &"z ".repeat(500_000))], 0);
-    let r = ask(
-        &ctx,
-        AskOpts {
-            prompt: "summarize the outcome".into(),
-            about: Some(ID_A.into()),
-            backend: Some(Backend::Claude),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    assert_eq!(r.backend, Backend::Claude);
-    assert!(!r.is_error);
-}
-
-#[test]
-fn about_cannot_be_combined_with_continuing_or_forking() {
-    let f = Fixture::new().with_fakes();
-    let r = ask(
-        &f.ctx(),
-        AskOpts {
-            prompt: "x".into(),
-            about: Some(ID_A.into()),
-            session: Some(ID_B.into()),
-            ..Default::default()
-        },
-    );
-    assert!(matches!(r, Err(RunError::Invalid(_))));
-}
-
 // --- import ----------------------------------------------------------------
 
 fn spike_dir(f: &Fixture) -> std::path::PathBuf {
@@ -271,7 +217,7 @@ fn snapshot(dir: &std::path::Path) -> Vec<(String, Vec<u8>)> {
 }
 
 #[test]
-fn import_merges_spike_consent_and_fresh_summaries_without_touching_spike() {
+fn import_merges_spikes_spawned_records_and_fresh_summaries_without_touching_spike() {
     let f = Fixture::new();
     let ctx = f.ctx();
     let fresh = f.claude("-w", ID_A, &[claude_user("/w", "a")], 100);
@@ -295,14 +241,13 @@ fn import_merges_spike_consent_and_fresh_summaries_without_touching_spike() {
     let dry = trovador::import::import(&ctx, &spike, true).unwrap();
     assert_eq!(dry.spawned_added, 1);
     assert!(
-        !consent::path(&ctx.paths).exists(),
+        !provenance::path(&ctx.paths).exists(),
         "a dry run changes nothing"
     );
 
     let r = trovador::import::import(&ctx, &spike, false).unwrap();
-    assert_eq!(r.level, Some(Level::Approved));
-    assert!(r.level_adopted);
-    assert_eq!((r.spawned_added, r.decisions_added), (1, 2));
+    // spike's level and decisions have no counterpart here; they are counted, not imported.
+    assert_eq!((r.spawned_added, r.decisions_ignored), (1, 2));
     assert_eq!((r.summaries_imported, r.summaries_stale), (1, 2));
     assert_eq!(r.not_imported.get("pads"), Some(&1));
     assert_eq!(r.not_imported.get("standing"), Some(&2));
@@ -312,38 +257,14 @@ fn import_merges_spike_consent_and_fresh_summaries_without_touching_spike() {
         "spike's directory is never written"
     );
 
-    assert!(consent::check(&ctx.paths, Backend::Claude, ID_A).spawned);
-    assert!(consent::check(&ctx.paths, Backend::Claude, ID_B).allowed);
+    assert!(provenance::is_spawned(&ctx.paths, Backend::Claude, ID_A));
+    assert!(!provenance::is_spawned(&ctx.paths, Backend::Claude, ID_B));
     let e = trovador::archive::find_session(&ctx.paths, ID_A, None).unwrap();
     assert_eq!(summary::cached(&ctx, &e).unwrap().summary, "from spike");
 
     let again = trovador::import::import(&ctx, &spike, false).unwrap();
-    assert_eq!(
-        (
-            again.spawned_added,
-            again.decisions_added,
-            again.summaries_imported
-        ),
-        (0, 0, 0)
-    );
+    assert_eq!((again.spawned_added, again.summaries_imported), (0, 0));
     assert_eq!((again.spawned_present, again.summaries_present), (1, 1));
-}
-
-#[test]
-fn import_never_overrides_a_policy_or_decision_already_chosen_here() {
-    let f = Fixture::new();
-    let ctx = f.ctx();
-    consent::set_level(&ctx.paths, Level::Spawned).unwrap();
-    consent::set_decision(&ctx.paths, Backend::Claude, ID_B, Some(Decision::Denied)).unwrap();
-    let spike = spike_dir(&f);
-    let r = trovador::import::import(&ctx, &spike, false).unwrap();
-    assert!(!r.level_adopted);
-    assert_eq!(r.decisions_kept_trovador, 1);
-    assert_eq!(consent::status(&ctx.paths).level, Level::Spawned);
-    assert_eq!(
-        consent::check(&ctx.paths, Backend::Claude, ID_B).decision,
-        Some(Decision::Denied)
-    );
 }
 
 #[test]
@@ -351,72 +272,4 @@ fn import_from_a_directory_that_is_not_spike_is_refused() {
     let f = Fixture::new();
     let r = trovador::import::import(&f.ctx(), f.dir.path(), false);
     assert!(r.is_err());
-}
-
-#[test]
-fn a_consult_that_cannot_run_is_refused_before_any_summary_is_made() {
-    // #19: these used to spend a summary call and cache it, then fail.
-    let f = Fixture::new().with_fakes();
-    let ctx = f.ctx();
-    session_with(&f, ID_A, 2);
-    let missing = f.dir.path().join("no-such-dir").display().to_string();
-    let base = || AskOpts {
-        prompt: "what was decided?".into(),
-        about: Some(ID_A.into()),
-        ..Default::default()
-    };
-    for bad in [
-        AskOpts {
-            sandbox: Some("danger-full-access".into()),
-            ..base()
-        },
-        AskOpts {
-            permission_mode: Some("bypassPermissions".into()),
-            ..base()
-        },
-        AskOpts {
-            effort: Some("extreme".into()),
-            ..base()
-        },
-        AskOpts {
-            cwd: Some(missing.clone()),
-            ..base()
-        },
-        AskOpts {
-            session: Some(ID_A.into()),
-            ..base()
-        },
-        AskOpts {
-            prompt: "  ".into(),
-            ..base()
-        },
-    ] {
-        assert!(matches!(ask(&ctx, bad), Err(RunError::Invalid(_))));
-    }
-    assert!(f.calls("claude").is_empty(), "no provider was started");
-    assert!(f.calls("codex").is_empty());
-    assert!(
-        std::fs::read_dir(summary::dir(&ctx))
-            .map(|d| d.count())
-            .unwrap_or(0)
-            == 0,
-        "no summary was cached"
-    );
-}
-
-#[tokio::test]
-async fn the_same_refusal_comes_back_over_mcp_without_a_provider_call() {
-    let f = Fixture::new().with_fakes();
-    session_with(&f, ID_A, 2);
-    let mut client = tower_mcp::TestClient::from_router(trovador::mcp::router(f.ctx()));
-    client.initialize().await;
-    let r = client
-        .call_tool(
-            "ask",
-            json!({"prompt": "hello", "about": ID_A, "sandbox": "danger-full-access"}),
-        )
-        .await;
-    assert!(r.is_error);
-    assert!(r.all_text().contains("danger-full-access"));
-    assert!(f.calls("claude").is_empty());
 }

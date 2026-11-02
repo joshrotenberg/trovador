@@ -9,10 +9,25 @@ MCP.
 What is on disk is what the providers kept. Claude Code removes old transcripts according
 to its `cleanupPeriodDays` setting, and Codex moves archived threads to
 `~/.codex/archived_sessions`, which trovador also reads. A transcript the provider deleted is
-gone from trovador's list and index on the next refresh.
+gone from trovador's list; its index rows are removed on the next refresh that can read
+its configured root.
 
-It can also run turns: start a Claude or Codex session, continue one it started, or fork
-one, with a consent policy deciding which existing sessions it may add a turn to.
+Search only considers rows under its currently configured archive roots. It keeps rows
+outside those roots in the shared index, so CLI and MCP processes with different archive
+settings can search without deleting each other's rows. `trovador index` removes rows
+outside the configured roots only when every configured root is readable or does not
+exist, and reports the number removed. Otherwise its report includes
+`cleanup_skipped_reason`, naming the roots that blocked cleanup and their read errors.
+Refresh removes missing sessions under readable configured roots;
+rows under an unavailable configured root are retained and search reports that root as
+unavailable. If a configured root cannot be read and the index contains out-of-root rows
+that could use another spelling of that root, search reports the root as unavailable
+and does not claim absence proof. Missing roots without indexed rows under their spelling
+do not prevent absence proof.
+
+It only reads: past sessions are history. New work is tosi's (`crates/tosi`), and going
+back into a session is a person's `claude --resume` or `codex resume`, which `sessions
+show` prints as `open_with`.
 
 It is the Rust successor to [spike](https://github.com/joshrotenberg/spike); the v0.1 scope
 is tracked in [#1](https://github.com/joshrotenberg/trovador/issues/1).
@@ -23,8 +38,8 @@ is tracked in [#1](https://github.com/joshrotenberg/trovador/issues/1).
 |---|---|
 | Archive reading: list, show, transcript | Done |
 | Full-text index and search | Done |
-| Execution: ask, continue, fork, with consent | Done |
-| Summaries, consult, import from spike | Done |
+| Running turns | Removed: new work is tosi's; past sessions are not continued |
+| Summaries, import from spike | Done; consulting moved to tosi's delegate skill |
 
 ## Install
 
@@ -33,14 +48,15 @@ From crates.io once published, or from a checkout:
 ```sh
 cargo install trovador --locked        # or: cargo install --path . --locked
 trovador import --dry-run      # optional: see what would come over from spike
-trovador import                # optional: spike's consent records and summaries
+trovador import                # optional: spike's spawned-session records and summaries
 trovador index                 # build the search index once; searches keep it current
 claude mcp add --scope user trovador -- ~/.cargo/bin/trovador serve
 codex mcp add trovador -- ~/.cargo/bin/trovador serve
 ```
 
 `trovador doctor` checks the setup: it finds `claude` and `codex` and their versions,
-reads the archives, and reports the index and consent state, with a fix for each problem.
+reads the archives, and reports the index and the record of sessions the toolkit started,
+with a fix for each problem.
 
 Supported on macOS and Linux. Windows is untested: running a provider relies on Unix
 process groups to stop it on timeout.
@@ -61,48 +77,63 @@ local transcripts held 28 calls to spike's MCP tools across 6 sessions, all to `
 | `list_sessions`, `dump` | `sessions` with `action: list` or `show` |
 | `session://{backend}/{id}/transcript` | `sessions` with `action: transcript`, or the same resource |
 | `search` | `search`, over a full-text index rather than the newest 400 files |
-| `ask` | `ask` |
-| `consult` | `ask` with `about` |
+| `ask` | tosi's `spawn_task` for new work; past sessions are not continued |
+| `consult` | `summarize`, then tosi's `spawn_task` (tosi's consult reference) |
 | `summarize`, `session://.../summary` | `summarize`, and the same resource |
-| `agent-sessions consent ...` | `trovador consent ...` |
+| `agent-sessions consent ...` | removed: nothing continues past sessions |
 | `diagnose` | `trovador doctor` (CLI) |
-| `canvass`, `digest`, `board`, `activity`, `windows`, `pin`, `pad`, `pad_set`, `standing_*`, `route`, `runners`, `usage`, `whoami`, `surface`, `operations`, `gc` | not ported |
+| `gc` | `trovador gc` (CLI only) |
+| `canvass`, `digest`, `board`, `activity`, `windows`, `pin`, `pad`, `pad_set`, `standing_*`, `route`, `runners`, `usage`, `whoami`, `surface`, `operations` | not ported |
 
 `docs/parity-2026-10-07.md` compares the two on this machine's archive, produced by
 `scripts/parity.py`.
 
 ## Use
 
+The `--project` filter for listing and searching matches path substrings ignoring ASCII
+case. Non-ASCII case remains significant. The MCP `project` parameters behave identically.
+
 ```sh
 trovador sessions list                       # newest first, top-level sessions only
-trovador sessions list --project trovador    # project path contains this text
+trovador sessions list --project trovador    # project path contains this text (ASCII case-insensitive)
 trovador sessions list --origin cli          # how it was started
 trovador sessions list --include-subagents   # also sessions started by other sessions
 trovador sessions list --since 1d            # last written in the past day (also 36h, 1w, 2026-10-01)
 trovador sessions show 27d1f434              # id or unambiguous prefix
 trovador sessions transcript 27d1f434 --offset 200 --limit 50
-trovador sessions output 0b5c...e1 --offset 100000 # the rest of a truncated ask reply
 trovador search idempotency_key              # words and "quoted phrases", all required
 trovador search "consent" --since 1w         # only sessions written in the last week
 trovador search 'consent NOT spawned' --fts  # FTS5 syntax
 trovador search 'retry_after:\s*\d+' --regex # regular expression, newest first
 trovador index                               # bring the index fully up to date
 trovador index --rebuild                     # discard it and build again
-trovador ask "review the diff" --cwd ~/code/x # start a claude session (costs tokens)
-trovador ask "and the tests?" --session 3e22  # continue it
-trovador ask "try another way" --session 3e22 --fork
-trovador ask - --backend codex < prompt.md    # prompt from stdin
-trovador ask "what was decided?" --about 27d1 # consult: summary of 27d1, asked of codex
 trovador summarize 27d1f434                   # cached until the session changes
 trovador import --dry-run                     # what would come over from spike
-trovador consent status                       # who may be continued
-trovador consent approve 27d1f434             # allow one session trovador did not start
-trovador consent policy approved              # ...and honour approvals
 trovador gc                                  # what cached summaries, saved replies, and run-log lines could go
-trovador gc --apply                          # remove them (consent is never touched)
-trovador doctor                              # providers, archives, index, consent
+trovador gc --apply                          # remove them
+trovador doctor                              # providers, archives, index, provenance
 trovador serve                               # MCP over stdio
 ```
+
+The `--since` and `--until` filters accept RFC 3339 times with `Z` or numeric offsets
+(for example, `2026-10-01T09:00:00-07:00`, equivalent to `2026-10-01T16:00:00Z`),
+dates at midnight UTC, and durations back from now. Times without a zone use UTC.
+
+`gc --older-than` defaults to `90d`. Durations reaching before 1970-01-01 UTC
+use that date as the age cutoff. Stale summaries and summaries for deleted sessions
+are still eligible for removal regardless of age. If scanning a root, subdirectory, directory entry,
+file metadata, or modification time fails, GC keeps summaries for sessions missing
+from that backend's scan and lists failed paths in `unavailable_roots`. Summaries for
+found sessions remain eligible for age and staleness cleanup. Claude project symlinks
+that do not resolve to directories are skipped.
+If a backend has cached summaries but its scan finds no sessions, GC also keeps them
+and reports the backend in `empty_backends`, since an empty mount cannot prove deletion.
+A missing Codex `archived_sessions` root is treated as empty when the active root can
+be read. Other errors remain failures. Either Codex root's failures protect summaries
+for missing Codex sessions because summaries do not record source paths.
+If `unavailable_roots` or `empty_backends` reports a backend whose missing sessions
+you really removed, delete the corresponding files under `<home>/summaries` by hand
+to reclaim them (`<home>` defaults to `~/.bottega/trovador`).
 
 Every command prints one JSON document. The MCP `sessions` tool takes the same inputs as an
 `action` of `list`, `show`, `transcript`, or `output`, and the `search` tool takes the same inputs as
@@ -143,7 +174,7 @@ $ trovador search stdout-check --per-session 1
       …
     }
   ],
-  "hidden": {"active": 1, "automated": 0, "excluded": 0, "unavailable": 0},
+  "hidden": {"active": 1, "automated": 0, "subagents": 0, "excluded": 0, "unavailable": 0},
   "exhaustive": true,
   "note": "matching sessions left out by default: 1 written in the last 600 s (include_active)"
 }
@@ -185,34 +216,8 @@ $ trovador summarize 79892eda
 }
 ```
 
-**Ask about it, then keep going.** `about` seeds a new session with that summary. trovador
-started the new session, so it can be continued without approval.
-
-```console
-$ trovador ask "Of the open items, which would you pick up first and why? Two sentences." \
-    --about 79892eda --backend claude --model haiku
-{
-  "run_id": "23c5f3a2-751a-48e5-b240-c999735131ea",
-  "session_id": "ba5efbe7-4458-4fa7-a312-1bc167cb4199",
-  "verb": "started",
-  "result": "I'd start with #66, because it's a correctness bug that affects every \"recent\" answer, and the fix doesn't depend on PR #90. Merging #90 should come right after, since it's already ready and it unblocks #89, but that merge is yours to approve.",
-  "cost_usd": 0.00532333,
-  "continuation": {"resumable": true, "allowed": true, …},
-  "consulted": {"backend": "claude", "session_id": "79892eda-…", "summary_cached": true, "summary_cost_usd": 0.0},
-  "open_with": "cd '…/spike' && claude --resume ba5efbe7-4458-4fa7-a312-1bc167cb4199",
-  …
-}
-
-$ trovador ask "In one sentence: what is the main risk in doing #66 first?" --session ba5efbe7 --model haiku
-{
-  "run_id": "d843fe27-932b-4e64-b536-0fd82c41c3b7",
-  "session_id": "ba5efbe7-4458-4fa7-a312-1bc167cb4199",
-  "verb": "continued",
-  "result": "The main risk is that deriving event time from records means reading each session file, which reintroduces the cost #63 just removed and collides with the unmerged #90 cache and listing code.",
-  "cost_usd": 0.0061699300000000006,
-  …
-}
-```
+**Ask about it, then keep going.** That is tosi's job now: `summarize` the session, then
+`spawn_task` with the summary in the brief (see `crates/tosi`).
 
 **Check a new machine.**
 
@@ -232,7 +237,7 @@ $ trovador doctor
     {"name": "codex archived", "path": "~/.codex/archived_sessions", "readable": true, "sessions": 73}
   ],
   "index": {"size_bytes": 418643968, "sessions": 5452, "text_indexed": 3694, "records": 671135, …},
-  "consent": {"level": "approved", "source": "file", "spawned": 4, "approved": 2, "denied": 0, …},
+  "provenance": {"spawned": 4, …},
   …
 }
 ```
@@ -242,7 +247,7 @@ $ trovador doctor
 | Field | Source |
 |---|---|
 | `project` | Where a resume runs from: Claude's latest `relocated` cwd, else the first `cwd` |
-| `snippet` | The first block the user typed, skipping injected `<...>` context and AGENTS.md |
+| `snippet` | The first block the user typed, skipping injected `<...>` context and AGENTS.md; a forked Codex child uses its own first message, including an inter-agent assignment |
 | `title`, `title_source` | Claude `custom-title` (typed) over `ai-title` (generated); latest wins |
 | `origin` | Claude `entrypoint` (`cli`, `claude-desktop`, `sdk-cli`); Codex `source` (`cli`, `vscode`, `exec`, `guardian`, `thread_spawn`) |
 | `subagent`, `parent_session_id` | Codex sessions started by another session |
@@ -251,35 +256,69 @@ $ trovador doctor
 | `resumable` | Transcript size under the resume ceiling (900,000 bytes) |
 | `open_with` | The command to paste in a terminal |
 
+Indexed Claude files retain the latest custom title across appends. Without an index,
+files up to `TROVADOR_TITLE_SCAN_MAX_BYTES` (4,194,304 bytes by default) are scanned for
+custom titles. Larger unindexed files use the head and tail windows, so a custom title
+between those windows can be missed. Run `trovador index` to recover it. Setting the limit
+to `0` disables the fallback scan. Between index refreshes, list and show scan appended
+bytes only when `size - stored offset` fits the same budget. Above it, they apply the
+stored custom title over the head/tail metadata until `trovador index` or search refreshes
+the file. Complete final JSON title records without a newline can be displayed within
+the budget, but enter the persisted title state only after their newline is written.
+
 Lists hide subagents by default. On the machine this was developed on, 2,950 of 5,292
 sessions were subagents, 1,694 of them Codex `guardian` approval reviewers.
 
 ## Transcripts
 
-Records are `user`, `assistant`, `tool_call`, `tool_result`, `attachment`, `system`, or
-`omitted` with a category. Consecutive omitted records of one category collapse into one
+Records are `user`, `assistant`, `tool_call`, `tool_result`, `attachment`, `system`, `reasoning`,
+or `omitted` with a category. `reasoning` appears only when the provider kept readable text.
+Forked Codex children collapse copied parent history into an `omitted` record named
+`forked_history`; it does not contribute turns, indexed text, or summary content. An
+impossible boundary in an archived file preserves the original transcript. A terminal-event
+fallback in an unarchived file is for display only; indexing waits for a known boundary.
+Consecutive omitted records of one category collapse into one
 with a `count`. Text is capped per record (4,000 chars, 600 for tool calls and results) and
 per page (100,000 chars); a page says when it stopped early and where to continue.
 
 Codex writes each turn to more than one stream. trovador projects the one the user saw:
 `item_completed` events in current versions, `user_message` and `agent_message` events in
-older ones, and `response_item` records only in files that have nothing else.
+older ones, and `response_item` records in the oldest files. In Items mode, user turns
+that exist only as response items are also retained, including guardian review turns.
+Copies across response, user-message event, and UserMessage item streams are projected
+once even when their text blocks were flattened. Response user blocks concatenate
+without adding separators. Separate identical turns remain separate. Injected response
+blocks stay excluded from the displayed user text.
 
 Files are streamed. A page from a 377 MB Codex session took 0.30 s and 6.8 MB of resident
 memory (release build, `/usr/bin/time -l`, 2026-10-07).
 
 ## Search
 
-The index is SQLite with FTS5 at `~/.trovador/index.db`: one row of metadata per session and
+The index is SQLite with FTS5 at `~/.bottega/trovador/index.db`: one row of metadata per session and
 one full-text row per projected record that carries text, keyed so a hit's `index` is the
 transcript offset to open it at.
 
 - **Queries.** By default every word and "quoted phrase" is required and each matches as a
   sequence of tokens, so a UUID or a `snake_case` name matches as written. `--fts` passes
   FTS5 syntax through (`OR`, `NOT`, `NEAR`, `prefix*`). `--regex` runs a case-insensitive
-  regular expression over the indexed text.
+  regular expression over the indexed text. Terms are checked with the index's SQLite
+  tokenizer before opening or refreshing the index. A non-empty term that produces no
+  tokens is rejected because the AND query cannot match; use `--regex` to search
+  punctuation. Empty quoted phrases and stray quotes are ignored, but a query with no
+  remaining searchable terms is rejected. Valid FTS5 syntax runs unchanged, including
+  negated filters and OR branches. When an FTS query returns no hits and references the
+  unindexed `kind` or `name` columns or contains a phrase or word with no tokens,
+  `absence_is_proof` is false and a note explains why.
 - **Ranking.** Sessions are ordered by their best-matching record (bm25), or by recency with
   `--recent`. Regex results are always newest first.
+- **Hidden matches.** `hidden` counts matching sessions left out: `active` for recent
+  writes, `automated` for automated sessions not started by trovador, `subagents` for
+  sessions started by another session, `excluded` for `exclude_session`, and `unavailable`
+  for unreadable archive roots. Counts can overlap. Use `--include-active`,
+  `--include-automated`, or `--include-subagents` to include the respective defaults.
+  An empty result with hidden matches has `absence_is_proof: false`; its note names
+  the options that can reveal those matches.
 - **Freshness.** A search first brings the index up to date, for at most
   `TROVADOR_INDEX_BUDGET_MS` (15,000). Files only appended to are read from where the last
   pass stopped; anything else changed is read again. `exhaustive` is true only when nothing
@@ -300,92 +339,67 @@ Measured on 5,366 local sessions (12.4 GB of JSONL) on 2026-10-07, release build
 
 ## Running turns
 
-`ask` runs one turn through the provider's own CLI (`claude -p` with stream-json, `codex exec
---json`). It starts a new session unless given `session`, an id or unambiguous prefix, in
-which case it continues that one from the directory the session lives in. `fork` (Claude
-only) resumes a session's context into a new session. The result carries the reply, the
-`session_id`, cost or usage as the provider reports them, and whether the session can take
-another turn.
+trovador only reads sessions, and nothing in the toolkit continues or forks one. New work
+is tosi's `spawn_task` (`crates/tosi`), which records each session it starts (see
+Provenance). The only model calls trovador makes are summaries:
 
-- **The session id is recorded as soon as it exists.** For a new Claude session trovador
-  chooses the id and records it before the process starts; for Codex and for forks it is
-  recorded from the first streamed event that names it. A run that times out or fails still
-  returns its `session_id`, and can be continued like any session trovador started.
-- **Timeouts** default to 600 s for Claude and 900 s for Codex (`TROVADOR_CLAUDE_TIMEOUT_S`,
-  `TROVADOR_CODEX_TIMEOUT_S`), or `timeout_s` per call. A timeout kills the provider's whole
-  process group and comes back as a result with `timed_out: true`.
-- **Options a backend cannot honour** (for example `max_turns` or `allowed_tools` on Codex)
-  are reported in `warnings` rather than failing the run, so one set of options can be sent
-  to both backends. `bypassPermissions` and Codex's `danger-full-access` are refused.
-- **Depth.** Every session trovador starts can reach trovador again. `TROVADOR_DEPTH` is
-  passed down and a run at `TROVADOR_MAX_DEPTH` (2) is refused.
-- **Log.** Every run's start and end is a line in `~/.trovador/runs.jsonl`, and both carry
-  the `run_id` that the `ask` result returns.
-- **Tasks.** Over MCP, `ask` and `summarize` accept task execution. A client that
-  negotiates tasks gets a task id at once and polls `tasks/get` for the result instead of
-  holding one call open for the length of the turn; any other client gets the result as
-  before. A task without a TTL keeps its run and result for the longest provider timeout plus
-  one hour (75 minutes by default). Cancelling a task, or letting it expire, kills the run,
-  and the run log records it as `cancelled`.
-- **Long replies.** A reply longer than `TROVADOR_RESPONSE_MAX_CHARS` (100,000) is cut to
-  that many characters and `result_truncated` says so. The whole reply is saved in
-  `~/.trovador/outputs/<run_id>.txt` (mode 0600), and the rest is read with
-  `trovador sessions output <run_id> --offset N` or the `sessions` tool with
-  `action: output`.
+- **Depth.** A summary runs `claude -p` with `TROVADOR_DEPTH` passed down, and a run at
+  `TROVADOR_MAX_DEPTH` (2) is refused.
+- **Log.** Every summary run's start and end is a line in `~/.bottega/trovador/runs.jsonl`, sharing a
+  `run_id`.
+- **Tasks.** Over MCP, `summarize` accepts task execution. A client that negotiates tasks
+  gets a task id at once and polls `tasks/get`; any other client gets the result as before.
+  A task without a TTL keeps its run and result for the Claude timeout plus one hour.
+  Cancelling a task, or letting it expire, kills the run, and the run log records it as
+  `cancelled`.
 
-## Summaries and consulting
+## Summaries
 
 `summarize` renders a session's transcript, cuts it into 250,000-character chunks,
-summarizes each with `haiku`, and merges them into one summary: goal, what happened, key
+summarizes each with `haiku` by default, and merges them into one summary: goal, what happened, key
 decisions, current state, open items. Past 8 chunks the first and last halves are kept and
 the summary says which parts were left out, which bounds the cost of a very large session.
 
 Summary runs use `--no-session-persistence`, so they leave no transcript in the archive and
-are never offered for continuation. The result is cached in `~/.trovador/summaries/` against
+are never offered for continuation. The result is cached in `~/.bottega/trovador/summaries/` against
 the source file's size and mtime; a cache hit costs nothing and says `cached: true`. The
-`session://{backend}/{id}/summary` resource returns only a cached summary and never makes one.
+`model` parameter (`--model` in the CLI) regenerates the summary if it differs from the
+cached model. A matching or omitted model reuses a current cached summary; `force=true`
+(`--force` in the CLI) always regenerates it. Each session keeps only the latest summary.
+Summaries made before fork-aware projection, including spike imports, are stale only for
+forked Codex children with a recorded history boundary. Other sessions keep their cached summaries.
+The `session://{backend}/{id}/summary` resource returns only a cached summary and never makes one.
 A summary longer than `TROVADOR_RESPONSE_MAX_CHARS` is returned in parts, each marked
-`truncated`; `offset` (`--offset` in the CLI) reads the next part from the cache. Consult
-always uses the whole summary.
+`truncated`; `offset` (`--offset` in the CLI) reads the next part from the cache.
 
-`ask` with `about: <session>` consults instead of continuing: it summarizes that session and
-starts a new session, on the other backend unless `backend` says otherwise, seeded with the
-summary and the question, in the source session's project. That works for sessions too
-large to resume, and the new session can be continued like any trovador started.
+To ask a fresh session about an earlier one, which also works for sessions too large to
+resume, use tosi's consult reference: `summarize`, then `spawn_task` with the summary.
 
 ## Importing from spike
 
-`trovador import` reads spike's `~/.agent-sessions` and never writes to it. Spawned records
-and approvals or denials are merged into trovador's consent state, keeping trovador's own
-decision where both have one; spike's level is adopted only if trovador has none yet.
+`trovador import` reads spike's `~/.agent-sessions` and never writes to it. Its spawned
+records are added to the provenance record; its consent level and decisions have no
+counterpart here and are counted, not imported.
 Summaries come over when the session has not changed since spike made them. Standing
 sessions, pads, blobs, windows, runners, and reports are counted and not imported.
 `--dry-run` reports without changing anything, and a second import changes nothing.
 
-## Consent
+## Provenance
 
-Starting a session is always allowed. Continuing one is decided by `~/.trovador/consent.json`
-(mode 0600):
-
-| Level | May continue |
-|---|---|
-| `deny` | nothing |
-| `spawned` (default) | sessions trovador started |
-| `approved` | those, plus sessions approved with `trovador consent approve` |
-| `all` | everything |
-
-An explicit `trovador consent deny` wins at every level. Consent is checked against the
-canonical session id, which is the only id the provider is given, so a prefix cannot get
-around a denial. A state file that cannot be read denies everything and is never
-overwritten. The policy changes only through the `trovador consent` CLI; the MCP server can
-report a check (`sessions show` includes one) but has no tool that changes it.
+`~/.bottega/shared/spawned.json` (mode 0600) records the sessions the toolkit started; tosi adds
+each session it starts. list and search leave automated sessions (`claude -p`, `codex exec`)
+out by default, except these. `sessions show` reports `spawned`. It is a record, not a
+permission: nothing decides whether a past session may be continued, because nothing
+continues one. An installation from before this record existed carries its spawned list over
+from `consent.json` once. A record that cannot be read is never overwritten; until it is
+repaired, the toolkit's sessions are hidden like any other automated session.
 
 ## Where things live
 
 trovador reads `~/.claude/projects`, `~/.codex/sessions`, and `~/.codex/archived_sessions`
-and never writes to any of them itself; the providers write there when `ask` runs them. Its
-own state goes under `~/.trovador`: `index.db`, `consent.json`, `runs.jsonl`, `summaries/`,
-`outputs/`.
+and never writes to any of them itself; the providers write there when tosi runs them. Its
+own state goes under `~/.bottega/trovador`: `index.db`, `runs.jsonl`, `summaries/`. Provenance lives in `~/.bottega/shared/`.
+`outputs/`, left by `ask` before it moved, is removed by `trovador gc` once old enough.
 `sessions list` reads the index when it exists but never creates it. Override the paths with
 `TROVADOR_CLAUDE_ARCHIVE`, `TROVADOR_CODEX_ARCHIVE`, `TROVADOR_CODEX_ARCHIVED`,
 `TROVADOR_HOME`, and choose the provider binaries with `TROVADOR_CLAUDE_BIN` and
@@ -400,19 +414,44 @@ transcripts still show them.
 any machine's real archives, whatever CLI versions wrote them: every session file listed
 once, transcripts contiguous and capped, the index equal to the transcript projection,
 search finding a phrase taken from any indexed record, CLI and MCP agreeing, and archive
-files left untouched. Its state goes to the cargo target directory, never `~/.trovador`.
+files left untouched. Its state goes to the cargo target directory, never `~/.bottega/trovador`.
 
 ```sh
 cargo test --release --test live -- --ignored --nocapture
-TROVADOR_LIVE_SPEND=1 cargo test --release --test live -- --ignored --nocapture
 ```
 
-The second form also runs turns on both backends, a timeout, a summary, and a consult, on
-sessions the tests create themselves; no existing transcript is sent to a provider.
-Sampling is seeded and the seed is printed (`TROVADOR_LIVE_SEED` repeats a run). The
+No live test sends a transcript to a provider; the tests that ran model turns moved out with
+`ask`. Sampling is seeded and the seed is printed (`TROVADOR_LIVE_SEED` repeats a run). The
 output ends with a drift report of record kinds and omitted categories, where a record type
 a newer CLI introduced shows up as a new category.
 
 ## License
 
 MIT or Apache-2.0, at your option.
+
+State lives under `BOTTEGA_HOME` or `~/.bottega`: `shared/` holds provenance and its lock,
+`trovador/` holds the index, summaries, and run log. `tosi/` is reserved and is not
+created yet. Non-empty `TROVADOR_HOME` overrides only trovador's directory; empty
+overrides are ignored. Provenance always goes to `<root>/shared/`, including when
+only `TROVADOR_HOME` is set; preparation moves its legacy provenance there without
+overwriting existing files. Directories are 0700 and files are 0600.
+
+The first run after upgrading migrates `~/.trovador` when neither override is set
+and the new trovador directory does not exist. Restart both host apps after upgrading
+so no old server keeps writing to the old location. Conflicts and migration failures
+are reported by `trovador doctor`; existing directories are never merged.
+
+Path resolution is pure: `state::resolve`, `state::from_env`, and `Paths` construction
+compute paths without creating or migrating state. Only binary entry points call
+`state::prepare`; tests call it explicitly with temporary roots.
+
+Migration commits by renaming the old directory to the new service directory.
+Across filesystems it verifies a partial copy against the source path, size, and
+mtime manifest before committing, then retains `~/.trovador.migrated` for manual
+removal. An incomplete partial copy is retried on startup. Shared-file moves resume
+after a crash. Recursive permission tightening is best effort and runs once on the
+newly committed migration tree. Ordinary starts tighten only the state directories
+themselves and preserve modes of their existing contents, including override roots.
+A source changing during copy fails the command: retry shortly or stop the old
+server before retrying. Stable migration failures can still use the old location.
+Doctor inspects conflicts, partial copies, and retired sources on every call.

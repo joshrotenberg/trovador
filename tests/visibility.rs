@@ -4,8 +4,8 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use trovador::consent;
 use trovador::index::{Index, SearchOpts};
+use trovador::provenance;
 use trovador::sessions::{self, Ctx, ListOpts};
 use trovador::{Backend, Limits};
 
@@ -124,7 +124,7 @@ fn automated_sessions_are_left_out_unless_trovador_started_them() {
     let f = automated_fixture();
     let ctx = f.ctx();
     // trovador started ID_C, so it is one of its own workers and stays visible.
-    consent::record_spawned(&ctx.paths, Backend::Codex, ID_C).unwrap();
+    provenance::record_spawned(&ctx.paths, Backend::Codex, ID_C).unwrap();
 
     let r = search(&ctx, q("deploy script"));
     let mut found = ids(&r);

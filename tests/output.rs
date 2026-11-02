@@ -1,15 +1,12 @@
-//! Model text is held to response_max_chars, and the rest can be read back (#32).
+//! Summaries are held to response_max_chars, and the rest is read by offset (trovador#32).
 
 mod common;
 
 use std::process::Command;
-use std::time::Duration;
 
 use common::*;
 use serde_json::{Value, json};
 use tower_mcp::TestClient;
-use trovador::output::{self, OutputError};
-use trovador::run::{self, AskOpts};
 use trovador::sessions::Ctx;
 use trovador::summary;
 
@@ -46,95 +43,6 @@ async fn mcp(f: &Fixture, tool: &str, args: Value) -> Value {
     let mut c = TestClient::from_router(trovador::mcp::router(small(f)));
     c.initialize().await;
     c.call_tool_json(tool, args).await
-}
-
-#[tokio::test]
-async fn a_long_reply_is_cut_saved_and_read_back_the_same_through_both_doors() {
-    let f = Fixture::new().with_fakes();
-    let ctx = small(&f);
-    let reply = "echo: tell me everything";
-    let r = run::ask(
-        &ctx,
-        &AskOpts {
-            prompt: "tell me everything".into(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(r.result, &reply[..MAX]);
-    let t = r.result_truncated.clone().unwrap();
-    assert_eq!(
-        (t.total_chars, t.offset, t.returned_chars, t.next_offset),
-        (reply.len(), 0, MAX, Some(MAX))
-    );
-    assert!(t.continue_with.unwrap().contains(&r.run_id));
-
-    // Following next_offset reads the whole reply, once.
-    let mut text = r.result.clone();
-    let mut next = Some(MAX);
-    while let Some(offset) = next {
-        let part = output::read(&ctx, &r.run_id, offset).unwrap();
-        text.push_str(&part.text);
-        next = part.truncated.and_then(|t| t.next_offset);
-    }
-    assert_eq!(text, reply);
-
-    let lib = serde_json::to_value(output::read(&ctx, &r.run_id, MAX).unwrap()).unwrap();
-    let id = r.run_id.as_str();
-    let from_cli = cli(
-        &f,
-        &["sessions", "output", id, "--offset", &MAX.to_string()],
-    );
-    let from_mcp = mcp(
-        &f,
-        "sessions",
-        json!({"action": "output", "run_id": id, "offset": MAX}),
-    )
-    .await;
-    assert_eq!(from_cli, lib);
-    assert_eq!(from_mcp, lib);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let saved = output::dir(&ctx.paths).join(format!("{id}.txt"));
-        let mode = std::fs::metadata(saved).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-    }
-}
-
-#[tokio::test]
-async fn a_reply_within_the_budget_is_whole_and_nothing_is_saved() {
-    let f = Fixture::new().with_fakes();
-    let r = run::ask(
-        &f.ctx(),
-        &AskOpts {
-            prompt: "hi".into(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(r.result, "echo: hi");
-    assert!(r.result_truncated.is_none());
-    assert!(!output::dir(&f.paths).exists());
-}
-
-#[test]
-fn only_a_uuid_names_a_saved_output() {
-    let f = Fixture::new();
-    let ctx = f.ctx();
-    for bad in ["../consent", "", "not-a-uuid", "/etc/passwd"] {
-        assert!(
-            matches!(output::read(&ctx, bad, 0), Err(OutputError::BadId(_))),
-            "{bad}"
-        );
-    }
-    assert!(matches!(
-        output::read(&ctx, "00000000-0000-4000-8000-000000000000", 0),
-        Err(OutputError::NotFound(_))
-    ));
 }
 
 #[tokio::test]
@@ -186,46 +94,6 @@ async fn a_long_summary_is_paged_from_the_cache_without_another_provider_call() 
     let cached = summary::cached(&ctx, &e).unwrap();
     assert_eq!(cached.summary, whole);
     assert!(cached.truncated.is_none());
-    run::ask(
-        &ctx,
-        &AskOpts {
-            prompt: "what was decided?".into(),
-            about: Some(ID_A.into()),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert!(f.prompts("codex").iter().any(|p| p.contains(whole)));
-}
-
-#[tokio::test]
-async fn gc_removes_saved_replies_past_its_cutoff() {
-    let f = Fixture::new().with_fakes();
-    let ctx = small(&f);
-    let r = run::ask(
-        &ctx,
-        &AskOpts {
-            prompt: "tell me everything".into(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let kept = trovador::gc::gc(&ctx, Duration::from_secs(86_400), true).unwrap();
-    assert_eq!((kept.outputs.kept, kept.outputs.old), (1, 0));
-    std::thread::sleep(Duration::from_millis(20));
-    let dry = trovador::gc::gc(&ctx, Duration::ZERO, false).unwrap();
-    assert_eq!(dry.outputs.old, 1);
-    assert!(
-        output::read(&ctx, &r.run_id, 0).is_ok(),
-        "a dry run removes nothing"
-    );
-    trovador::gc::gc(&ctx, Duration::ZERO, true).unwrap();
-    assert!(matches!(
-        output::read(&ctx, &r.run_id, 0),
-        Err(OutputError::NotFound(_))
-    ));
 }
 
 const KEY: &str = "sk-ant-api03-AAAAAAAAAAbbbbbbbbbbCCCCCCCCCCdddddddddd";
@@ -243,22 +111,6 @@ async fn no_offset_returns_part_of_a_secret() {
     // a key, or a key straddling a part boundary, returned the rest of it in the clear.
     let f = Fixture::new().with_fakes();
     let ctx = small(&f);
-    let r = run::ask(
-        &ctx,
-        &AskOpts {
-            prompt: format!("use {KEY} now"),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert_no_fragment(&r.result, 0);
-    let total = r.result_truncated.as_ref().unwrap().total_chars;
-    for offset in 0..total {
-        let part = output::read(&ctx, &r.run_id, offset).unwrap();
-        assert_no_fragment(&part.text, offset);
-    }
-
     f.claude("-w", ID_A, &[claude_user("/w", "x")], 10);
     let mut s = summary::summarize(&ctx, ID_A, None, false, None)
         .await
@@ -281,8 +133,8 @@ async fn no_offset_returns_part_of_a_secret() {
     let mut text = String::new();
     let mut next = Some(0);
     while let Some(offset) = next {
-        let part = output::read(&raw, &r.run_id, offset).unwrap();
-        text.push_str(&part.text);
+        let part = summary::part(s.clone(), offset, &raw.limits);
+        text.push_str(&part.summary);
         next = part.truncated.and_then(|t| t.next_offset);
     }
     assert!(text.contains(KEY), "{text}");

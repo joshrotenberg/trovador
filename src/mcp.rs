@@ -12,13 +12,12 @@ use tower_mcp::{CallToolResult, McpRouter, ResourceTemplateBuilder, TaskSupportM
 
 use crate::archive::Backend;
 use crate::index::SearchOpts;
-use crate::run::{self, AskOpts};
 use crate::sessions::{self, Ctx, ListOpts};
 
 /// How the server is started. Neither setting can be changed by a connected client.
 #[derive(Clone, Copy, Debug)]
 pub struct ServeOpts {
-    /// Register only the tools that read: no `ask`, no `summarize`.
+    /// Register only the tools that read: no `summarize`.
     pub read_only: bool,
     /// Replace secrets in every response. Off only with `serve --no-redact`.
     pub redact: bool,
@@ -50,19 +49,17 @@ search finds text across every session: words and \"quoted phrases\" by default,
 for FTS5 syntax, regex=true for a regular expression. Each hit gives match indexes to pass \
 as the transcript offset. If exhaustive is false, finding nothing proves nothing; the note \
 says what was not covered. By default search leaves out sessions written in the last few \
-minutes, which always includes your own, and automated sessions trovador did not start; \
-hidden counts them, and include_active and include_automated bring them back.";
+minutes, which always includes your own, automated sessions trovador did not start, and subagent sessions; \
+hidden counts them, and include_active, include_automated, and include_subagents bring them back.";
 
 const RUNS: &str = "
 
-summarize returns a summary of a session, from the cache when the session has not \
-changed; a miss costs tokens. session://{backend}/{id}/summary returns only a cached one.
+summarize returns a summary of a session, from the cache unless the session or explicit \
+model changes; a miss costs tokens. session://{backend}/{id}/summary returns only a cached one.
 
-ask runs a turn and costs real model tokens. Without session it starts a new session; with \
-session it continues that one, if consent allows. Sessions trovador starts may always be \
-continued. Keep the session_id it returns: it is the handle to that conversation, and a run \
-that timed out still returns it. Consent is changed only by a person at the CLI, never \
-through this server.";
+trovador only reads sessions: past sessions are history, not something to continue. New \
+work is tosi's spawn_task; to go back into a session, a person resumes it with the \
+open_with command from sessions(action=show).";
 
 const READ_ONLY: &str = "
 
@@ -83,7 +80,8 @@ struct SummarizeInput {
     /// Make a new summary even if a current one is cached.
     #[serde(default)]
     force: bool,
-    /// Model for the summary; haiku by default.
+    /// Model to use; a different model regenerates the cached summary. If omitted,
+    /// reuse any current summary or use the configured default (haiku) on a miss.
     model: Option<String>,
     /// The character to start from, for the next part of a summary longer than the
     /// response budget (follow truncated.next_offset).
@@ -96,19 +94,17 @@ enum SessionsAction {
     List,
     Show,
     Transcript,
-    Output,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SessionsInput {
     /// list: find sessions. show: one session's metadata. transcript: one page of records.
-    /// output: the rest of an ask reply that was longer than the response budget.
     action: SessionsAction,
     /// For show and transcript: a session id or an unambiguous prefix.
     session_id: Option<String>,
     /// Restrict to one backend.
     backend: Option<Backend>,
-    /// For list: only sessions whose project path contains this text.
+    /// For list: only sessions whose project path contains this text (ASCII case-insensitive).
     project: Option<String>,
     /// For list: only sessions with this origin (cli, claude-desktop, sdk-cli, exec, vscode).
     origin: Option<String>,
@@ -126,11 +122,8 @@ struct SessionsInput {
     until: Option<String>,
     /// For list: sessions to return. For transcript: records per page.
     limit: Option<usize>,
-    /// For transcript: the record index to start from. For output: the character to start
-    /// from.
+    /// For transcript: the record index to start from.
     offset: Option<usize>,
-    /// For output: the run_id of the ask whose reply was truncated.
-    run_id: Option<String>,
 }
 
 /// Serializes a response the way the CLI does, so both doors return the same JSON.
@@ -202,15 +195,6 @@ fn sessions_call(
             .map(|t| json_result(&t, opts))
             .map_err(|e| e.to_string())
         }),
-        SessionsAction::Output => input
-            .run_id
-            .as_deref()
-            .ok_or_else(|| "run_id is required for output".to_string())
-            .and_then(|id| {
-                crate::output::read(ctx, id, input.offset.unwrap_or(0))
-                    .map(|o| json_result(&o, opts))
-                    .map_err(|e| e.to_string())
-            }),
     };
     // A lookup miss is the caller's to fix, so it comes back as a tool error they can read
     // rather than a protocol error.
@@ -273,9 +257,8 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
         .description(format!(
             "List, inspect, and read local Claude Code and Codex sessions. action=list finds \
              sessions newest first; action=show gives one session's metadata and resume \
-             command; action=transcript pages through its records (follow next_offset); \
-             action=output reads the rest of an ask reply that was truncated, by run_id and \
-             offset. Reads only; costs no model tokens.{UNTRUSTED}"
+             command; action=transcript pages through its records (follow next_offset). \
+             Reads only; costs no model tokens.{UNTRUSTED}"
         ))
         .read_only_safe()
         .handler(move |input: SessionsInput| {
@@ -310,41 +293,12 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
         .build();
 
     let c = ctx.clone();
-    let ask_tool = ToolBuilder::new("ask")
-        .title("Ask a session")
-        .description(
-            "Run one turn on claude or codex. Costs real model tokens. Without session, \
-             starts a new session (claude unless backend says otherwise). With session (an \
-             id or unambiguous prefix), continues it, if consent allows; sessions trovador \
-             started are always allowed, others need a person to approve them at the CLI. \
-             fork=true resumes a claude session's context into a new one. Returns the reply, \
-             the session_id to continue with, and whether it can be continued. A run that \
-             times out still returns its session_id. about=<session> consults instead: it \
-             summarizes that session and asks a new session on the other backend, which \
-             works for sessions too large to resume. Supports task execution: a turn can \
-             take many minutes, and as a task it returns a task id at once.",
-        )
-        // A turn can run for many minutes. A client that negotiated tasks gets a task
-        // handle at once and polls it; any other client gets the result as before.
-        .task_support(TaskSupportMode::Optional)
-        .handler(move |input: AskOpts| {
-            let ctx = c.clone();
-            async move {
-                match run::ask(&ctx, &input).await {
-                    Ok(r) => json_result(&r, opts),
-                    Err(e) => error_result(e, opts),
-                }
-            }
-        })
-        .build();
-
-    let c = ctx.clone();
     let summarize_tool = ToolBuilder::new("summarize")
         .title("Summarize a session")
         .description(format!(
             "Summarize one session: goal, what happened, key decisions, current state, open \
-             items. Served from the cache when the session has not changed since it was \
-             summarized (cached=true, no cost); otherwise costs model tokens (haiku by \
+             items. Served from the cache unless the session or explicit model changes \
+             (cached=true, no cost); otherwise costs model tokens (haiku by \
              default). force=true makes a new one.{UNTRUSTED}"
         ))
         // A turn can run for many minutes. A client that negotiated tasks gets a task
@@ -444,16 +398,15 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
         .tool(search_tool);
     if !opts.read_only {
         // A task expires its TTL after creation, and an expired task's run is killed, so
-        // the default outlives the longest provider timeout and leaves an hour to collect
+        // the default outlives a summary's provider timeout and leaves an hour to collect
         // the result. tower-mcp's own default of five minutes killed Claude turns at 300 s
         // of their 600 s timeout.
-        let longest = limits.claude_timeout_s.max(limits.codex_timeout_s) as u64;
+        let longest = limits.claude_timeout_s as u64;
         let store = tower_mcp::async_task::MemoryTaskStore::with_config(
             tower_mcp::async_task::MemoryTaskStoreConfig::default()
                 .default_ttl(Duration::from_secs(longest + TASK_RETENTION_S)),
         );
         router = router
-            .tool(ask_tool)
             .tool(summarize_tool)
             .with_tasks()
             .task_store(Arc::new(store));

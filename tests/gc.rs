@@ -55,6 +55,44 @@ fn fixture() -> (Fixture, std::path::PathBuf) {
 }
 
 #[test]
+fn durations_before_the_epoch_keep_age_eligible_data_without_panicking() {
+    for older_than in [Duration::from_secs(86_400 * 365 * 100), Duration::MAX] {
+        for apply in [false, true] {
+            let (f, log) = fixture();
+            let before_log = std::fs::read_to_string(&log).unwrap();
+            let outputs = f.paths.home.join("outputs");
+            std::fs::create_dir_all(&outputs).unwrap();
+            let output = outputs.join("reply.txt");
+            std::fs::write(&output, "saved reply").unwrap();
+
+            let r = trovador::gc::gc(&f.ctx(), older_than, apply).unwrap();
+
+            assert_eq!(r.dry_run, !apply);
+            assert_eq!(
+                (
+                    r.summaries.session_gone,
+                    r.summaries.stale,
+                    r.summaries.old,
+                    r.summaries.kept
+                ),
+                (1, 1, 0, 2)
+            );
+            assert_eq!((r.outputs.old, r.outputs.kept), (0, 1));
+            assert_eq!((r.runs.removed, r.runs.kept), (0, 3));
+            assert_eq!(std::fs::read_to_string(&log).unwrap(), before_log);
+            assert_eq!(std::fs::read_to_string(&output).unwrap(), "saved reply");
+            for id in [ID_C, ID_D] {
+                assert!(
+                    summary::dir(&f.ctx())
+                        .join(format!("claude-{id}.json"))
+                        .exists()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn a_dry_run_reports_and_changes_nothing() {
     let (f, log) = fixture();
     let before_log = std::fs::read_to_string(&log).unwrap();
@@ -71,9 +109,9 @@ fn a_dry_run_reports_and_changes_nothing() {
 }
 
 #[test]
-fn apply_removes_exactly_what_will_never_be_used_and_leaves_consent_alone() {
+fn apply_removes_exactly_what_will_never_be_used_and_leaves_provenance_alone() {
     let (f, log) = fixture();
-    let consent_before = std::fs::read_to_string(trovador::consent::path(&f.paths)).ok();
+    let provenance_before = std::fs::read_to_string(trovador::provenance::path(&f.paths)).ok();
     let r = trovador::gc::gc(&f.ctx(), Duration::from_secs(90 * 86_400), true).unwrap();
     assert!(!r.dry_run);
     let left: Vec<String> = std::fs::read_dir(summary::dir(&f.ctx()))
@@ -94,8 +132,8 @@ fn apply_removes_exactly_what_will_never_be_used_and_leaves_consent_alone() {
     );
     assert_eq!(lines[0], "not json");
     assert_eq!(
-        std::fs::read_to_string(trovador::consent::path(&f.paths)).ok(),
-        consent_before
+        std::fs::read_to_string(trovador::provenance::path(&f.paths)).ok(),
+        provenance_before
     );
     assert!(r.summaries.bytes_removed > 0);
 }

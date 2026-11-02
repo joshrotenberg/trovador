@@ -7,7 +7,6 @@
 //!
 //! ```text
 //! cargo test --release --test live -- --ignored --nocapture
-//! TROVADOR_LIVE_SPEND=1 cargo test --release --test live -- --ignored --nocapture
 //! ```
 //!
 //! trovador's own state goes to a fresh home under the cargo target directory; the real
@@ -42,11 +41,33 @@ struct Live {
     sample: Vec<ArchiveEntry>,
 }
 
+fn archive_paths() -> Paths {
+    let mut paths = Paths::under(Path::new(env!("CARGO_TARGET_TMPDIR")));
+    let home = std::env::home_dir().unwrap();
+    let archive = |name: &str, default: PathBuf| {
+        std::env::var_os(name)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or(default)
+    };
+    paths.claude_archive = archive("TROVADOR_CLAUDE_ARCHIVE", home.join(".claude/projects"));
+    paths.codex_archive = archive("TROVADOR_CODEX_ARCHIVE", home.join(".codex/sessions"));
+    paths.codex_archived = archive(
+        "TROVADOR_CODEX_ARCHIVED",
+        paths
+            .codex_archive
+            .parent()
+            .unwrap()
+            .join("archived_sessions"),
+    );
+    paths
+}
+
 fn live() -> &'static Live {
     static LIVE: OnceLock<Live> = OnceLock::new();
     LIVE.get_or_init(|| {
         let started = SystemTime::now();
-        let before = snapshot_archives(&Paths::from_env());
+        let before = snapshot_archives(&archive_paths());
         let idle_before = started - Duration::from_secs(600);
         let prefixes = before
             .iter()
@@ -57,7 +78,7 @@ fn live() -> &'static Live {
         let _ = std::fs::remove_dir_all(&home);
         let paths = Paths {
             home,
-            ..Paths::from_env()
+            ..archive_paths()
         };
         let ctx = Ctx {
             paths,
@@ -908,179 +929,4 @@ fn report_record_categories_and_snippet_coverage() {
     for (k, (n, with)) in &coverage {
         eprintln!("    {k}: {with}/{n}");
     }
-}
-
-// --- spending tokens ---------------------------------------------------------
-
-fn spend() -> bool {
-    let on = std::env::var("TROVADOR_LIVE_SPEND").is_ok_and(|v| v == "1");
-    if !on {
-        eprintln!("live: skipped, set TROVADOR_LIVE_SPEND=1 to run tests that cost model tokens");
-    }
-    on
-}
-
-/// A scratch project directory for the sessions these tests create, so they are easy to
-/// find and none of them is a session someone was working in.
-fn spend_ctx() -> (Ctx, PathBuf) {
-    let l = live();
-    let cwd = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("live-spend-cwd");
-    std::fs::create_dir_all(&cwd).unwrap();
-    let ctx = Ctx {
-        paths: Paths {
-            home: PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("live-spend-home"),
-            ..l.ctx.paths.clone()
-        },
-        limits: l.ctx.limits.clone(),
-    };
-    (ctx, cwd)
-}
-
-async fn ask(ctx: &Ctx, opts: trovador::run::AskOpts) -> trovador::run::AskResult {
-    trovador::run::ask(ctx, &opts).await.unwrap()
-}
-
-fn opts(prompt: &str, cwd: &Path) -> trovador::run::AskOpts {
-    trovador::run::AskOpts {
-        prompt: prompt.into(),
-        cwd: Some(cwd.display().to_string()),
-        timeout_s: Some(180),
-        ..Default::default()
-    }
-}
-
-#[tokio::test]
-#[ignore = "costs model tokens; needs TROVADOR_LIVE_SPEND=1"]
-async fn both_backends_start_and_continue_a_session() {
-    if !spend() {
-        return;
-    }
-    let (ctx, cwd) = spend_ctx();
-    for (backend, model, effort) in [
-        (Backend::Claude, Some("haiku"), None),
-        (Backend::Codex, None, Some("low")),
-    ] {
-        let first = ask(
-            &ctx,
-            trovador::run::AskOpts {
-                backend: Some(backend),
-                model: model.map(str::to_string),
-                effort: effort.map(str::to_string),
-                ..opts("Reply with exactly the word: alpha", &cwd)
-            },
-        )
-        .await;
-        assert!(!first.is_error, "{backend}: {:?}", first.error);
-        assert!(
-            first.result.to_lowercase().contains("alpha"),
-            "{backend}: {}",
-            first.result
-        );
-        let id = first.session_id.clone().unwrap();
-        let second = ask(
-            &ctx,
-            trovador::run::AskOpts {
-                session: Some(id.clone()),
-                model: model.map(str::to_string),
-                effort: effort.map(str::to_string),
-                ..opts("Which word did you just reply with? One word.", &cwd)
-            },
-        )
-        .await;
-        assert_eq!(second.session_id.as_deref(), Some(id.as_str()));
-        assert!(
-            second.result.to_lowercase().contains("alpha"),
-            "{backend}: {}",
-            second.result
-        );
-    }
-}
-
-#[tokio::test]
-#[ignore = "costs model tokens; needs TROVADOR_LIVE_SPEND=1"]
-async fn a_claude_run_killed_by_timeout_can_be_continued() {
-    if !spend() {
-        return;
-    }
-    let (ctx, cwd) = spend_ctx();
-    let r = ask(
-        &ctx,
-        trovador::run::AskOpts {
-            model: Some("haiku".into()),
-            timeout_s: Some(3),
-            ..opts("Write the numbers from 1 to 400, one per line.", &cwd)
-        },
-    )
-    .await;
-    assert!(r.timed_out);
-    let id = r.session_id.expect("a timed-out run names its session");
-    let c = r.continuation.unwrap();
-    // Killed before Claude wrote a transcript, there is nothing to resume, and the result
-    // must say so rather than offer a continuation that will fail.
-    if !c.allowed {
-        assert!(c.reason.unwrap_or_default().contains("no transcript"));
-        eprintln!(
-            "live: the run was killed before a transcript existed; not continuable, as reported"
-        );
-        return;
-    }
-    let again = ask(
-        &ctx,
-        trovador::run::AskOpts {
-            session: Some(id),
-            model: Some("haiku".into()),
-            ..opts("Reply with the word: done", &cwd)
-        },
-    )
-    .await;
-    assert!(!again.is_error, "{:?}", again.error);
-}
-
-#[tokio::test]
-#[ignore = "costs model tokens; needs TROVADOR_LIVE_SPEND=1"]
-async fn summarizing_and_consulting_use_only_the_tests_own_session() {
-    if !spend() {
-        return;
-    }
-    let (ctx, cwd) = spend_ctx();
-    let own = ask(
-        &ctx,
-        trovador::run::AskOpts {
-            model: Some("haiku".into()),
-            ..opts("Reply with exactly the word: bravo", &cwd)
-        },
-    )
-    .await;
-    let id = own.session_id.unwrap();
-    let before: HashSet<_> = snapshot_archives(&ctx.paths).into_keys().collect();
-    let s = trovador::summary::summarize(&ctx, &id, Some(Backend::Claude), true, None)
-        .await
-        .unwrap();
-    assert!(!s.cached && !s.summary.is_empty());
-    let after: HashSet<_> = snapshot_archives(&ctx.paths).into_keys().collect();
-    let new: Vec<_> = after
-        .difference(&before)
-        .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
-        .filter(|p| {
-            std::fs::metadata(p)
-                .and_then(|m| m.modified())
-                .is_ok_and(|t| t >= SystemTime::now() - Duration::from_secs(120))
-                && std::fs::read_to_string(p)
-                    .is_ok_and(|t| t.contains("Summarize this agent session"))
-        })
-        .collect();
-    assert!(new.is_empty(), "a summary run left a transcript: {new:?}");
-
-    let c = ask(
-        &ctx,
-        trovador::run::AskOpts {
-            about: Some(id.clone()),
-            effort: Some("low".into()),
-            ..opts("Which word was the assistant asked to say? One word.", &cwd)
-        },
-    )
-    .await;
-    assert_eq!(c.backend, Backend::Codex);
-    assert!(c.result.to_lowercase().contains("bravo"), "{}", c.result);
-    assert_eq!(c.consulted.unwrap().session_id, id);
 }

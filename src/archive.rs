@@ -14,38 +14,7 @@ use serde_json::Value;
 use crate::limits::Limits;
 use crate::paths::Paths;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum Backend {
-    Claude,
-    Codex,
-}
-
-impl Backend {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Backend::Claude => "claude",
-            Backend::Codex => "codex",
-        }
-    }
-}
-
-impl std::fmt::Display for Backend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for Backend {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "claude" => Ok(Backend::Claude),
-            "codex" => Ok(Backend::Codex),
-            other => Err(format!("unknown backend \"{other}\"; have: claude, codex")),
-        }
-    }
-}
+pub use crate::backend::Backend;
 
 /// One session file, as found on disk, before anything inside it is read.
 #[derive(Clone, Debug)]
@@ -71,54 +40,95 @@ impl ArchiveEntry {
 /// deeper under `<session>/subagents/` and are deliberately not listed as sessions: they
 /// cannot be resumed on their own.
 pub fn scan_claude(root: &Path) -> Vec<ArchiveEntry> {
-    let mut out = Vec::new();
-    let Ok(projects) = fs::read_dir(root) else {
-        return out;
-    };
-    for project in projects.flatten() {
-        let Ok(files) = fs::read_dir(project.path()) else {
-            continue;
-        };
-        for f in files.flatten() {
-            let path = f.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            let Some(id) = name.strip_suffix(".jsonl") else {
-                continue;
-            };
-            if let Some(e) = entry(Backend::Claude, id, &path, false) {
-                out.push(e);
-            }
-        }
-    }
-    out
+    scan_root(root, Backend::Claude, false, &mut Vec::new())
 }
 
-/// Codex nests by date, `<root>/YYYY/MM/DD/rollout-<timestamp>-<uuid>.jsonl`, and moves an
-/// archived thread to a flat `archived_sessions` directory under the same name. The id is
-/// the trailing UUID, which is what `codex resume` accepts.
+/// Codex nests active sessions by date and keeps archived sessions in a flat directory.
 pub fn scan_codex(root: &Path, archived: bool) -> Vec<ArchiveEntry> {
+    scan_root(root, Backend::Codex, archived, &mut Vec::new())
+}
+
+pub(crate) struct ScanFailure {
+    pub backend: Backend,
+    pub path: PathBuf,
+    pub kind: std::io::ErrorKind,
+}
+
+fn scan_root(
+    root: &Path,
+    backend: Backend,
+    archived: bool,
+    failures: &mut Vec<ScanFailure>,
+) -> Vec<ArchiveEntry> {
     let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(items) = fs::read_dir(&dir) else {
-            continue;
+    let mut stack = vec![(root.to_path_buf(), 0)];
+    while let Some((dir, depth)) = stack.pop() {
+        let items = match fs::read_dir(&dir) {
+            Ok(items) => items,
+            Err(error) => {
+                failures.push(ScanFailure {
+                    backend,
+                    path: dir,
+                    kind: error.kind(),
+                });
+                continue;
+            }
         };
-        for item in items.flatten() {
+        for item in items {
+            let item = match item {
+                Ok(item) => item,
+                Err(error) => {
+                    failures.push(ScanFailure {
+                        backend,
+                        path: dir.clone(),
+                        kind: error.kind(),
+                    });
+                    continue;
+                }
+            };
             let path = item.path();
-            let Ok(ft) = item.file_type() else { continue };
-            if ft.is_dir() {
-                stack.push(path);
+            let ft = match item.file_type() {
+                Ok(ft) => ft,
+                Err(error) => {
+                    failures.push(ScanFailure {
+                        backend,
+                        path,
+                        kind: error.kind(),
+                    });
+                    continue;
+                }
+            };
+            // Issue #8: a dangling project link is not an archive directory and must
+            // not prevent cleanup of sessions that were actually deleted.
+            if backend == Backend::Claude && depth == 0 && ft.is_symlink() && !path.is_dir() {
+                continue;
+            }
+            if (backend == Backend::Claude && depth == 0 && (ft.is_dir() || ft.is_symlink()))
+                || (backend == Backend::Codex && ft.is_dir())
+            {
+                stack.push((path, depth + 1));
+                continue;
+            }
+            if backend == Backend::Claude && depth != 1 {
                 continue;
             }
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if let Some(id) = trailing_uuid(name)
-                && let Some(e) = entry(Backend::Codex, id, &path, archived)
-            {
-                out.push(e);
+            let id = match backend {
+                Backend::Claude => name.strip_suffix(".jsonl"),
+                Backend::Codex => trailing_uuid(name),
+            };
+            if let Some(id) = id {
+                match entry(backend, id, &path, archived, failures) {
+                    Ok(Some(e)) => out.push(e),
+                    Ok(None) => {}
+                    Err(error) => failures.push(ScanFailure {
+                        backend,
+                        path,
+                        kind: error.kind(),
+                    }),
+                }
             }
         }
     }
@@ -135,19 +145,33 @@ fn trailing_uuid(name: &str) -> Option<&str> {
     shape_ok.then_some(id)
 }
 
-fn entry(backend: Backend, id: &str, path: &Path, archived: bool) -> Option<ArchiveEntry> {
-    let md = fs::metadata(path).ok()?;
+fn entry(
+    backend: Backend,
+    id: &str,
+    path: &Path,
+    archived: bool,
+    failures: &mut Vec<ScanFailure>,
+) -> std::io::Result<Option<ArchiveEntry>> {
+    let md = fs::metadata(path)?;
     if !md.is_file() {
-        return None;
+        return Ok(None);
     }
-    Some(ArchiveEntry {
+    let mtime = md.modified().unwrap_or_else(|error| {
+        failures.push(ScanFailure {
+            backend,
+            path: path.to_path_buf(),
+            kind: error.kind(),
+        });
+        SystemTime::UNIX_EPOCH
+    });
+    Ok(Some(ArchiveEntry {
         backend,
         session_id: id.to_string(),
         file: path.to_path_buf(),
         size_bytes: md.len(),
-        mtime: md.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+        mtime,
         archived,
-    })
+    }))
 }
 
 /// Every session in both archives, newest first, one file per session.
@@ -157,13 +181,37 @@ fn entry(backend: Backend, id: &str, path: &Path, archived: bool) -> Option<Arch
 /// all describe the same file; when only the index chose, a list showed the session twice,
 /// every prefix was ambiguous, and search returned a row mixing the two files (#28).
 pub fn scan_all(paths: &Paths) -> Vec<ArchiveEntry> {
-    let mut all = scan_claude(&paths.claude_archive);
-    all.extend(scan_codex(&paths.codex_archive, false));
-    all.extend(scan_codex(&paths.codex_archived, true));
+    scan_all_with_failures(paths).0
+}
+
+// Issue #8: GC needs failures from the same traversal as entries before deleting paid summaries.
+pub(crate) fn scan_all_with_failures(paths: &Paths) -> (Vec<ArchiveEntry>, Vec<ScanFailure>) {
+    let mut failures = Vec::new();
+    let mut all = scan_root(&paths.claude_archive, Backend::Claude, false, &mut failures);
+    all.extend(scan_root(
+        &paths.codex_archive,
+        Backend::Codex,
+        false,
+        &mut failures,
+    ));
+    all.extend(scan_root(
+        &paths.codex_archived,
+        Backend::Codex,
+        true,
+        &mut failures,
+    ));
+    // Issue #8: archived_sessions is optional, but only an accessible active root
+    // lets GC distinguish a never-created archive from unavailable Codex storage.
+    let active_unavailable = failures.iter().any(|f| f.path == paths.codex_archive);
+    failures.retain(|f| {
+        active_unavailable
+            || f.path != paths.codex_archived
+            || f.kind != std::io::ErrorKind::NotFound
+    });
     all.sort_by(|a, b| b.mtime.cmp(&a.mtime).then(a.session_id.cmp(&b.session_id)));
     let mut seen = std::collections::HashSet::new();
     all.retain(|e| seen.insert((e.backend, e.session_id.clone())));
-    all
+    (all, failures)
 }
 
 // --- lookup ----------------------------------------------------------------
@@ -276,13 +324,18 @@ impl SessionMeta {
     }
 }
 
-/// Reads as little of the file as answers the question. Most sessions resolve from the
-/// first 64 KB; the wider steps only run while cwd or the first user message is missing.
-/// Claude's titles and relocation are rewritten as the session goes, so the latest value
-/// is near the end and comes from a tail read rather than from reading everything.
+/// Reads cwd and snippets from head windows, and rewritten metadata from the tail.
+/// Issue #36: an unindexed file gets a title scan only within the configured byte budget.
 pub fn read_meta(e: &ArchiveEntry, limits: &Limits) -> SessionMeta {
+    read_meta_inner(e, limits, true)
+}
+
+pub(crate) fn read_meta_windows(e: &ArchiveEntry, limits: &Limits) -> SessionMeta {
+    read_meta_inner(e, limits, false)
+}
+
+fn read_meta_inner(e: &ArchiveEntry, limits: &Limits, scan_titles: bool) -> SessionMeta {
     let mut meta = SessionMeta::default();
-    // How many bytes from the start the last head read covered.
     let mut covered = 0u64;
     for &step in &limits.head_steps {
         if covered >= e.size_bytes {
@@ -293,7 +346,7 @@ pub fn read_meta(e: &ArchiveEntry, limits: &Limits) -> SessionMeta {
         };
         meta = match e.backend {
             Backend::Claude => parse_claude_head(&head),
-            Backend::Codex => parse_codex_head(&head),
+            Backend::Codex => parse_codex_head(&head, e.archived, step as u64 >= e.size_bytes),
         };
         covered = step as u64;
         if meta.cwd.is_some() && meta.snippet.is_some() {
@@ -303,14 +356,81 @@ pub fn read_meta(e: &ArchiveEntry, limits: &Limits) -> SessionMeta {
     if e.backend == Backend::Claude && covered < e.size_bytes {
         let tail_from = e.size_bytes.saturating_sub(TAIL_BYTES as u64).max(covered);
         if let Ok(tail) = read_range(&e.file, tail_from, TAIL_BYTES) {
-            // Starting exactly where the head stopped is a line boundary only by luck.
             apply_claude_latest(&mut meta, lines_after_first(&tail));
+        }
+        if scan_titles && e.size_bytes <= limits.title_scan_max_bytes as u64 {
+            let mut custom_title = None;
+            if scan_custom_titles(&e.file, 0, e.size_bytes, &mut custom_title).is_ok() {
+                apply_custom_title(&mut meta, custom_title);
+            }
         }
     }
     meta
 }
 
 const TAIL_BYTES: usize = 256 * 1024;
+
+pub(crate) fn apply_custom_title(meta: &mut SessionMeta, title: Option<String>) {
+    if let Some(title) = title {
+        meta.title = Some(title);
+        meta.title_source = Some(TitleSource::Custom);
+    }
+}
+
+pub(crate) fn custom_title(record: &Value) -> Option<&str> {
+    (str_at(record, "type") == Some("custom-title"))
+        .then(|| str_at(record, "customTitle"))
+        .flatten()
+}
+
+pub(crate) fn scan_custom_titles(
+    path: &Path,
+    from: u64,
+    until: u64,
+    title: &mut Option<String>,
+) -> std::io::Result<()> {
+    // Issue #36: only candidate records need JSON parsing. Large byte chunks avoid
+    // validating every transcript line as UTF-8, including on a metadata-only upgrade.
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(from))?;
+    let mut reader = file.take(until.saturating_sub(from));
+    let mut chunk = [0u8; 64 * 1024];
+    let mut pending = Vec::new();
+    loop {
+        let n = reader.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        pending.extend_from_slice(&chunk[..n]);
+        if let Some(end) = memchr::memrchr(b'\n', &chunk[..n]) {
+            let end = pending.len() - n + end;
+            let complete = &pending[..=end];
+            let mut parsed_until = 0;
+            for at in memchr::memmem::find_iter(complete, b"custom-title") {
+                if at < parsed_until {
+                    continue;
+                }
+                let start = memchr::memrchr(b'\n', &complete[..at]).map_or(0, |i| i + 1);
+                let stop = at + memchr::memchr(b'\n', &complete[at..]).unwrap();
+                parsed_until = stop + 1;
+                if let Ok(record) = serde_json::from_slice::<Value>(&complete[start..stop])
+                    && let Some(t) = custom_title(&record)
+                {
+                    *title = Some(t.to_owned());
+                }
+            }
+            pending.drain(..=end);
+        }
+    }
+    // Issue #36: metadata windows accept complete final JSON without a newline too.
+    if memchr::memmem::find(&pending, b"custom-title").is_some()
+        && let Ok(record) = serde_json::from_slice::<Value>(&pending)
+        && let Some(t) = custom_title(&record)
+    {
+        *title = Some(t.to_owned());
+    }
+    Ok(())
+}
 
 fn read_range(path: &Path, from: u64, len: usize) -> std::io::Result<String> {
     let mut f = File::open(path)?;
@@ -375,9 +495,11 @@ fn parse_claude_head(text: &str) -> SessionMeta {
         if meta.origin.is_none() {
             meta.origin = str_at(&r, "entrypoint").map(str::to_string);
         }
+        // Issue #38: generated context cannot supply the first prompt the user typed.
         if meta.snippet.is_none()
             && str_at(&r, "type") == Some("user")
             && r.get("isMeta").and_then(Value::as_bool) != Some(true)
+            && r.get("isCompactSummary").and_then(Value::as_bool) != Some(true)
         {
             meta.snippet = typed_snippet(r.pointer("/message/content").unwrap_or(&Value::Null));
         }
@@ -438,11 +560,27 @@ fn push_unique(list: &mut Vec<String>, item: Option<&str>) {
 /// `item_completed` event carrying a `UserMessage` item; older versions emit
 /// `event_msg/user_message`; both also write the model-facing `response_item/message`,
 /// which includes injected context. The first two are what the user typed, so they win.
-fn parse_codex_head(text: &str) -> SessionMeta {
+fn parse_codex_head(text: &str, archived: bool, complete: bool) -> SessionMeta {
     let mut meta = SessionMeta::default();
     let (mut from_item, mut from_event, mut from_response) = (None, None, None);
     let mut seen_meta = false;
-    for r in records(text) {
+    let boundary = crate::codex::fork_boundary(&mut std::io::Cursor::new(text), archived, complete)
+        .expect("reading an in-memory head");
+    let inherited_end = boundary.end.unwrap_or(boundary.scanned);
+    let mut fork_snippet = None;
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        let line_start = offset;
+        offset += line.len() as u64;
+        if line_start > 0 && boundary.end.is_none() && line_start >= boundary.scanned {
+            break;
+        }
+        if line_start > 0 && line_start < inherited_end {
+            continue;
+        }
+        let Ok(r) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         let p = r.get("payload").unwrap_or(&Value::Null);
         match (str_at(&r, "type"), str_at(p, "type")) {
             // Only the first session_meta describes this file. In 510 of 3,746 local files
@@ -455,6 +593,13 @@ fn parse_codex_head(text: &str) -> SessionMeta {
                 meta.cwd = str_at(p, "cwd").map(str::to_string);
                 meta.originator = str_at(p, "originator").map(str::to_string);
                 apply_codex_source(&mut meta, p);
+            }
+            // Issue #35: a fork's initial assignment is an inter-agent message,
+            // not a user turn. It still describes the child's work in session lists.
+            (Some("response_item"), Some("agent_message"))
+                if inherited_end > 0 && fork_snippet.is_none() =>
+            {
+                fork_snippet = typed_snippet(p.get("content").unwrap_or(&Value::Null));
             }
             (_, Some("item_completed")) if from_item.is_none() => {
                 let item = p.get("item").unwrap_or(&Value::Null);
@@ -479,7 +624,7 @@ fn parse_codex_head(text: &str) -> SessionMeta {
             _ => {}
         }
     }
-    meta.snippet = from_item.or(from_event).or(from_response);
+    meta.snippet = fork_snippet.or(from_item).or(from_event).or(from_response);
     meta
 }
 
@@ -550,7 +695,7 @@ pub fn resumability(e: &ArchiveEntry, limits: &Limits) -> Resumability {
         resumable,
         reason: (!resumable).then(|| {
             format!(
-                "transcript is {}KB, over the ~{}KB practical resume ceiling; to carry the work on, ask with about set to this session and the same backend, which starts a new session seeded with its summary",
+                "transcript is {}KB, over the ~{}KB practical resume ceiling; to carry the work on, summarize it and start a new session with the summary (tosi's spawn_task; see its consult reference)",
                 e.size_bytes / 1024,
                 limits.resume_limit_bytes / 1024
             )

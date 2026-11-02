@@ -21,10 +21,11 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
-claude-wrapper = "0.14"
-codex-wrapper = "0.4"
+claude-wrapper = "=0.14.4"
+codex-wrapper = "=0.4.4"
 futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
 humantime = "2.4.0"
+memchr = "2.8.3"
 regex = "1.13.1"
 rusqlite = { version = "0.40.2", features = ["bundled", "functions"] }
 schemars = "1.2.2"
@@ -32,11 +33,15 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.21"
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "fs", "sync"] }
-tower-mcp = "0.23.2"
+tower-mcp = "=0.23.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.27.0", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
-tower-mcp = { version = "0.23.2", features = ["testing"] }
+tower-mcp = { version = "=0.23.2", features = ["testing"] }
+
+[profile.release]
+lto = "thin"
+strip = true

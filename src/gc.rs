@@ -1,11 +1,11 @@
 //! Removing what trovador keeps that will never be used again.
 //!
-//! Only derived files are touched: cached summaries, saved replies, and the run log. Consent is never
+//! Only derived files are touched: cached summaries, saved replies, and the run log. The record of sessions the toolkit started is never
 //! touched, because it is the only record of which sessions trovador started.
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,14 @@ pub struct GcReport {
     pub dry_run: bool,
     pub older_than: String,
     pub summaries: SummaryCounts,
-    /// Whole ask replies saved because they exceeded the response budget.
+    /// Failed archive paths that prevented checking cached summaries.
+    #[serde(default)]
+    pub unavailable_roots: Vec<String>,
+    /// Backends with cached summaries but no sessions in the scan.
+    #[serde(default)]
+    pub empty_backends: Vec<Backend>,
+    /// Whole ask replies saved under `outputs/` before `ask` moved to tosi. Nothing writes
+    /// there any more; gc removes them by age like everything else.
     pub outputs: OutputCounts,
     pub runs: RunCounts,
 }
@@ -57,7 +64,11 @@ pub struct RunCounts {
 }
 
 pub fn gc(ctx: &Ctx, older_than: Duration, apply: bool) -> std::io::Result<GcReport> {
-    let cutoff = SystemTime::now() - older_than;
+    // Issue #39: humantime cannot format pre-epoch times, and subtraction can overflow.
+    let cutoff = SystemTime::now()
+        .checked_sub(older_than)
+        .unwrap_or(UNIX_EPOCH)
+        .max(UNIX_EPOCH);
     let cutoff_text = humantime::format_rfc3339_millis(cutoff).to_string();
     let mut report = GcReport {
         dry_run: !apply,
@@ -65,7 +76,8 @@ pub fn gc(ctx: &Ctx, older_than: Duration, apply: bool) -> std::io::Result<GcRep
         ..Default::default()
     };
 
-    let entries: HashMap<(Backend, String), archive::ArchiveEntry> = archive::scan_all(&ctx.paths)
+    let (scanned, failures) = archive::scan_all_with_failures(&ctx.paths);
+    let entries: HashMap<(Backend, String), archive::ArchiveEntry> = scanned
         .into_iter()
         .map(|e| ((e.backend, e.session_id.clone()), e))
         .collect();
@@ -80,7 +92,21 @@ pub fn gc(ctx: &Ctx, older_than: Duration, apply: bool) -> std::io::Result<GcRep
             report.summaries.unreadable += 1;
             continue;
         };
+        // Issue #8: neither a partial scan nor an empty backend proves paid summaries
+        // are gone. Found sessions still provide evidence for age and staleness cleanup.
+        let empty = !entries.keys().any(|(backend, _)| *backend == s.backend);
+        if empty && !report.empty_backends.contains(&s.backend) {
+            report.empty_backends.push(s.backend);
+        }
+        let failed = failures.iter().any(|f| f.backend == s.backend);
+        for failure in failures.iter().filter(|f| f.backend == s.backend) {
+            let path = failure.path.display().to_string();
+            if !report.unavailable_roots.contains(&path) {
+                report.unavailable_roots.push(path);
+            }
+        }
         let reason = match entries.get(&(s.backend, s.session_id.clone())) {
+            None if failed || empty => None,
             None => Some(&mut report.summaries.session_gone),
             Some(e) if summary::cached(ctx, e).is_none() => Some(&mut report.summaries.stale),
             Some(_) if s.created < cutoff_text => Some(&mut report.summaries.old),
@@ -98,7 +124,7 @@ pub fn gc(ctx: &Ctx, older_than: Duration, apply: bool) -> std::io::Result<GcRep
         }
     }
 
-    for item in std::fs::read_dir(crate::output::dir(&ctx.paths))
+    for item in std::fs::read_dir(ctx.paths.home.join("outputs"))
         .into_iter()
         .flatten()
         .flatten()

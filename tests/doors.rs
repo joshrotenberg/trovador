@@ -3,7 +3,7 @@
 
 mod common;
 
-use std::process::Command;
+use std::process::{Command, Output};
 
 use common::*;
 use serde_json::{Value, json};
@@ -34,8 +34,8 @@ fn fixture() -> Fixture {
     f
 }
 
-fn cli(f: &Fixture, args: &[&str]) -> Value {
-    let out = Command::new(env!("CARGO_BIN_EXE_trovador"))
+fn cli_output(f: &Fixture, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_trovador"))
         .args(args)
         .env("TROVADOR_CLAUDE_ARCHIVE", &f.paths.claude_archive)
         .env("TROVADOR_CODEX_ARCHIVE", &f.paths.codex_archive)
@@ -51,7 +51,11 @@ fn cli(f: &Fixture, args: &[&str]) -> Value {
             f.paths.codex_bin.clone().unwrap_or_default(),
         )
         .output()
-        .expect("run trovador");
+        .expect("run trovador")
+}
+
+fn cli(f: &Fixture, args: &[&str]) -> Value {
+    let out = cli_output(f, args);
     assert!(
         out.status.success(),
         "trovador {args:?} failed: {}",
@@ -168,6 +172,47 @@ fn without_timing(mut v: Value) -> Value {
 }
 
 #[tokio::test]
+async fn project_filter_is_ascii_case_insensitive_in_list_and_search_through_both_doors() {
+    let f = Fixture::new();
+    f.claude(
+        "-w-MyProj",
+        ID_A,
+        &[claude_user("/w/MyProj/É", "alpha")],
+        20,
+    );
+    // Issue #31: listing before searching must not hide a project that search finds.
+    let cold = cli(&f, &["sessions", "list", "--project", "myproj"]);
+    assert_eq!(cold["returned"], 1);
+    assert_eq!(
+        mcp(&f, json!({"action": "list", "project": "myproj"})).await,
+        cold
+    );
+    sessions::reindex(&f.ctx(), false).unwrap();
+    for (project, expected) in [
+        ("myproj", 1),
+        ("MYPROJ", 1),
+        ("MyProj/É", 1),
+        ("myproj/é", 0),
+        ("missing", 0),
+    ] {
+        let listed = cli(&f, &["sessions", "list", "--project", project]);
+        assert_eq!(listed["returned"], expected, "{project}");
+        assert_eq!(
+            mcp(&f, json!({"action": "list", "project": project})).await,
+            listed
+        );
+        let searched = without_timing(cli(&f, &["search", "alpha", "--project", project]));
+        assert_eq!(searched["sessions_matched"], expected, "{project}");
+        assert_eq!(
+            without_timing(
+                mcp_tool(&f, "search", json!({"query": "alpha", "project": project})).await
+            ),
+            searched
+        );
+    }
+}
+
+#[tokio::test]
 async fn search_is_identical_from_the_library_the_cli_and_the_mcp_tool() {
     let f = fixture();
     // Index once so every door sees the same unchanged archive.
@@ -199,54 +244,8 @@ async fn a_bad_query_is_a_readable_tool_error() {
     assert!(r.all_text().starts_with("invalid query"));
 }
 
-/// Drops what differs on every run by design: the time it took and the run's own id,
-/// which must be a well-formed uuid.
-fn without_duration(mut v: Value) -> Value {
-    let obj = v.as_object_mut().unwrap();
-    obj.remove("duration_ms");
-    let run_id = obj.remove("run_id").expect("every ask result has a run_id");
-    assert!(
-        uuid::Uuid::parse_str(run_id.as_str().unwrap()).is_ok(),
-        "{run_id}"
-    );
-    v
-}
-
 #[tokio::test]
-async fn ask_is_identical_from_the_library_the_cli_and_the_mcp_tool() {
-    let f = fixture().with_fakes();
-    let ctx = f.ctx();
-    let started = trovador::run::ask(
-        &ctx,
-        &trovador::run::AskOpts {
-            prompt: "begin".into(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let id = started.session_id.unwrap();
-    let opts = trovador::run::AskOpts {
-        prompt: "next".into(),
-        session: Some(id.clone()),
-        ..Default::default()
-    };
-    let lib = without_duration(
-        serde_json::to_value(trovador::run::ask(&ctx, &opts).await.unwrap()).unwrap(),
-    );
-    assert_eq!(lib["result"], "echo: next");
-    assert_eq!(lib["continuation"]["allowed"], true);
-    // The CLI is a separate process, so blocking this test thread on it is fine.
-    let from_cli = cli(&f, &["ask", "next", "--session", &id]);
-    assert_eq!(without_duration(from_cli), lib);
-    assert_eq!(
-        without_duration(mcp_tool(&f, "ask", json!({"prompt": "next", "session": id})).await),
-        lib
-    );
-}
-
-#[tokio::test]
-async fn no_mcp_tool_can_change_consent() {
+async fn no_mcp_tool_writes_provenance_or_runs_a_turn() {
     let f = fixture();
     let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
     client.initialize().await;
@@ -256,25 +255,11 @@ async fn no_mcp_tool_can_change_consent() {
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(names.len(), 4, "{names:?}");
-    for n in ["sessions", "search", "ask", "summarize"] {
+    assert_eq!(names.len(), 3, "{names:?}");
+    for n in ["sessions", "search", "summarize"] {
         assert!(names.iter().any(|x| x == n));
     }
-    assert!(names.iter().all(|n| !n.contains("consent")));
-}
-
-#[tokio::test]
-async fn a_denied_continuation_over_mcp_names_the_cli_command_a_person_would_run() {
-    let f = fixture().with_fakes();
-    let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
-    client.initialize().await;
-    let r = client
-        .call_tool("ask", json!({"prompt": "hi", "session": ID_A}))
-        .await;
-    assert!(r.is_error);
-    let text = r.all_text();
-    assert!(text.starts_with("continuation denied"), "{text}");
-    assert!(text.contains(&format!("trovador consent approve {ID_A} --backend claude")));
+    assert!(names.iter().all(|n| !n.contains("consent") && n != "ask"));
 }
 
 #[tokio::test]
@@ -323,4 +308,336 @@ async fn a_cached_summary_is_identical_through_both_doors_and_the_resource() {
         1,
         "only the first summary ran a model"
     );
+}
+
+async fn assert_unmatchable_query_is_rejected_through_both_doors(query: &str, fts: bool) {
+    let f = fixture();
+    let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
+    client.initialize().await;
+    let response = client
+        .call_tool("search", json!({"query": query, "fts": fts}))
+        .await;
+    assert!(response.is_error, "{query:?}: {}", response.all_text());
+    assert!(
+        response.all_text().contains("cannot match"),
+        "{}",
+        response.all_text()
+    );
+    assert!(!response.all_text().contains("\"absence_is_proof\":true"));
+
+    assert!(!trovador::index::db_path(&f.paths).exists());
+    let args = if fts {
+        vec!["search", "--fts", "--", query]
+    } else {
+        vec!["search", "--", query]
+    };
+    let output = cli_output(&f, &args);
+    assert!(
+        !output.status.success(),
+        "{query:?}: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot match"));
+    assert!(output.stdout.is_empty());
+    assert!(!trovador::index::db_path(&f.paths).exists());
+}
+
+#[tokio::test]
+async fn tokenless_terms_cannot_claim_absence_through_cli_or_mcp() {
+    for query in ["->", "-", "...", "\"\"", "question ->", "\u{0345}"] {
+        assert_unmatchable_query_is_rejected_through_both_doors(query, false).await;
+    }
+}
+
+#[tokio::test]
+async fn ambiguous_empty_fts_results_have_a_note_and_never_claim_absence_through_both_doors() {
+    let f = fixture();
+    sessions::reindex(&f.ctx(), false).unwrap();
+    for (query, reason) in [
+        ("kind:user", "unindexed"),
+        ("name:Bash", "unindexed"),
+        ("\"name\":Bash", "unindexed"),
+        ("\"->\"", "no tokens"),
+        ("\"\"", "no tokens"),
+        ("\"\u{0345}\"", "no tokens"),
+    ] {
+        let result = cli(&f, &["search", "--fts", "--", query]);
+        assert_eq!(result["sessions_matched"], 0, "{query}");
+        assert_eq!(result["absence_is_proof"], false, "{query}");
+        assert!(
+            result["note"].as_str().unwrap().contains(reason),
+            "{result}"
+        );
+        assert_eq!(
+            without_timing(result),
+            without_timing(mcp_tool(&f, "search", json!({"query": query, "fts": true})).await)
+        );
+    }
+}
+
+#[test]
+fn unmatchable_queries_are_library_errors_even_when_punctuation_exists() {
+    let f = fixture();
+    f.claude(
+        "-w",
+        ID_A,
+        &[claude_user("/w", "alpha deploy - charlie -> bravo ...")],
+        20,
+    );
+    for (query, fts) in [
+        ("->", false),
+        ("-", false),
+        ("...", false),
+        ("\"\"", false),
+        ("\u{0345}", false),
+    ] {
+        let error = sessions::search(
+            &f.ctx(),
+            &trovador::index::SearchOpts {
+                query: query.into(),
+                fts,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, sessions::Error::Query(_)),
+            "{query:?}: {error}"
+        );
+        assert!(
+            error.to_string().contains("cannot match"),
+            "{query:?}: {error}"
+        );
+        assert!(!trovador::index::db_path(&f.paths).exists());
+    }
+    let result = sessions::search(
+        &f.ctx(),
+        &trovador::index::SearchOpts {
+            query: "->".into(),
+            regex: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(result.sessions_matched, 1);
+}
+
+#[tokio::test]
+async fn searchable_fts_filters_and_quoted_column_like_text_still_work_through_both_doors() {
+    let f = fixture();
+    sessions::reindex(&f.ctx(), false).unwrap();
+    for query in [
+        "text:question",
+        "{text}:question",
+        "\"kind:user\"",
+        "text:question OR text:answer",
+    ] {
+        let cli_result = cli(&f, &["search", "--fts", "--", query]);
+        let mcp_result = mcp_tool(&f, "search", json!({"query": query, "fts": true})).await;
+        assert_eq!(
+            without_timing(cli_result.clone()),
+            without_timing(mcp_result)
+        );
+        if query != "\"kind:user\"" {
+            assert_eq!(cli_result["sessions_matched"], 2, "{query}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn pua_tokens_and_ignored_empty_quotes_remain_searchable_through_both_doors() {
+    let f = Fixture::new();
+    f.claude(
+        "-w",
+        ID_A,
+        &[claude_user("/w", "error: deploy user \u{e0b0}")],
+        20,
+    );
+    sessions::reindex(&f.ctx(), false).unwrap();
+    for query in ["\u{e0b0}", "error: \"", "error: \"\""] {
+        let result = cli(&f, &["search", "--", query]);
+        assert_eq!(result["sessions_matched"], 1, "{query}");
+        assert_eq!(
+            without_timing(result),
+            without_timing(mcp_tool(&f, "search", json!({"query": query})).await)
+        );
+    }
+    for query in [
+        "-kind:user",
+        "-{kind name}:deploy",
+        "deploy OR kind:user",
+        "{text kind}:user",
+    ] {
+        let result = cli(&f, &["search", "--fts", "--", query]);
+        assert_eq!(result["sessions_matched"], 1, "{query}");
+        assert_eq!(
+            without_timing(result),
+            without_timing(mcp_tool(&f, "search", json!({"query": query, "fts": true})).await)
+        );
+    }
+}
+
+#[tokio::test]
+async fn fts_syntax_errors_preserve_sqlites_message_without_a_column_hint() {
+    let f = fixture();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE VIRTUAL TABLE records USING fts5(text, kind UNINDEXED, name UNINDEXED, tokenize = 'unicode61 remove_diacritics 2');").unwrap();
+    for query in ["(", "text:", "deploy OR"] {
+        let expected = conn
+            .query_row(
+                "SELECT count(*) FROM records WHERE records MATCH ?1",
+                [query],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_err()
+            .to_string();
+        let error = sessions::search(
+            &f.ctx(),
+            &trovador::index::SearchOpts {
+                query: query.into(),
+                fts: true,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, sessions::Error::Query(_)));
+        assert_eq!(error.to_string(), format!("invalid query: {expected}"));
+        let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
+        client.initialize().await;
+        let result = client
+            .call_tool("search", json!({"query": query, "fts": true}))
+            .await;
+        assert!(result.is_error);
+        assert_eq!(result.all_text(), format!("invalid query: {expected}"));
+        let output = cli_output(&f, &["search", "--fts", "--", query]);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("invalid query: {expected}")),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("column filters"), "{stderr}");
+    }
+}
+
+#[test]
+fn tokenless_terms_fail_before_an_unopenable_index_is_touched() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(&f.paths.home).unwrap();
+    std::fs::write(trovador::index::db_path(&f.paths), "not a database").unwrap();
+    let error = sessions::search(
+        &f.ctx(),
+        &trovador::index::SearchOpts {
+            query: "->".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, sessions::Error::Query(_)), "{error}");
+    assert!(error.to_string().contains("->"));
+}
+
+#[tokio::test]
+async fn unquoted_tokenless_fts_words_cannot_prove_absence_through_cli_or_mcp() {
+    let f = fixture();
+    sessions::reindex(&f.ctx(), false).unwrap();
+    for query in [
+        "question AND →",
+        "question AND \u{0345}",
+        "question AND ☺",
+        "question AND →*",
+        "deploy →",
+        "deploy \u{0345}",
+    ] {
+        let result = cli(&f, &["search", "--fts", "--", query]);
+        assert_eq!(result["sessions_matched"], 0, "{query}");
+        assert_eq!(result["absence_is_proof"], false, "{query}");
+        assert!(
+            result["note"].as_str().unwrap().contains("no tokens"),
+            "{result}"
+        );
+        assert_eq!(
+            without_timing(result),
+            without_timing(mcp_tool(&f, "search", json!({"query": query, "fts": true})).await)
+        );
+    }
+}
+
+#[tokio::test]
+async fn ordinary_unquoted_fts_words_operators_and_prefixes_do_not_add_a_query_note() {
+    let f = fixture();
+    sessions::reindex(&f.ctx(), false).unwrap();
+    for query in [
+        "question AND neverseen",
+        "question NOT question",
+        "neverseen OR nonexistent",
+        "NEAR(question neverseen)",
+        "text : neverseen*",
+    ] {
+        let result = cli(&f, &["search", "--fts", "--", query]);
+        assert_eq!(result["sessions_matched"], 0, "{query}");
+        assert_eq!(result["absence_is_proof"], true, "{query}");
+        assert!(result.get("note").is_none(), "{result}");
+        assert_eq!(
+            without_timing(result),
+            without_timing(mcp_tool(&f, "search", json!({"query": query, "fts": true})).await)
+        );
+    }
+}
+
+#[test]
+fn oversized_regex_is_an_invalid_query_before_index_refresh_through_cli() {
+    let f = fixture();
+    let out = cli_output(&f, &["search", "--regex", r"\w{100}"]);
+    assert_eq!(out.status.code(), Some(1));
+    let error = String::from_utf8(out.stderr).unwrap();
+    assert!(error.starts_with("trovador: invalid query"), "{error}");
+    assert!(
+        error.contains("Compiled regex exceeds size limit"),
+        "{error}"
+    );
+    assert!(!f.paths.home.join("index.db").exists());
+}
+
+#[tokio::test]
+async fn oversized_regex_is_an_invalid_query_before_index_refresh_through_mcp() {
+    let f = fixture();
+    let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
+    client.initialize().await;
+    let result = client
+        .call_tool("search", json!({"query": r"\w{100}", "regex": true}))
+        .await;
+    assert!(result.is_error);
+    let error = result.all_text();
+    assert!(error.starts_with("invalid query"), "{error}");
+    assert!(
+        error.contains("Compiled regex exceeds size limit"),
+        "{error}"
+    );
+    assert!(!f.paths.home.join("index.db").exists());
+}
+
+#[test]
+fn invalid_since_is_an_invalid_query_before_index_refresh_through_cli() {
+    let f = fixture();
+    let out = cli_output(&f, &["search", "question", "--since", "garbage"]);
+    assert_eq!(out.status.code(), Some(1));
+    let error = String::from_utf8(out.stderr).unwrap();
+    assert!(error.starts_with("trovador: invalid query"), "{error}");
+    assert!(!f.paths.home.join("index.db").exists());
+}
+
+#[tokio::test]
+async fn invalid_since_is_an_invalid_query_before_index_refresh_through_mcp() {
+    let f = fixture();
+    let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
+    client.initialize().await;
+    let result = client
+        .call_tool("search", json!({"query": "question", "since": "garbage"}))
+        .await;
+    assert!(result.is_error);
+    let error = result.all_text();
+    assert!(error.starts_with("invalid query"), "{error}");
+    assert!(!f.paths.home.join("index.db").exists());
 }
