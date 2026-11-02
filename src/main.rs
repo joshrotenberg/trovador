@@ -80,6 +80,26 @@ enum Command {
         #[arg(long)]
         rebuild: bool,
     },
+    /// Install the plugin (MCP server, recall skill, SessionStart hook) into Claude Code and
+    /// Codex: writes a local marketplace under TROVADOR_HOME/plugin and registers it with
+    /// each host's own plugin commands. Edits no host configuration file.
+    Init {
+        /// Report the files and host commands without writing or running anything that changes state.
+        #[arg(long)]
+        dry_run: bool,
+        /// Which hosts to install into. Under both, a host that is not on PATH is skipped.
+        #[arg(long, value_enum, default_value = "both")]
+        host: InitHost,
+        /// The trovador binary the plugin runs. Defaults to this one.
+        #[arg(long)]
+        binary: Option<std::path::PathBuf>,
+        /// The claude executable, when it is not the one on PATH.
+        #[arg(long)]
+        claude_bin: Option<std::path::PathBuf>,
+        /// The codex executable, when it is not the one on PATH.
+        #[arg(long)]
+        codex_bin: Option<std::path::PathBuf>,
+    },
     /// Report paths, limits, the index, and what the archives contain.
     Doctor,
     /// Handlers for Claude Code and Codex hooks, run by a host's hook configuration rather than by hand.
@@ -87,6 +107,13 @@ enum Command {
         #[command(subcommand)]
         event: HookCmd,
     },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum InitHost {
+    Both,
+    Claude,
+    Codex,
 }
 
 #[derive(Subcommand)]
@@ -313,6 +340,28 @@ fn main() -> ExitCode {
                 println!("{out}");
             }
             ExitCode::SUCCESS
+        }
+        Command::Init {
+            dry_run,
+            host,
+            binary,
+            claude_bin,
+            codex_bin,
+        } => {
+            let opts = trovador::init::InitOpts {
+                dry_run,
+                host: match host {
+                    InitHost::Both => trovador::init::Host::Both,
+                    InitHost::Claude => trovador::init::Host::Claude,
+                    InitHost::Codex => trovador::init::Host::Codex,
+                },
+                binary,
+                claude_bin,
+                codex_bin,
+            };
+            let report = trovador::init::init(&ctx.paths, &opts);
+            let code = print(&report);
+            if report.ok { code } else { ExitCode::FAILURE }
         }
         Command::Doctor => {
             let report = trovador::doctor::report(&ctx);

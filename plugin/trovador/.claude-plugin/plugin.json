@@ -1,0 +1,16 @@
+{
+  "name": "trovador",
+  "description": "Search and read every past Claude Code and Codex session on this machine",
+  "author": {
+    "name": "Josh Rotenberg"
+  },
+  "repository": "https://github.com/joshrotenberg/trovador",
+  "license": "MIT OR Apache-2.0",
+  "keywords": [
+    "sessions",
+    "search",
+    "history",
+    "claude",
+    "codex"
+  ]
+}
