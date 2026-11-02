@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 pub struct Paths {
     /// `~/.claude/projects`: one directory per project, one JSONL file per session.
     pub claude_archive: PathBuf,
-    /// `~/.codex/sessions`: date-nested directories of `rollout-*-<uuid>.jsonl` files.
+    /// `~/.codex/sessions`: date-nested `rollout-*-<uuid>.jsonl` or `.jsonl.zst` files.
     pub codex_archive: PathBuf,
     /// `~/.codex/archived_sessions`: where Codex moves a thread when it is archived. Flat,
     /// same file names.

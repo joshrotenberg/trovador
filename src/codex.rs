@@ -1,11 +1,10 @@
 //! Shared interpretation of Codex fork headers and rollout boundaries.
 
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 
 use serde::Deserialize;
 
-use crate::archive::{ArchiveEntry, Backend};
+use crate::archive::{ArchiveEntry, Backend, open_archive};
 
 #[derive(Default, Deserialize)]
 struct Header {
@@ -33,11 +32,11 @@ pub(crate) fn is_forked_child(e: &ArchiveEntry) -> bool {
     if e.backend != Backend::Codex {
         return false;
     }
-    let Ok(file) = File::open(&e.file) else {
+    let Ok(mut reader) = open_archive(&e.file, 0) else {
         return false;
     };
     let mut line = Vec::new();
-    BufReader::new(file).read_until(b'\n', &mut line).is_ok()
+    reader.read_until(b'\n', &mut line).is_ok()
         && serde_json::from_slice::<Header>(&line).is_ok_and(|h| h.forked())
 }
 

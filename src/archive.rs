@@ -3,7 +3,7 @@
 //! Both archives are read only. Nothing here writes under `~/.claude` or `~/.codex`.
 
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -15,6 +15,24 @@ use crate::limits::Limits;
 use crate::paths::Paths;
 
 pub use crate::backend::Backend;
+
+pub(crate) fn is_compressed(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "zst")
+}
+
+/// Offsets address decompressed JSONL so checkpoints survive either storage format.
+pub(crate) fn open_archive(path: &Path, offset: u64) -> std::io::Result<Box<dyn BufRead + Send>> {
+    let mut file = File::open(path)?;
+    if is_compressed(path) {
+        let mut reader = BufReader::new(zstd::stream::read::Decoder::new(file)?);
+        // A zstd stream has no random access; discard decoded bytes to reach a checkpoint.
+        std::io::copy(&mut reader.by_ref().take(offset), &mut std::io::sink())?;
+        Ok(Box::new(reader))
+    } else {
+        file.seek(SeekFrom::Start(offset))?;
+        Ok(Box::new(BufReader::new(file)))
+    }
+}
 
 /// One session file, as found on disk, before anything inside it is read.
 #[derive(Clone, Debug)]
@@ -136,7 +154,9 @@ fn scan_root(
 }
 
 fn trailing_uuid(name: &str) -> Option<&str> {
-    let stem = name.strip_suffix(".jsonl")?;
+    let stem = name
+        .strip_suffix(".jsonl")
+        .or_else(|| name.strip_suffix(".jsonl.zst"))?;
     let id = stem.get(stem.len().checked_sub(36)?..)?;
     let shape_ok = id.char_indices().all(|(i, c)| match i {
         8 | 13 | 18 | 23 => c == '-',
@@ -208,7 +228,15 @@ pub(crate) fn scan_all_with_failures(paths: &Paths) -> (Vec<ArchiveEntry>, Vec<S
             || f.path != paths.codex_archived
             || f.kind != std::io::ErrorKind::NotFound
     });
-    all.sort_by(|a, b| b.mtime.cmp(&a.mtime).then(a.session_id.cmp(&b.session_id)));
+    // Codex can retain both formats on resume. Newest still wins (#28); at equal
+    // mtimes prefer the writable plain file, then path order, independent of traversal.
+    all.sort_by(|a, b| {
+        b.mtime
+            .cmp(&a.mtime)
+            .then(a.session_id.cmp(&b.session_id))
+            .then_with(|| is_compressed(&a.file).cmp(&is_compressed(&b.file)))
+            .then(a.file.cmp(&b.file))
+    });
     let mut seen = std::collections::HashSet::new();
     all.retain(|e| seen.insert((e.backend, e.session_id.clone())));
     (all, failures)
@@ -338,24 +366,28 @@ fn read_meta_inner(e: &ArchiveEntry, limits: &Limits, scan_titles: bool) -> Sess
     let mut meta = SessionMeta::default();
     let mut covered = 0u64;
     for &step in &limits.head_steps {
-        if covered >= e.size_bytes {
+        if !is_compressed(&e.file) && covered >= e.size_bytes {
             break;
         }
-        let Ok(head) = read_range(&e.file, 0, step) else {
-            break;
+        let (head, complete) = match read_range(&e.file, 0, step) {
+            Ok(head) => head,
+            Err(error) => {
+                tracing::warn!(path = %e.file.display(), %error, "could not read archive metadata");
+                break;
+            }
         };
         meta = match e.backend {
             Backend::Claude => parse_claude_head(&head),
-            Backend::Codex => parse_codex_head(&head, e.archived, step as u64 >= e.size_bytes),
+            Backend::Codex => parse_codex_head(&head, e.archived, complete),
         };
         covered = step as u64;
-        if meta.cwd.is_some() && meta.snippet.is_some() {
+        if complete || (meta.cwd.is_some() && meta.snippet.is_some()) {
             break;
         }
     }
     if e.backend == Backend::Claude && covered < e.size_bytes {
         let tail_from = e.size_bytes.saturating_sub(TAIL_BYTES as u64).max(covered);
-        if let Ok(tail) = read_range(&e.file, tail_from, TAIL_BYTES) {
+        if let Ok((tail, _)) = read_range(&e.file, tail_from, TAIL_BYTES) {
             apply_claude_latest(&mut meta, lines_after_first(&tail));
         }
         if scan_titles && e.size_bytes <= limits.title_scan_max_bytes as u64 {
@@ -391,9 +423,7 @@ pub(crate) fn scan_custom_titles(
 ) -> std::io::Result<()> {
     // Issue #36: only candidate records need JSON parsing. Large byte chunks avoid
     // validating every transcript line as UTF-8, including on a metadata-only upgrade.
-    let mut file = File::open(path)?;
-    file.seek(SeekFrom::Start(from))?;
-    let mut reader = file.take(until.saturating_sub(from));
+    let mut reader = open_archive(path, from)?.take(until.saturating_sub(from));
     let mut chunk = [0u8; 64 * 1024];
     let mut pending = Vec::new();
     loop {
@@ -432,12 +462,14 @@ pub(crate) fn scan_custom_titles(
     Ok(())
 }
 
-fn read_range(path: &Path, from: u64, len: usize) -> std::io::Result<String> {
-    let mut f = File::open(path)?;
-    f.seek(SeekFrom::Start(from))?;
+fn read_range(path: &Path, from: u64, len: usize) -> std::io::Result<(String, bool)> {
+    let mut reader = open_archive(path, from)?;
     let mut buf = Vec::with_capacity(len.min(1 << 20));
-    f.take(len as u64).read_to_end(&mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).into_owned())
+    reader.by_ref().take(len as u64).read_to_end(&mut buf)?;
+    // Compressed disk size cannot tell whether the head contains the complete rollout,
+    // which determines whether an impossible fork boundary may use its fallback (#35).
+    let complete = reader.fill_buf()?.is_empty();
+    Ok((String::from_utf8_lossy(&buf).into_owned(), complete))
 }
 
 /// A tail read starts mid-line; the first fragment is never a whole record.
@@ -690,6 +722,8 @@ pub struct Resumability {
 }
 
 pub fn resumability(e: &ArchiveEntry, limits: &Limits) -> Resumability {
+    // Keep this an on-disk size heuristic, including compressed rollouts. It can
+    // understate their resume cost, but listing must not decode whole files for a size.
     let resumable = e.size_bytes < limits.resume_limit_bytes;
     Resumability {
         resumable,

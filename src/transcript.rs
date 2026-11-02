@@ -9,8 +9,7 @@
 //! Files are streamed line by line. Codex sessions over 370 MB exist, so nothing here reads
 //! a whole file into memory, and a page stops reading once it is full.
 
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 
 /// Bumped whenever the projection changes what it emits, which invalidates every index row.
 pub const PROJECTION_VERSION: i64 = 9;
@@ -19,7 +18,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::archive::{ArchiveEntry, Backend, block_text};
+use crate::archive::{ArchiveEntry, Backend, block_text, open_archive};
 use crate::limits::Limits;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -745,7 +744,7 @@ fn search_queries(action: &Value, outer: &Value) -> String {
 /// and assign exactly the record indexes a full read would.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectionState {
-    /// Bytes consumed, always at a line boundary.
+    /// Decompressed bytes consumed, always at a line boundary.
     pub offset: u64,
     /// Issue #35: a known byte boundary survives index resumes without rescanning history.
     pub codex_inherited_end: Option<u64>,
@@ -825,7 +824,7 @@ fn is_turn(k: RecordKind) -> bool {
 
 /// Streams a session's projected records, with omitted runs collapsed and indexes assigned.
 pub struct Projection {
-    reader: BufReader<File>,
+    reader: Box<dyn BufRead + Send>,
     backend: Backend,
     inherited_end: u64,
     scan_limit: Option<u64>,
@@ -836,6 +835,7 @@ pub struct Projection {
     /// page reads whatever is there and closes the run.
     for_index: bool,
     done: bool,
+    read_error: Option<std::io::Error>,
     line: Vec<u8>,
 }
 
@@ -861,29 +861,19 @@ impl Projection {
         resume: Option<ProjectionState>,
         for_index: bool,
     ) -> std::io::Result<Self> {
-        let mut file = File::open(&e.file)?;
-        let mut state = match resume {
-            Some(s) => {
-                use std::io::{Seek, SeekFrom};
-                file.seek(SeekFrom::Start(s.offset))?;
-                s
-            }
-            // Every file starts in the oldest stream and moves forward only as newer
-            // stream records appear, in order. A pre-scan that started in the newest stream
-            // it could find dropped the older-format turns of a session continued by a newer
-            // client (#31); the copy written at each switch is dropped by comparing it with
-            // the last emitted turn instead.
-            None => ProjectionState::default(),
-        };
-        use std::io::{Seek, SeekFrom};
+        // Every file starts in the oldest stream and moves forward only as newer
+        // stream records appear, in order. A pre-scan that started in the newest stream
+        // it could find dropped the older-format turns of a session continued by a newer
+        // client (#31); the copy written at each switch is dropped by comparing it with
+        // the last emitted turn instead.
+        let mut state = resume.unwrap_or_default();
         let mut scan_limit = None;
         let inherited_end = if e.backend == Backend::Codex {
             if let Some(end) = state.codex_inherited_end {
                 end
             } else {
-                file.seek(SeekFrom::Start(0))?;
-                let boundary =
-                    crate::codex::fork_boundary(&mut BufReader::new(&mut file), e.archived, true)?;
+                let mut reader = open_archive(&e.file, 0)?;
+                let boundary = crate::codex::fork_boundary(&mut reader, e.archived, true)?;
                 // Issue #35: terminal events before the start ordinal belong to
                 // copied history. Display may fall back, but indexing must wait
                 // for the real boundary and never persist the parent's completion.
@@ -899,9 +889,8 @@ impl Projection {
         } else {
             0
         };
-        file.seek(SeekFrom::Start(state.offset))?;
         Ok(Self {
-            reader: BufReader::new(file),
+            reader: open_archive(&e.file, state.offset)?,
             backend: e.backend,
             inherited_end,
             scan_limit,
@@ -910,6 +899,7 @@ impl Projection {
             pending: Default::default(),
             for_index,
             done: false,
+            read_error: None,
             line: Vec::new(),
         })
     }
@@ -917,6 +907,10 @@ impl Projection {
     /// Where the read stopped. Meaningful once the iterator has returned `None`.
     pub fn state(&self) -> &ProjectionState {
         &self.state
+    }
+
+    pub(crate) fn take_read_error(&mut self) -> Option<std::io::Error> {
+        self.read_error.take()
     }
 
     fn fill(&mut self) {
@@ -932,7 +926,16 @@ impl Projection {
             }
             self.line.clear();
             let n = match self.reader.read_until(b'\n', &mut self.line) {
-                Ok(0) | Err(_) => {
+                Ok(0) => {
+                    self.done = true;
+                    break;
+                }
+                Err(error) => {
+                    // Decoding may fail after a valid Codex header. A partial projection
+                    // must not look like a successful transcript or index checkpoint.
+                    if self.backend == Backend::Codex {
+                        self.read_error = Some(error);
+                    }
                     self.done = true;
                     break;
                 }
@@ -1127,7 +1130,8 @@ pub fn page(
     let mut records = Vec::new();
     let mut chars = 0usize;
     let mut seen = 0usize;
-    for r in Projection::open(e, limits)? {
+    let mut projection = Projection::open(e, limits)?;
+    for r in projection.by_ref() {
         seen += 1;
         if r.index < offset {
             continue;
@@ -1152,6 +1156,9 @@ pub fn page(
         }
         chars += size;
         records.push(r);
+    }
+    if let Some(error) = projection.take_read_error() {
+        return Err(error);
     }
     Ok(TranscriptPage {
         offset,

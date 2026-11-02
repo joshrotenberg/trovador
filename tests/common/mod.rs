@@ -74,11 +74,32 @@ impl Fixture {
             age,
         )
     }
+
+    pub fn codex_zstd(&self, id: &str, records: &[Value], age: u64, archived: bool) -> PathBuf {
+        let (dir, timestamp) = if archived {
+            (self.paths.codex_archived.clone(), "2026-09-01T12-00-00")
+        } else {
+            (
+                self.paths.codex_archive.join("2026/10/07"),
+                "2026-10-07T12-00-00",
+            )
+        };
+        write(
+            dir.join(format!("rollout-{timestamp}-{id}.jsonl.zst")),
+            records,
+            age,
+        )
+    }
 }
 
 fn write(path: PathBuf, records: &[Value], age: u64) -> PathBuf {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let body: String = records.iter().map(|r| format!("{r}\n")).collect();
+    let body = if path.extension().is_some_and(|ext| ext == "zst") {
+        zstd::stream::encode_all(body.as_bytes(), 0).unwrap()
+    } else {
+        body.into_bytes()
+    };
     fs::write(&path, body).unwrap();
     let t = SystemTime::now() - Duration::from_secs(age);
     fs::File::options()

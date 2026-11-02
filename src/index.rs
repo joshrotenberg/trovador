@@ -84,16 +84,18 @@ fn bytes_hash(bytes: &[u8]) -> u64 {
 
 const REGION: u64 = 4096;
 
-/// Hashes of the first 4 KB of a file and of the 4 KB before `offset`. An append leaves
+/// Hashes of the first 4 KB of JSONL and of the 4 KB before its decompressed `offset`. An append leaves
 /// both alone; a rewrite of the indexed part, even one that keeps or grows the size,
 /// changes at least one of them (#25).
 fn region_hashes(path: &std::path::Path, offset: u64) -> Option<(i64, i64)> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut f = std::fs::File::open(path).ok()?;
-    let mut read = |from: u64, len: u64| -> Option<i64> {
-        f.seek(SeekFrom::Start(from)).ok()?;
+    use std::io::Read;
+    let read = |from: u64, len: u64| -> Option<i64> {
         let mut buf = Vec::with_capacity(len as usize);
-        (&mut f).take(len).read_to_end(&mut buf).ok()?;
+        archive::open_archive(path, from)
+            .ok()?
+            .take(len)
+            .read_to_end(&mut buf)
+            .ok()?;
         Some(bytes_hash(&buf) as i64)
     };
     let head = read(0, REGION.min(offset))?;
@@ -387,7 +389,8 @@ impl Index {
             serde_json::from_str(&stored.json).ok()?
         } else {
             // Issue #36: an indexed append needs only its new bytes, even before refresh.
-            if stored.size >= e.size_bytes
+            if archive::is_compressed(&e.file)
+                || stored.size >= e.size_bytes
                 || region_hashes(&e.file, stored.offset) != Some(stored.hashes)
             {
                 return None;
@@ -619,11 +622,25 @@ fn project(job: Job, limits: &Limits) -> Option<Done> {
                 records.push((r.index, r.kind, r.name, t));
             }
         }
+        if proj.take_read_error().is_some() {
+            return None;
+        }
         proj.state().clone()
     } else {
+        // Excluded text still needs a decoded checkpoint and validation; disk size
+        // is not a JSONL offset and a damaged compressed stream must count as failed.
+        let offset = if archive::is_compressed(&job.entry.file) {
+            std::io::copy(
+                &mut archive::open_archive(&job.entry.file, 0).ok()?,
+                &mut std::io::sink(),
+            )
+            .ok()?
+        } else {
+            job.entry.size_bytes
+        };
         // Not projected at all: the row only carries metadata.
         ProjectionState {
-            offset: job.entry.size_bytes,
+            offset,
             ..Default::default()
         }
     };
@@ -742,8 +759,10 @@ impl Index {
                 // A file continues where the last pass stopped only if it grew and the
                 // bytes it was indexed from are still the same. Growing alone did not prove
                 // that: a rewrite of the same size or larger kept its old rows (#25).
+                // Compressed rollouts are immutable; any change requires full projection.
                 Some(s)
                     if s.file == file
+                        && !archive::is_compressed(&e.file)
                         && s.text_indexed
                         && s.projection_version == PROJECTION_VERSION
                         && e.size_bytes as i64 > s.size
