@@ -6,7 +6,6 @@ use serde_json::json;
 use trovador::Backend;
 use trovador::index::{Order, SearchOpts};
 use trovador::sessions::{self, Ctx, ListOpts};
-use trovador::summary;
 
 /// Local Claude Code and Codex sessions as one MCP server and CLI.
 #[derive(Parser)]
@@ -25,11 +24,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Run the MCP server over stdio.
-    Serve {
-        /// Offer only sessions and search: nothing that runs a model.
-        #[arg(long)]
-        read_only: bool,
-    },
+    Serve,
     /// List, inspect, and read sessions.
     Sessions {
         #[command(subcommand)]
@@ -58,7 +53,7 @@ enum Command {
         /// Include sessions written in the last few minutes (TROVADOR_ACTIVE_WINDOW_S).
         #[arg(long)]
         include_active: bool,
-        /// Include claude -p and codex exec sessions trovador did not start.
+        /// Include claude -p and codex exec sessions.
         #[arg(long)]
         include_automated: bool,
         /// Leave out this session id.
@@ -84,45 +79,6 @@ enum Command {
         /// Discard the index and build it again.
         #[arg(long)]
         rebuild: bool,
-    },
-    /// Summarize a session: cached unless the session or explicit model changes. Costs tokens on a miss.
-    Summarize {
-        id: String,
-        #[arg(long)]
-        backend: Option<Backend>,
-        /// Make a new summary even if a current one is cached.
-        #[arg(long)]
-        force: bool,
-        /// Model to use; a different model regenerates the cached summary. If omitted,
-        /// reuse any current summary or use the configured default (haiku) on a miss.
-        #[arg(long)]
-        model: Option<String>,
-        /// The character to start from, for the next part of a summary longer than the
-        /// response budget.
-        #[arg(long, default_value_t = 0)]
-        offset: usize,
-    },
-    /// Import spawned-session records and summaries from spike (agent-sessions). Reads, never writes, the
-    /// spike directory.
-    Import {
-        /// spike's state directory.
-        #[arg(long)]
-        from: Option<std::path::PathBuf>,
-        /// Report what would be imported without changing anything.
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Remove cached summaries, leftover ask replies in outputs/, and run-log lines. A dry run
-    /// unless --apply. The record of sessions the toolkit started is never touched.
-    Gc {
-        /// Also remove summaries created, leftover ask replies in outputs/ modified, and
-        /// run-log lines written longer ago than this. Cutoffs before 1970-01-01 UTC are
-        /// clamped to that date.
-        #[arg(long, default_value = "90d")]
-        older_than: String,
-        /// Remove; without this, only report.
-        #[arg(long)]
-        apply: bool,
     },
     /// Report paths, limits, the index, and what the archives contain.
     Doctor,
@@ -162,7 +118,7 @@ enum SessionsCmd {
         /// Include sessions started by another session.
         #[arg(long)]
         include_subagents: bool,
-        /// Include claude -p and codex exec sessions trovador did not start.
+        /// Include claude -p and codex exec sessions.
         #[arg(long)]
         include_automated: bool,
         /// Only sessions last written at or after this: 2026-10-01, an RFC 3339 time (Z or numeric offset), or 2d.
@@ -188,6 +144,16 @@ enum SessionsCmd {
         offset: usize,
         #[arg(long)]
         limit: Option<usize>,
+    },
+    /// The whole session as plain text, in parts of TROVADOR_RESPONSE_MAX_CHARS, for
+    /// reading or summarizing.
+    Text {
+        id: String,
+        #[arg(long)]
+        backend: Option<Backend>,
+        /// The character to start from, for the next part (truncated.next_offset).
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
     },
 }
 
@@ -237,10 +203,9 @@ fn main() -> ExitCode {
     let mut ctx = Ctx::from_env();
     ctx.limits.redact = !cli.no_redact;
     match cli.command {
-        Command::Serve { read_only } => serve(
+        Command::Serve => serve(
             ctx,
             trovador::mcp::ServeOpts {
-                read_only,
                 redact: !cli.no_redact,
             },
         ),
@@ -280,6 +245,14 @@ fn main() -> ExitCode {
                 offset,
                 limit,
             } => match sessions::transcript(&ctx, &id, backend, offset, limit) {
+                Ok(t) => print(&t),
+                Err(e) => fail(e),
+            },
+            SessionsCmd::Text {
+                id,
+                backend,
+                offset,
+            } => match sessions::text(&ctx, &id, backend, offset) {
                 Ok(t) => print(&t),
                 Err(e) => fail(e),
             },
@@ -331,44 +304,6 @@ fn main() -> ExitCode {
             Ok(r) => print(&json!({ "refresh": r, "index": sessions::index_status(&ctx) })),
             Err(e) => fail(e),
         },
-        Command::Gc { older_than, apply } => match humantime::parse_duration(&older_than) {
-            Ok(d) => match trovador::gc::gc(&ctx, d, apply) {
-                Ok(r) => print(&r),
-                Err(e) => fail(e),
-            },
-            Err(_) => fail(format!(
-                "--older-than \"{older_than}\" is not a duration such as 90d or 12w"
-            )),
-        },
-        Command::Summarize {
-            id,
-            backend,
-            force,
-            model,
-            offset,
-        } => {
-            let runtime = match tokio::runtime::Runtime::new() {
-                Ok(r) => r,
-                Err(e) => return fail(e),
-            };
-            match runtime.block_on(summary::summarize(
-                &ctx,
-                &id,
-                backend,
-                force,
-                model.as_deref(),
-            )) {
-                Ok(s) => print(&summary::part(s, offset, &ctx.limits)),
-                Err(e) => fail(e),
-            }
-        }
-        Command::Import { from, dry_run } => {
-            let from = from.unwrap_or_else(trovador::import::default_from);
-            match trovador::import::import(&ctx, &from, dry_run) {
-                Ok(r) => print(&r),
-                Err(e) => fail(e),
-            }
-        }
         Command::Hook {
             event: HookCmd::SessionStart { backend },
         } => {
@@ -380,11 +315,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Doctor => {
-            let runtime = match tokio::runtime::Runtime::new() {
-                Ok(r) => r,
-                Err(e) => return fail(e),
-            };
-            let report = runtime.block_on(trovador::doctor::report(&ctx));
+            let report = trovador::doctor::report(&ctx);
             let code = print(&report);
             if report.ok { code } else { ExitCode::FAILURE }
         }

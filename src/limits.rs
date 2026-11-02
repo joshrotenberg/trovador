@@ -11,7 +11,7 @@ use serde::Serialize;
 #[derive(Clone, Debug, Serialize)]
 pub struct Limits {
     /// Ceiling on the content of one response: the characters of transcript records in a
-    /// page, or of a summary's text. The fields around them are extra.
+    /// page, or of a session's text. The fields around them are extra.
     /// Model text past it is cut, and the response says how to read the rest.
     pub response_max_chars: usize,
     /// Head read steps for session metadata, smallest first. Each step is used only when
@@ -42,23 +42,6 @@ pub struct Limits {
     pub search_default: usize,
     /// Default number of matching records shown per session.
     pub per_session_default: usize,
-    /// Seconds a Claude turn may run before it is killed.
-    pub claude_timeout_s: usize,
-    /// Seconds a Codex turn may run. Longer than Claude's: spike's 120 s default killed a
-    /// Codex turn between two MCP writes it was making (spike#107).
-    pub codex_timeout_s: usize,
-    /// Nesting depth at which a run is refused. Every session trovador starts can reach
-    /// trovador again, so without a ceiling one prompt could recurse indefinitely.
-    pub max_depth: usize,
-    /// Model for summaries. They read a lot and write little, so a small model.
-    pub summary_model: String,
-    /// Characters of rendered transcript per summary chunk.
-    pub summary_chunk_chars: usize,
-    /// Chunks summarized at most. Past this the first and last halves are kept, which
-    /// bounds the cost of summarizing a very large session.
-    pub summary_max_chunks: usize,
-    /// Provider runs started at once by one operation. Each is a full CLI start.
-    pub fanout: usize,
     /// Seconds within which a session counts as active and is left out of search by
     /// default. The session doing the search is always active, and its own transcript
     /// contains the words it searches for. Zero turns the default off.
@@ -86,13 +69,6 @@ impl Default for Limits {
             index_budget_ms: 15_000,
             search_default: 20,
             per_session_default: 3,
-            claude_timeout_s: 600,
-            codex_timeout_s: 900,
-            max_depth: 2,
-            summary_model: "haiku".into(),
-            summary_chunk_chars: 250_000,
-            summary_max_chunks: 8,
-            fanout: 3,
             active_window_s: 600,
             index_reasoning: true,
             redact: true,
@@ -141,15 +117,6 @@ impl Limits {
             index_budget_ms: num("TROVADOR_INDEX_BUDGET_MS", d.index_budget_ms),
             search_default: num("TROVADOR_SEARCH_DEFAULT", d.search_default).max(1),
             per_session_default: num("TROVADOR_PER_SESSION", d.per_session_default).max(1),
-            claude_timeout_s: num("TROVADOR_CLAUDE_TIMEOUT_S", d.claude_timeout_s).max(1),
-            codex_timeout_s: num("TROVADOR_CODEX_TIMEOUT_S", d.codex_timeout_s).max(1),
-            max_depth: num("TROVADOR_MAX_DEPTH", d.max_depth),
-            summary_model: get("TROVADOR_SUMMARY_MODEL")
-                .filter(|m| !m.trim().is_empty())
-                .unwrap_or(d.summary_model),
-            summary_chunk_chars: num("TROVADOR_SUMMARY_CHUNK_CHARS", d.summary_chunk_chars).max(1),
-            summary_max_chunks: num("TROVADOR_SUMMARY_MAX_CHUNKS", d.summary_max_chunks).max(1),
-            fanout: num("TROVADOR_FANOUT", d.fanout).max(1),
             active_window_s: num("TROVADOR_ACTIVE_WINDOW_S", d.active_window_s),
             index_reasoning: get("TROVADOR_INDEX_REASONING")
                 .map(|v| !matches!(v.trim(), "0" | "false" | "no" | "off"))

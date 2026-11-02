@@ -1,9 +1,9 @@
-//! Summary text bounded by `response_max_chars`, with the rest read by offset.
+//! Long text bounded by `response_max_chars`, with the rest read by offset.
 //!
-//! A summary can be any length, and whatever a tool returns lands in the caller's context.
-//! A fake provider's 120,000-character reply came back whole with the budget set to 1,000
-//! (trovador#32). Text over the budget is cut, the response says so, and the rest is read
-//! by offset from the summary cache.
+//! A session's text can be any length, and whatever a tool returns lands in the caller's
+//! context. A fake provider's 120,000-character reply came back whole with the budget set
+//! to 1,000 (trovador#32). Text over the budget is cut, the response says so, and the rest
+//! is read by offset.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

@@ -42,14 +42,6 @@ fn cli_output(f: &Fixture, args: &[&str]) -> Output {
         .env("TROVADOR_CODEX_ARCHIVED", &f.paths.codex_archived)
         .env("TROVADOR_HOME", &f.paths.home)
         .env("TROVADOR_ACTIVE_WINDOW_S", "0")
-        .env(
-            "TROVADOR_CLAUDE_BIN",
-            f.paths.claude_bin.clone().unwrap_or_default(),
-        )
-        .env(
-            "TROVADOR_CODEX_BIN",
-            f.paths.codex_bin.clone().unwrap_or_default(),
-        )
         .output()
         .expect("run trovador")
 }
@@ -245,68 +237,29 @@ async fn a_bad_query_is_a_readable_tool_error() {
 }
 
 #[tokio::test]
-async fn no_mcp_tool_writes_provenance_or_runs_a_turn() {
+async fn the_server_offers_only_tools_that_read() {
     let f = fixture();
     let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
     client.initialize().await;
-    let names: Vec<String> = client
+    let mut names: Vec<String> = client
         .list_tools()
         .await
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(names.len(), 3, "{names:?}");
-    for n in ["sessions", "search", "summarize"] {
-        assert!(names.iter().any(|x| x == n));
-    }
-    assert!(names.iter().all(|n| !n.contains("consent") && n != "ask"));
+    names.sort();
+    assert_eq!(names, vec!["search", "sessions"]);
 }
 
 #[tokio::test]
-async fn a_cached_summary_is_identical_through_both_doors_and_the_resource() {
-    let f = fixture().with_fakes();
-    let ctx = f.ctx();
-    let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
-    client.initialize().await;
-    // The resource only serves what exists; it never spends tokens making one.
-    let missing = client
-        .send_request_expect_error(
-            "resources/read",
-            Some(json!({"uri": format!("session://claude/{ID_A}/summary")})),
-        )
-        .await;
-    assert!(
-        missing.to_string().contains("no current summary"),
-        "{missing}"
-    );
-    assert!(f.calls("claude").is_empty());
-
-    trovador::summary::summarize(&ctx, ID_A, None, false, None)
-        .await
-        .unwrap();
-    let lib = serde_json::to_value(
-        trovador::summary::summarize(&ctx, ID_A, None, false, None)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(lib["cached"], true);
-    assert_eq!(cli(&f, &["summarize", ID_A]), lib);
+async fn session_text_is_identical_through_both_doors() {
+    let f = fixture();
+    let lib = serde_json::to_value(sessions::text(&f.ctx(), ID_A, None, 0).unwrap()).unwrap();
+    assert!(lib["text"].as_str().unwrap().starts_with("USER: "));
+    assert_eq!(cli(&f, &["sessions", "text", ID_A]), lib);
     assert_eq!(
-        client
-            .call_tool_json("summarize", json!({"session_id": ID_A}))
-            .await,
+        mcp(&f, json!({"action": "text", "session_id": ID_A})).await,
         lib
-    );
-    let res = client
-        .read_resource(&format!("session://claude/{ID_A}/summary"))
-        .await;
-    let body: Value = serde_json::from_str(res.first_text().unwrap()).unwrap();
-    assert_eq!(body, lib);
-    assert_eq!(
-        f.calls("claude").len(),
-        1,
-        "only the first summary ran a model"
     );
 }
 

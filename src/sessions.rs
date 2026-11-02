@@ -142,15 +142,10 @@ pub struct ListResult {
 }
 
 /// Whether the automated default leaves this session out.
-fn automated_hidden(
-    meta: &SessionMeta,
-    key: &str,
-    spawned: &std::collections::HashSet<String>,
-) -> bool {
+fn automated_hidden(meta: &SessionMeta) -> bool {
     meta.origin
         .as_deref()
         .is_some_and(|o| AUTOMATED_ORIGINS.contains(&o))
-        && !spawned.contains(key)
 }
 
 /// Newest first. Metadata is read only for sessions that might be returned, and the scan
@@ -170,13 +165,6 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
         .map(|i| i.meta_snapshot())
         .unwrap_or_default();
     let hide_automated = !opts.include_automated && opts.origin.is_none();
-    let spawned: std::collections::HashSet<String> = if hide_automated {
-        crate::provenance::spawned_keys(&ctx.paths)
-            .into_iter()
-            .collect()
-    } else {
-        Default::default()
-    };
     let mut hidden_automated = 0;
     // Issue #31: match search's SQLite LIKE semantics, which fold ASCII case only.
     let needle = opts
@@ -215,9 +203,7 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
         {
             continue;
         }
-        if hide_automated
-            && automated_hidden(&meta, &format!("{}/{}", e.backend, e.session_id), &spawned)
-        {
+        if hide_automated && automated_hidden(&meta) {
             hidden_automated += 1;
             continue;
         }
@@ -252,8 +238,6 @@ pub struct SessionDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_blocked_by: Option<String>,
     pub transcript_resource: String,
-    /// The toolkit (tosi) started this session.
-    pub spawned: bool,
 }
 
 pub fn show(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<SessionDetail, Error> {
@@ -267,7 +251,6 @@ pub fn show(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<SessionDeta
         size_bytes: e.size_bytes,
         resume_blocked_by: archive::resumability(&e, &ctx.limits).reason,
         transcript_resource: format!("{}/transcript", r.resource),
-        spawned: crate::provenance::is_spawned(&ctx.paths, e.backend, &e.session_id),
         row: r,
     })
 }
@@ -296,6 +279,21 @@ pub fn transcript(
         backend: e.backend,
         session_id: e.session_id,
         page,
+    })
+}
+
+/// One part of a session as plain text, for the caller to read or summarize. See
+/// [`crate::text`].
+pub fn text(
+    ctx: &Ctx,
+    id: &str,
+    backend: Option<Backend>,
+    offset: usize,
+) -> Result<crate::text::SessionText, Error> {
+    let e = archive::find_session(&ctx.paths, id, backend)?;
+    crate::text::part(&e, offset, &ctx.limits).map_err(|source| Error::Io {
+        path: e.file.display().to_string(),
+        source,
     })
 }
 
@@ -405,11 +403,10 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         active_since_ns: (!opts.include_active && ctx.limits.active_window_s > 0).then(|| {
             let cutoff = std::time::SystemTime::now()
                 - Duration::from_secs(ctx.limits.active_window_s as u64);
-            crate::summary::mtime_ns(cutoff)
+            crate::timespec::ns(cutoff)
         }),
         exclude_session: opts.exclude_session.clone().filter(|s| !s.is_empty()),
-        automated_except: (!opts.include_automated && opts.origin.is_none())
-            .then(|| crate::provenance::spawned_keys(&ctx.paths)),
+        automated_except: (!opts.include_automated && opts.origin.is_none()).then(Vec::new),
     };
     let raw = idx
         .search(opts, &vis, limit, per_session, ctx.limits.redact)

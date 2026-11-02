@@ -17,10 +17,6 @@ pub struct Paths {
     pub codex_archived: PathBuf,
     /// `~/.trovador`: everything trovador owns.
     pub home: PathBuf,
-    /// The `claude` binary to run, when not the one on PATH.
-    pub claude_bin: Option<PathBuf>,
-    /// The `codex` binary to run, when not the one on PATH.
-    pub codex_bin: Option<PathBuf>,
 }
 
 impl Paths {
@@ -43,8 +39,6 @@ impl Paths {
             codex_archive: var("TROVADOR_CODEX_ARCHIVE")
                 .unwrap_or_else(|| home.join(".codex").join("sessions")),
             home: var("TROVADOR_HOME").unwrap_or_else(|| home.join(".trovador")),
-            claude_bin: var("TROVADOR_CLAUDE_BIN"),
-            codex_bin: var("TROVADOR_CODEX_BIN"),
         }
     }
 
@@ -55,8 +49,6 @@ impl Paths {
             codex_archive: root.join(".codex").join("sessions"),
             codex_archived: root.join(".codex").join("archived_sessions"),
             home: root.join(".trovador"),
-            claude_bin: None,
-            codex_bin: None,
         }
     }
 }

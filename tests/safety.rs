@@ -96,44 +96,6 @@ async fn no_tool_argument_turns_redaction_off() {
 }
 
 #[tokio::test]
-async fn a_read_only_server_offers_nothing_that_runs_a_model() {
-    let f = fixture();
-    let mut c = client(
-        &f,
-        ServeOpts {
-            read_only: true,
-            ..ServeOpts::default()
-        },
-    )
-    .await;
-    let mut names: Vec<String> = c
-        .list_tools()
-        .await
-        .iter()
-        .map(|t| t["name"].as_str().unwrap().to_string())
-        .collect();
-    names.sort();
-    assert_eq!(names, vec!["search", "sessions"]);
-    let err = c
-        .call_tool_expect_error("ask", json!({"prompt": "hi"}))
-        .await;
-    assert!(err.to_string().to_lowercase().contains("ask"), "{err}");
-
-    let init = TestClient::from_router(router_with(
-        f.ctx(),
-        ServeOpts {
-            read_only: true,
-            ..ServeOpts::default()
-        },
-    ))
-    .initialize()
-    .await;
-    let instructions = init["instructions"].as_str().unwrap_or_default();
-    assert!(instructions.contains("read-only"));
-    assert!(!instructions.contains("ask runs a turn"));
-}
-
-#[tokio::test]
 async fn the_server_tells_clients_that_session_text_is_data_not_instructions() {
     let f = fixture();
     let init = TestClient::from_router(router_with(f.ctx(), ServeOpts::default()))
@@ -145,7 +107,7 @@ async fn the_server_tells_clients_that_session_text_is_data_not_instructions() {
     let mut c = client(&f, ServeOpts::default()).await;
     for tool in c.list_tools().await {
         let name = tool["name"].as_str().unwrap();
-        if ["sessions", "search", "summarize"].contains(&name) {
+        if ["sessions", "search"].contains(&name) {
             assert!(
                 tool["description"]
                     .as_str()
@@ -232,12 +194,12 @@ async fn generic_secrets_in_json_tool_arguments_are_redacted() {
 #[cfg(unix)]
 #[tokio::test]
 async fn everything_trovador_writes_is_private_to_the_user() {
-    // Pre-release review: index.db and summaries hold transcript text, secrets included,
+    // Pre-release review: index.db held transcript text, secrets included,
     // copied from files Claude writes 0600, and were left 0644 in a 0755 directory.
     use std::os::unix::fs::PermissionsExt;
     let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
 
-    let f = fixture().with_fakes();
+    let f = fixture();
     let home = f.paths.home.clone();
     // An install from before the fix: a 0755 home and a 0644 index.
     std::fs::create_dir_all(&home).unwrap();
@@ -260,14 +222,8 @@ async fn everything_trovador_writes_is_private_to_the_user() {
         },
     )
     .unwrap();
-    trovador::summary::summarize(&ctx, ID_A, None, false, None)
-        .await
-        .unwrap();
-    trovador::provenance::record_spawned(&ctx.paths, trovador::Backend::Claude, ID_B).unwrap();
-    trovador::gc::gc(&ctx, std::time::Duration::from_secs(86_400 * 365), true).unwrap();
 
     assert_eq!(mode(&home), 0o700, "home");
-    assert_eq!(mode(&home.join("summaries")), 0o700, "summaries");
     let mut files = 0;
     let mut stack = vec![home.clone()];
     while let Some(d) = stack.pop() {
@@ -280,6 +236,6 @@ async fn everything_trovador_writes_is_private_to_the_user() {
             }
         }
     }
-    // index.db, spawned.json, spawned.lock, runs.jsonl, runs.lock, and a summary, at least.
-    assert!(files >= 6, "{files} files");
+    // index.db at least; SQLite may leave journal files beside it.
+    assert!(files >= 1, "{files} files");
 }

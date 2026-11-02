@@ -168,33 +168,13 @@ fn explicit_ordinals_determine_the_boundary_instead_of_line_numbers() {
 }
 
 #[test]
-fn child_summaries_exclude_parent_text_and_reject_pre_fix_cached_summaries() {
-    let f = Fixture::new().with_fakes();
+fn child_text_excludes_parent_history() {
+    let f = Fixture::new();
     f.codex(ID_B, &fork_records(), 0);
-    let ctx = f.ctx();
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let summary = rt
-        .block_on(trovador::summary::summarize(&ctx, ID_B, None, false, None))
-        .unwrap();
-    assert!(!summary.cached);
-    let prompts = f.prompts("claude");
-    assert_eq!(prompts.len(), 1);
-    assert!(prompts[0].contains("child-only task"));
-    assert!(prompts[0].contains("ASSISTANT: child-only answer"));
-    assert!(!prompts[0].contains("parent-only"));
-
-    let cache = trovador::summary::dir(&ctx).join(format!("codex-{ID_B}.json"));
-    let mut stale = serde_json::to_value(&summary).unwrap();
-    stale["prompt_version"] = json!(1);
-    stale.as_object_mut().unwrap().remove("fork_aware");
-    stale["summary"] = json!("parent-only stale summary");
-    std::fs::write(cache, serde_json::to_vec(&stale).unwrap()).unwrap();
-    let refreshed = rt
-        .block_on(trovador::summary::summarize(&ctx, ID_B, None, false, None))
-        .unwrap();
-    assert!(!refreshed.cached);
-    assert!(!refreshed.summary.contains("parent-only"));
-    assert_eq!(f.prompts("claude").len(), 2);
+    let text = sessions::text(&f.ctx(), ID_B, None, 0).unwrap().text;
+    assert!(text.contains("child-only task"));
+    assert!(text.contains("ASSISTANT: child-only answer"));
+    assert!(!text.contains("parent-only"), "{text}");
 }
 
 fn real_layout_records() -> Vec<Value> {
@@ -311,65 +291,6 @@ fn a_typed_child_message_keeps_item_then_event_then_response_snippet_preference(
             })
         );
     }
-}
-
-#[test]
-fn old_normal_summary_stays_cached_without_spending_provider_tokens() {
-    let f = Fixture::new().with_fakes();
-    f.codex(
-        ID_A,
-        &[
-            codex_meta("/normal", json!("cli")),
-            codex_response("user", "normal task"),
-        ],
-        0,
-    );
-    let ctx = f.ctx();
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let summary = rt
-        .block_on(trovador::summary::summarize(&ctx, ID_A, None, false, None))
-        .unwrap();
-    let mut old = serde_json::to_value(summary).unwrap();
-    old["prompt_version"] = json!(1);
-    old.as_object_mut().unwrap().remove("fork_aware");
-    std::fs::write(
-        trovador::summary::dir(&ctx).join(format!("codex-{ID_A}.json")),
-        serde_json::to_vec(&old).unwrap(),
-    )
-    .unwrap();
-    let cached = rt
-        .block_on(trovador::summary::summarize(&ctx, ID_A, None, false, None))
-        .unwrap();
-    assert!(cached.cached);
-    assert_eq!(f.prompts("claude").len(), 1);
-}
-
-#[test]
-fn spike_import_preserves_normal_summaries_but_rejects_old_fork_summaries() {
-    let f = Fixture::new();
-    let normal = f.codex(ID_A, &[codex_meta("/normal", json!("cli"))], 0);
-    let fork = f.codex(ID_B, &fork_records(), 0);
-    let spike = f.dir.path().join("spike");
-    std::fs::create_dir_all(spike.join("summaries")).unwrap();
-    for (id, path) in [(ID_A, normal), (ID_B, fork)] {
-        let mtime = std::fs::metadata(path)
-            .unwrap()
-            .modified()
-            .unwrap()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        std::fs::write(spike.join("summaries").join(format!("{id}.json")), json!({"session_id":id,"backend":"codex","project":"/work","source_mtime":mtime,"created":"2026-10-08T00:00:00Z","summary":"old spike summary"}).to_string()).unwrap();
-    }
-    for dry_run in [true, false] {
-        let report = trovador::import::import(&f.ctx(), &spike, dry_run).unwrap();
-        assert_eq!(report.summaries_imported, 1);
-        assert_eq!(report.summaries_stale, 1);
-    }
-    let normal = archive::find_session(&f.paths, ID_A, None).unwrap();
-    let fork = archive::find_session(&f.paths, ID_B, None).unwrap();
-    assert!(trovador::summary::cached(&f.ctx(), &normal).is_some());
-    assert!(trovador::summary::cached(&f.ctx(), &fork).is_none());
 }
 
 #[test]
@@ -662,61 +583,4 @@ fn copied_parent_completion_never_persists_a_zero_boundary_before_child_history_
         assert_eq!(indexed[1].2, "child-only answer");
         assert!(indexed.iter().all(|r| !r.2.contains("parent-only")));
     }
-}
-
-#[test]
-fn an_unmarked_summary_for_a_fork_without_a_start_ordinal_stays_cached() {
-    let f = Fixture::new().with_fakes();
-    let mut records = fork_records();
-    records[0]["payload"]
-        .as_object_mut()
-        .unwrap()
-        .remove("subagent_history_start_ordinal");
-    f.codex(ID_B, &records, 0);
-    let ctx = f.ctx();
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let summary = rt
-        .block_on(trovador::summary::summarize(&ctx, ID_B, None, false, None))
-        .unwrap();
-    let mut old = serde_json::to_value(summary).unwrap();
-    old.as_object_mut().unwrap().remove("fork_aware");
-    std::fs::write(
-        trovador::summary::dir(&ctx).join(format!("codex-{ID_B}.json")),
-        serde_json::to_vec(&old).unwrap(),
-    )
-    .unwrap();
-    let reused = rt
-        .block_on(trovador::summary::summarize(&ctx, ID_B, None, false, None))
-        .unwrap();
-    assert!(reused.cached);
-    assert_eq!(f.prompts("claude").len(), 1);
-}
-
-#[test]
-fn spike_summary_import_for_a_fork_without_a_start_ordinal_remains_reusable() {
-    let f = Fixture::new();
-    let mut records = fork_records();
-    records[0]["payload"]
-        .as_object_mut()
-        .unwrap()
-        .remove("subagent_history_start_ordinal");
-    let path = f.codex(ID_B, &records, 0);
-    let spike = f.dir.path().join("spike");
-    std::fs::create_dir_all(spike.join("summaries")).unwrap();
-    let mtime = std::fs::metadata(path)
-        .unwrap()
-        .modified()
-        .unwrap()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    std::fs::write(spike.join("summaries").join(format!("{ID_B}.json")), json!({"session_id":ID_B,"backend":"codex","project":"/work","source_mtime":mtime,"created":"2026-10-08T00:00:00Z","summary":"old spike summary"}).to_string()).unwrap();
-    for dry_run in [true, false] {
-        let report = trovador::import::import(&f.ctx(), &spike, dry_run).unwrap();
-        assert_eq!(report.summaries_imported, 1);
-        assert_eq!(report.summaries_stale, 0);
-    }
-    let e = archive::find_session(&f.paths, ID_B, None).unwrap();
-    let cached = trovador::summary::cached(&f.ctx(), &e).unwrap();
-    assert_eq!(cached.summary, "old spike summary");
 }
