@@ -85,9 +85,10 @@ says otherwise, because a host started from the desktop may not have `~/.cargo/b
 
 The plugin carries the MCP server, not only a skill that runs the CLI, because an agent's
 sandbox usually cannot write `~/.trovador`. Under `codex sandbox -c
-'sandbox_mode="workspace-write"'`, `trovador search` could not update the index
-(2026-11-02). A host starts its MCP servers outside the agent's sandbox, so the server keeps
-the index current.
+'sandbox_mode="workspace-write"'`, `trovador search` cannot update the index
+(2026-11-02); it searches the existing one read-only and says the result is not exhaustive.
+A host starts its MCP servers outside the agent's sandbox, so the server keeps the index
+current.
 
 Codex does not load hooks from plugins (`codex features list` shows `plugin_hooks` as
 removed in 0.165), so on Codex the hook is an entry in `~/.codex/hooks.json`. `init`
@@ -344,6 +345,15 @@ Measured on 5,366 local sessions (12.4 GB of JSONL) on 2026-10-07, release build
 | A search with nothing new to index | 94 to 107 ms |
 | A search that picks up two appended sessions | 234 ms |
 | `sessions list` over every session, index present | 0.09 s (8.8 s without) |
+
+
+When the index cannot be updated, because its directory is not writable (an agent sandbox,
+a read-only filesystem), search reads the index as it is. `exhaustive` is false and `note`
+says why, since sessions written after the last refresh are not covered. With no index, or
+one built by another version, search fails and says to run `trovador index` where it can
+write, or to use the MCP server. The read-only path takes no locks when there is no WAL, so
+it checks after its last read that the file did not change under it and fails with a
+request to retry if it did. On a 482 MB index it took 0.10 s and 17 MB of memory.
 
 ## Session text
 
