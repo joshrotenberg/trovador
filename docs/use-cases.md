@@ -1,5 +1,9 @@
 # Use cases
 
+> **2026-11-02:** trovador is now read-only and runs no model. `ask`, `summarize`, consent,
+> `import`, and `gc` were removed; `sessions text` hands the caller a session's text to
+> summarize itself. The items below are kept as the record of what was decided at the time.
+
 Each case is something that has been done, or tried, with spike or trovador, or that
 comparable tools are used for (see [landscape-2026-10.md](landscape-2026-10.md)). For each:
 who does it, the steps, whether trovador handles it today, and what is missing. Findings
