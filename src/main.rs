@@ -3,12 +3,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
-use trovador::consent::{self, Decision, Level};
+use trovador::Backend;
 use trovador::index::{Order, SearchOpts};
-use trovador::run::{self, AskOpts};
 use trovador::sessions::{self, Ctx, ListOpts};
-use trovador::summary;
-use trovador::{Backend, archive};
 
 /// Local Claude Code and Codex sessions as one MCP server and CLI.
 #[derive(Parser)]
@@ -27,11 +24,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Run the MCP server over stdio.
-    Serve {
-        /// Offer only sessions and search: nothing that runs a model.
-        #[arg(long)]
-        read_only: bool,
-    },
+    Serve,
     /// List, inspect, and read sessions.
     Sessions {
         #[command(subcommand)]
@@ -50,7 +43,7 @@ enum Command {
         regex: bool,
         #[arg(long)]
         backend: Option<Backend>,
-        /// Only sessions whose project path contains this text.
+        /// Only sessions whose project path contains this text (ASCII case-insensitive).
         #[arg(long)]
         project: Option<String>,
         #[arg(long)]
@@ -60,13 +53,13 @@ enum Command {
         /// Include sessions written in the last few minutes (TROVADOR_ACTIVE_WINDOW_S).
         #[arg(long)]
         include_active: bool,
-        /// Include claude -p and codex exec sessions trovador did not start.
+        /// Include claude -p and codex exec sessions.
         #[arg(long)]
         include_automated: bool,
         /// Leave out this session id.
         #[arg(long)]
         exclude_session: Option<String>,
-        /// Only sessions last written at or after this: 2026-10-01, an RFC 3339 time, or 2d.
+        /// Only sessions last written at or after this: 2026-10-01, an RFC 3339 time (Z or numeric offset), or 2d.
         #[arg(long)]
         since: Option<String>,
         /// Only sessions last written before this, in the same forms.
@@ -87,127 +80,13 @@ enum Command {
         #[arg(long)]
         rebuild: bool,
     },
-    /// Run one turn: start a session, or continue or fork one. Costs model tokens.
-    Ask {
-        /// The prompt, or - to read it from stdin.
-        prompt: String,
-        #[arg(long)]
-        backend: Option<Backend>,
-        /// Continue this session (id or unambiguous prefix).
-        #[arg(long)]
-        session: Option<String>,
-        /// With --session, resume its context into a new session (claude only).
-        #[arg(long, requires = "session")]
-        fork: bool,
-        /// Consult about this session: summarize it and ask a new session, on the other
-        /// backend unless --backend says otherwise.
-        #[arg(long, conflicts_with_all = ["session", "fork"])]
-        about: Option<String>,
-        #[arg(long)]
-        cwd: Option<String>,
-        #[arg(long = "add-dir")]
-        add_dirs: Vec<String>,
-        #[arg(long)]
-        model: Option<String>,
-        #[arg(long)]
-        effort: Option<String>,
-        #[arg(long = "allowed-tool")]
-        allowed_tools: Vec<String>,
-        #[arg(long = "disallowed-tool")]
-        disallowed_tools: Vec<String>,
-        #[arg(long)]
-        permission_mode: Option<String>,
-        #[arg(long)]
-        append_system_prompt: Option<String>,
-        #[arg(long)]
-        max_turns: Option<u32>,
-        #[arg(long)]
-        timeout_s: Option<u64>,
-        #[arg(long)]
-        hermetic: bool,
-        /// codex sandbox: read-only (default) or workspace-write.
-        #[arg(long)]
-        sandbox: Option<String>,
-    },
-    /// Summarize a session: cached until the session changes. Costs tokens on a miss.
-    Summarize {
-        id: String,
-        #[arg(long)]
-        backend: Option<Backend>,
-        /// Make a new summary even if a current one is cached.
-        #[arg(long)]
-        force: bool,
-        #[arg(long)]
-        model: Option<String>,
-        /// The character to start from, for the next part of a summary longer than the
-        /// response budget.
-        #[arg(long, default_value_t = 0)]
-        offset: usize,
-    },
-    /// Import consent and summaries from spike (agent-sessions). Reads, never writes, the
-    /// spike directory.
-    Import {
-        /// spike's state directory.
-        #[arg(long)]
-        from: Option<std::path::PathBuf>,
-        /// Report what would be imported without changing anything.
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Remove cached summaries and run-log lines that will never be used again. A dry run
-    /// unless --apply. Consent is never touched.
-    Gc {
-        /// Also remove summaries made, and run-log lines written, longer ago than this.
-        #[arg(long, default_value = "90d")]
-        older_than: String,
-        /// Remove; without this, only report.
-        #[arg(long)]
-        apply: bool,
-    },
-    /// Which existing sessions trovador may continue. Only this command changes it.
-    Consent {
-        #[command(subcommand)]
-        action: ConsentCmd,
-    },
     /// Report paths, limits, the index, and what the archives contain.
     Doctor,
-    /// Handlers for Claude Code and Codex hooks, run by a plugin rather than by hand.
+    /// Handlers for Claude Code and Codex hooks, run by a host's hook configuration rather than by hand.
     Hook {
         #[command(subcommand)]
         event: HookCmd,
     },
-}
-
-#[derive(Subcommand)]
-enum ConsentCmd {
-    /// The current level and counts.
-    Status,
-    /// Whether one session may be continued, and why.
-    Check {
-        id: String,
-        #[arg(long)]
-        backend: Option<Backend>,
-    },
-    /// Allow continuing a session trovador did not start (needs level approved).
-    Approve {
-        id: String,
-        #[arg(long)]
-        backend: Option<Backend>,
-    },
-    /// Never continue this session, whatever the level.
-    Deny {
-        id: String,
-        #[arg(long)]
-        backend: Option<Backend>,
-    },
-    /// Remove an approval or denial.
-    Clear {
-        id: String,
-        #[arg(long)]
-        backend: Option<Backend>,
-    },
-    /// Set the level: deny, spawned, approved, or all.
-    Policy { level: Level },
 }
 
 #[derive(Subcommand)]
@@ -228,7 +107,7 @@ enum SessionsCmd {
     List {
         #[arg(long)]
         backend: Option<Backend>,
-        /// Only sessions whose project path contains this text.
+        /// Only sessions whose project path contains this text (ASCII case-insensitive).
         #[arg(long)]
         project: Option<String>,
         #[arg(long)]
@@ -239,10 +118,10 @@ enum SessionsCmd {
         /// Include sessions started by another session.
         #[arg(long)]
         include_subagents: bool,
-        /// Include claude -p and codex exec sessions trovador did not start.
+        /// Include claude -p and codex exec sessions.
         #[arg(long)]
         include_automated: bool,
-        /// Only sessions last written at or after this: 2026-10-01, an RFC 3339 time, or 2d.
+        /// Only sessions last written at or after this: 2026-10-01, an RFC 3339 time (Z or numeric offset), or 2d.
         #[arg(long)]
         since: Option<String>,
         /// Only sessions last written before this, in the same forms.
@@ -266,11 +145,13 @@ enum SessionsCmd {
         #[arg(long)]
         limit: Option<usize>,
     },
-    /// The rest of an ask reply that was longer than the response budget.
-    Output {
-        /// The run_id from the ask result.
-        run_id: String,
-        /// The character to start from.
+    /// The whole session as plain text, in parts of TROVADOR_RESPONSE_MAX_CHARS, for
+    /// reading or summarizing.
+    Text {
+        id: String,
+        #[arg(long)]
+        backend: Option<Backend>,
+        /// The character to start from, for the next part (truncated.next_offset).
         #[arg(long, default_value_t = 0)]
         offset: usize,
     },
@@ -322,10 +203,9 @@ fn main() -> ExitCode {
     let mut ctx = Ctx::from_env();
     ctx.limits.redact = !cli.no_redact;
     match cli.command {
-        Command::Serve { read_only } => serve(
+        Command::Serve => serve(
             ctx,
             trovador::mcp::ServeOpts {
-                read_only,
                 redact: !cli.no_redact,
             },
         ),
@@ -368,12 +248,14 @@ fn main() -> ExitCode {
                 Ok(t) => print(&t),
                 Err(e) => fail(e),
             },
-            SessionsCmd::Output { run_id, offset } => {
-                match trovador::output::read(&ctx, &run_id, offset) {
-                    Ok(o) => print(&o),
-                    Err(e) => fail(e),
-                }
-            }
+            SessionsCmd::Text {
+                id,
+                backend,
+                offset,
+            } => match sessions::text(&ctx, &id, backend, offset) {
+                Ok(t) => print(&t),
+                Err(e) => fail(e),
+            },
         },
         Command::Search {
             query,
@@ -422,101 +304,6 @@ fn main() -> ExitCode {
             Ok(r) => print(&json!({ "refresh": r, "index": sessions::index_status(&ctx) })),
             Err(e) => fail(e),
         },
-        Command::Ask {
-            prompt,
-            backend,
-            session,
-            fork,
-            about,
-            cwd,
-            add_dirs,
-            model,
-            effort,
-            allowed_tools,
-            disallowed_tools,
-            permission_mode,
-            append_system_prompt,
-            max_turns,
-            timeout_s,
-            hermetic,
-            sandbox,
-        } => {
-            let prompt = if prompt == "-" {
-                let mut s = String::new();
-                if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut s) {
-                    return fail(e);
-                }
-                s
-            } else {
-                prompt
-            };
-            let opts = AskOpts {
-                prompt,
-                backend,
-                session,
-                fork,
-                about,
-                cwd,
-                add_dirs,
-                model,
-                effort,
-                allowed_tools,
-                disallowed_tools,
-                permission_mode,
-                append_system_prompt,
-                max_turns,
-                timeout_s,
-                hermetic,
-                sandbox,
-            };
-            let runtime = match tokio::runtime::Runtime::new() {
-                Ok(r) => r,
-                Err(e) => return fail(e),
-            };
-            match runtime.block_on(run::ask(&ctx, &opts)) {
-                Ok(r) => print(&r),
-                Err(e) => fail(e),
-            }
-        }
-        Command::Consent { action } => consent_cmd(&ctx, action),
-        Command::Gc { older_than, apply } => match humantime::parse_duration(&older_than) {
-            Ok(d) => match trovador::gc::gc(&ctx, d, apply) {
-                Ok(r) => print(&r),
-                Err(e) => fail(e),
-            },
-            Err(_) => fail(format!(
-                "--older-than \"{older_than}\" is not a duration such as 90d or 12w"
-            )),
-        },
-        Command::Summarize {
-            id,
-            backend,
-            force,
-            model,
-            offset,
-        } => {
-            let runtime = match tokio::runtime::Runtime::new() {
-                Ok(r) => r,
-                Err(e) => return fail(e),
-            };
-            match runtime.block_on(summary::summarize(
-                &ctx,
-                &id,
-                backend,
-                force,
-                model.as_deref(),
-            )) {
-                Ok(s) => print(&summary::part(s, offset, &ctx.limits)),
-                Err(e) => fail(e),
-            }
-        }
-        Command::Import { from, dry_run } => {
-            let from = from.unwrap_or_else(trovador::import::default_from);
-            match trovador::import::import(&ctx, &from, dry_run) {
-                Ok(r) => print(&r),
-                Err(e) => fail(e),
-            }
-        }
         Command::Hook {
             event: HookCmd::SessionStart { backend },
         } => {
@@ -528,46 +315,10 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Doctor => {
-            let runtime = match tokio::runtime::Runtime::new() {
-                Ok(r) => r,
-                Err(e) => return fail(e),
-            };
-            let report = runtime.block_on(trovador::doctor::report(&ctx));
+            let report = trovador::doctor::report(&ctx);
             let code = print(&report);
             if report.ok { code } else { ExitCode::FAILURE }
         }
-    }
-}
-
-/// Consent decisions are keyed by the canonical archive id, so a prefix given here is
-/// resolved first, the same way `ask` resolves it.
-fn resolve(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<(Backend, String), String> {
-    archive::find_session(&ctx.paths, id, backend)
-        .map(|e| (e.backend, e.session_id))
-        .map_err(|e| e.to_string())
-}
-
-fn consent_cmd(ctx: &Ctx, action: ConsentCmd) -> ExitCode {
-    let decide = |id: &str, backend, d| match resolve(ctx, id, backend) {
-        Ok((b, id)) => match consent::set_decision(&ctx.paths, b, &id, d) {
-            Ok(c) => print(&c),
-            Err(e) => fail(e),
-        },
-        Err(e) => fail(e),
-    };
-    match action {
-        ConsentCmd::Status => print(&consent::status(&ctx.paths)),
-        ConsentCmd::Check { id, backend } => match resolve(ctx, &id, backend) {
-            Ok((b, id)) => print(&consent::check(&ctx.paths, b, &id)),
-            Err(e) => fail(e),
-        },
-        ConsentCmd::Approve { id, backend } => decide(&id, backend, Some(Decision::Approved)),
-        ConsentCmd::Deny { id, backend } => decide(&id, backend, Some(Decision::Denied)),
-        ConsentCmd::Clear { id, backend } => decide(&id, backend, None),
-        ConsentCmd::Policy { level } => match consent::set_level(&ctx.paths, level) {
-            Ok(s) => print(&s),
-            Err(e) => fail(e),
-        },
     }
 }
 

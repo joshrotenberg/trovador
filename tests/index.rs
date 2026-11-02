@@ -59,6 +59,362 @@ fn search(ctx: &Ctx, query: &str) -> sessions::SearchResult {
     .unwrap()
 }
 
+fn assert_custom_title_on_both_doors(ctx: &Ctx, title: &str) {
+    use trovador::archive::TitleSource;
+    let listed = sessions::list(ctx, &sessions::ListOpts::default()).unwrap();
+    assert_eq!(listed.sessions.len(), 1);
+    assert_eq!(listed.sessions[0].meta.title.as_deref(), Some(title));
+    assert_eq!(
+        listed.sessions[0].meta.title_source,
+        Some(TitleSource::Custom)
+    );
+    let found = search(ctx, "needle");
+    assert_eq!(found.hits.len(), 1);
+    assert_eq!(found.hits[0].row.meta.title.as_deref(), Some(title));
+    assert_eq!(
+        found.hits[0].row.meta.title_source,
+        Some(TitleSource::Custom)
+    );
+    let shown = sessions::show(ctx, ID_A, None).unwrap();
+    assert_eq!(shown.row.meta.title.as_deref(), Some(title));
+    assert_eq!(shown.row.meta.title_source, Some(TitleSource::Custom));
+}
+
+#[test]
+fn an_appended_custom_title_survives_later_ai_titles_and_incremental_refresh() {
+    let f = Fixture::new();
+    let ctx = f.ctx_with(Limits {
+        title_scan_max_bytes: 0,
+        ..limits()
+    });
+    let path = f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "needle"),
+            claude_assistant(&"x".repeat(600 * 1024)),
+            json!({"type": "ai-title", "aiTitle": "generated"}),
+        ],
+        0,
+    );
+    assert_eq!(refresh(&ctx).reindexed, 1);
+    // Issue #36: the old file stays above the fallback budget, but this append fits it.
+    let ctx = f.ctx_with(Limits {
+        title_scan_max_bytes: 350 * 1024,
+        ..limits()
+    });
+    append(
+        &path,
+        &[
+            json!({"type": "custom-title", "customTitle": "typed"}),
+            claude_assistant(&"y".repeat(300 * 1024)),
+            json!({"type": "ai-title", "aiTitle": "later generated"}),
+        ],
+    );
+    // Issue #36: list and show must use the stored offset even before search refreshes it.
+    let listed = sessions::list(&ctx, &sessions::ListOpts::default()).unwrap();
+    assert_eq!(listed.sessions[0].meta.title.as_deref(), Some("typed"));
+    let shown = sessions::show(&ctx, ID_A, None).unwrap();
+    assert_eq!(shown.row.meta.title.as_deref(), Some("typed"));
+    let r = refresh(&ctx);
+    assert_eq!((r.appended, r.reindexed, r.metadata_refreshed), (1, 0, 0));
+    assert_custom_title_on_both_doors(&ctx, "typed");
+    append(
+        &path,
+        &[json!({"type": "ai-title", "aiTitle": "new generated"})],
+    );
+    assert_eq!(refresh(&ctx).appended, 1);
+    assert_custom_title_on_both_doors(&ctx, "typed");
+}
+
+#[test]
+fn old_cached_generated_titles_are_backfilled_without_reprojecting_search_records() {
+    let f = Fixture::new();
+    let ctx = f.ctx_with(Limits {
+        title_scan_max_bytes: 0,
+        ..limits()
+    });
+    f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "needle"),
+            claude_assistant(&"x".repeat(100 * 1024)),
+            json!({"type": "custom-title", "customTitle": "typed"}),
+            claude_assistant(&"y".repeat(500 * 1024)),
+            json!({"type": "ai-title", "aiTitle": "generated"}),
+        ],
+        0,
+    );
+    assert_eq!(refresh(&ctx).reindexed, 1);
+    let index = Index::open(&ctx.paths, &ctx.limits).unwrap();
+    let original_records = index.session_records(Backend::Claude, ID_A).unwrap();
+    drop(index);
+    let conn = rusqlite::Connection::open(trovador::index::db_path(&ctx.paths)).unwrap();
+    let raw: String = conn
+        .query_row("SELECT meta FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    let mut meta: Value = serde_json::from_str(&raw).unwrap();
+    meta["title"] = json!("generated");
+    meta["title_source"] = json!("generated");
+    conn.execute("UPDATE sessions SET meta = ?1", [meta.to_string()])
+        .unwrap();
+    // Issue #36: reproduce the previous schema, where no title state or version existed.
+    conn.execute_batch(
+        "ALTER TABLE sessions DROP COLUMN custom_title;
+                        ALTER TABLE sessions DROP COLUMN title_metadata_version;",
+    )
+    .unwrap();
+    drop(conn);
+    let r = refresh(&ctx);
+    assert_eq!((r.metadata_refreshed, r.reindexed, r.appended), (1, 0, 0));
+    let index = Index::open(&ctx.paths, &ctx.limits).unwrap();
+    assert_eq!(
+        index.session_records(Backend::Claude, ID_A).unwrap(),
+        original_records
+    );
+    assert_custom_title_on_both_doors(&ctx, "typed");
+    assert_eq!(refresh(&ctx).unchanged, 1);
+}
+
+fn simulate_old_build_update(ctx: &Ctx) {
+    let entry = trovador::archive::find_session(&ctx.paths, ID_A, None).unwrap();
+    let meta = trovador::archive::read_meta(&entry, &ctx.limits);
+    let mtime = entry
+        .mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as i64;
+    let bytes = std::fs::read(&entry.file).unwrap();
+    let region = bytes.len().min(4096);
+    let head =
+        trovador::transcript::text_hash(std::str::from_utf8(&bytes[..region]).unwrap()) as i64;
+    let tail = trovador::transcript::text_hash(
+        std::str::from_utf8(&bytes[bytes.len() - region..]).unwrap(),
+    ) as i64;
+    let conn = rusqlite::Connection::open(trovador::index::db_path(&ctx.paths)).unwrap();
+    // Issue #36: the old binary's upsert changes its checkpoint but leaves new columns alone.
+    conn.execute(
+        "UPDATE sessions SET offset = ?1, size = ?1, mtime_ns = ?2, meta = ?3,
+                  head_hash = ?4, tail_hash = ?5",
+        rusqlite::params![
+            entry.size_bytes as i64,
+            mtime,
+            serde_json::to_string(&meta).unwrap(),
+            head,
+            tail
+        ],
+    )
+    .unwrap();
+}
+
+#[test]
+fn an_old_build_resume_cannot_advance_past_an_untracked_custom_title() {
+    let f = Fixture::new();
+    let ctx = f.ctx_with(Limits {
+        title_scan_max_bytes: 0,
+        ..limits()
+    });
+    let path = f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "needle"),
+            claude_assistant(&"x".repeat(600 * 1024)),
+            json!({"type": "ai-title", "aiTitle": "generated"}),
+        ],
+        0,
+    );
+    assert_eq!(refresh(&ctx).reindexed, 1);
+    append(
+        &path,
+        &[
+            json!({"type": "custom-title", "customTitle": "typed"}),
+            json!({"type": "progress", "payload": "y".repeat(300 * 1024)}),
+            json!({"type": "ai-title", "aiTitle": "later generated"}),
+        ],
+    );
+    simulate_old_build_update(&ctx);
+    let index = Index::open(&ctx.paths, &ctx.limits).unwrap();
+    assert!(index.meta_snapshot().is_empty());
+    let r = refresh(&ctx);
+    assert_eq!((r.metadata_refreshed, r.reindexed, r.appended), (1, 0, 0));
+    assert_custom_title_on_both_doors(&ctx, "typed");
+    assert_eq!(refresh(&ctx).unchanged, 1);
+}
+
+#[test]
+fn an_old_build_title_backfill_still_indexes_bytes_appended_after_its_checkpoint() {
+    let f = Fixture::new();
+    let ctx = f.ctx_with(Limits {
+        title_scan_max_bytes: 0,
+        ..limits()
+    });
+    let path = f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "needle"),
+            claude_assistant(&"x".repeat(600 * 1024)),
+            json!({"type": "ai-title", "aiTitle": "generated"}),
+        ],
+        0,
+    );
+    assert_eq!(refresh(&ctx).reindexed, 1);
+    append(
+        &path,
+        &[
+            json!({"type": "custom-title", "customTitle": "typed"}),
+            json!({"type": "progress", "payload": "y".repeat(300 * 1024)}),
+            json!({"type": "ai-title", "aiTitle": "later generated"}),
+        ],
+    );
+    simulate_old_build_update(&ctx);
+    append(
+        &path,
+        &[
+            claude_assistant("continued needle"),
+            json!({"type": "ai-title", "aiTitle": "new generated"}),
+        ],
+    );
+    let r = refresh(&ctx);
+    assert_eq!((r.metadata_refreshed, r.reindexed), (1, 0));
+    assert_custom_title_on_both_doors(&ctx, "typed");
+    let found = search(&ctx, "continued");
+    assert_eq!(found.hits.len(), 1);
+    assert_eq!(found.hits[0].matches[0].excerpt, "[continued] needle");
+    assert_eq!(refresh(&ctx).unchanged, 1);
+}
+
+#[test]
+fn an_old_build_full_reindex_cannot_keep_a_custom_title_from_the_old_file() {
+    use trovador::archive::TitleSource;
+    let f = Fixture::new();
+    let ctx = f.ctx_with(Limits {
+        title_scan_max_bytes: 0,
+        ..limits()
+    });
+    f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "needle"),
+            json!({"type": "custom-title", "customTitle": "obsolete"}),
+            claude_assistant(&"x".repeat(600 * 1024)),
+        ],
+        0,
+    );
+    assert_eq!(refresh(&ctx).reindexed, 1);
+    let path = f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "needle"),
+            claude_assistant(&"y".repeat(700 * 1024)),
+            json!({"type": "ai-title", "aiTitle": "rewritten"}),
+        ],
+        0,
+    );
+    simulate_old_build_update(&ctx);
+    let r = refresh(&ctx);
+    assert_eq!((r.metadata_refreshed, r.reindexed, r.appended), (1, 0, 0));
+    append(
+        &path,
+        &[json!({"type": "ai-title", "aiTitle": "latest generated"})],
+    );
+    assert_eq!(refresh(&ctx).appended, 1);
+    let shown = sessions::show(&ctx, ID_A, None).unwrap();
+    assert_eq!(shown.row.meta.title.as_deref(), Some("latest generated"));
+    assert_eq!(shown.row.meta.title_source, Some(TitleSource::Generated));
+    let listed = sessions::list(&ctx, &sessions::ListOpts::default()).unwrap();
+    assert_eq!(
+        listed.sessions[0].meta.title.as_deref(),
+        Some("latest generated")
+    );
+    let found = search(&ctx, "needle");
+    assert_eq!(
+        found.hits[0].row.meta.title.as_deref(),
+        Some("latest generated")
+    );
+}
+
+#[test]
+fn indexed_and_unindexed_complete_final_custom_titles_without_newlines_agree() {
+    let f = Fixture::new();
+    let ctx = f.ctx();
+    let path = f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "needle"),
+            claude_assistant(&"x".repeat(100 * 1024)),
+            json!({"type": "custom-title", "customTitle": "A"}),
+            claude_assistant(&"y".repeat(500 * 1024)),
+            json!({"type": "custom-title", "customTitle": "B"}),
+        ],
+        0,
+    );
+    let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_len(file.metadata().unwrap().len() - 1).unwrap();
+    let unindexed = sessions::show(&ctx, ID_A, None).unwrap();
+    assert_eq!(unindexed.row.meta.title.as_deref(), Some("B"));
+    assert_eq!(refresh(&ctx).reindexed, 1);
+    assert_custom_title_on_both_doors(&ctx, "B");
+    let conn = rusqlite::Connection::open(trovador::index::db_path(&ctx.paths)).unwrap();
+    let stored: Option<String> = conn
+        .query_row("SELECT custom_title FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(stored.as_deref(), Some("A"));
+    let raw: String = conn
+        .query_row("SELECT meta FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    let persisted: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(persisted["title"], "A");
+    drop(conn);
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(file).unwrap();
+    drop(file);
+    assert_eq!(refresh(&ctx).appended, 1);
+    assert_custom_title_on_both_doors(&ctx, "B");
+}
+
+#[test]
+fn indexed_metadata_does_not_scan_an_append_above_the_title_scan_budget() {
+    let f = Fixture::new();
+    let ctx = f.ctx_with(Limits {
+        title_scan_max_bytes: 1024,
+        ..limits()
+    });
+    let path = f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "needle"),
+            json!({"type": "custom-title", "customTitle": "stored"}),
+        ],
+        0,
+    );
+    assert_eq!(refresh(&ctx).reindexed, 1);
+    append(
+        &path,
+        &[
+            json!({"type": "custom-title", "customTitle": "appended"}),
+            claude_assistant(&"y".repeat(300 * 1024)),
+            json!({"type": "custom-title", "customTitle": "tail"}),
+            json!({"type": "ai-title", "aiTitle": "generated"}),
+        ],
+    );
+    let listed = sessions::list(&ctx, &sessions::ListOpts::default()).unwrap();
+    assert_eq!(listed.sessions[0].meta.title.as_deref(), Some("stored"));
+    let shown = sessions::show(&ctx, ID_A, None).unwrap();
+    assert_eq!(shown.row.meta.title.as_deref(), Some("stored"));
+    assert_eq!(refresh(&ctx).appended, 1);
+    assert_custom_title_on_both_doors(&ctx, "tail");
+}
+
 // --- incremental -----------------------------------------------------------
 
 #[test]

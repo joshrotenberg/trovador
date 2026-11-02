@@ -89,7 +89,7 @@ pub fn row(e: &ArchiveEntry, meta: SessionMeta, limits: &Limits) -> SessionRow {
 pub struct ListOpts {
     /// Only this backend.
     pub backend: Option<Backend>,
-    /// Only sessions whose project path contains this text.
+    /// Only sessions whose project path contains this text (ASCII case-insensitive).
     pub project: Option<String>,
     /// How many to return, newest first.
     pub limit: Option<usize>,
@@ -142,15 +142,10 @@ pub struct ListResult {
 }
 
 /// Whether the automated default leaves this session out.
-fn automated_hidden(
-    meta: &SessionMeta,
-    key: &str,
-    spawned: &std::collections::HashSet<String>,
-) -> bool {
+fn automated_hidden(meta: &SessionMeta) -> bool {
     meta.origin
         .as_deref()
         .is_some_and(|o| AUTOMATED_ORIGINS.contains(&o))
-        && !spawned.contains(key)
 }
 
 /// Newest first. Metadata is read only for sessions that might be returned, and the scan
@@ -164,19 +159,19 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
     let limit = opts.limit.unwrap_or(ctx.limits.list_default).max(1);
     // Metadata from the index where the file has not changed since it was indexed. The
     // index is only read here, never created: listing must not leave state behind.
-    let cached = Index::open_existing(&ctx.paths, &ctx.limits)
+    let index = Index::open_existing(&ctx.paths, &ctx.limits);
+    let cached = index
+        .as_ref()
         .map(|i| i.meta_snapshot())
         .unwrap_or_default();
     let hide_automated = !opts.include_automated && opts.origin.is_none();
-    let spawned: std::collections::HashSet<String> = if hide_automated {
-        crate::consent::spawned_keys(&ctx.paths)
-            .into_iter()
-            .collect()
-    } else {
-        Default::default()
-    };
     let mut hidden_automated = 0;
-    let needle = opts.project.as_deref().filter(|p| !p.is_empty());
+    // Issue #31: match search's SQLite LIKE semantics, which fold ASCII case only.
+    let needle = opts
+        .project
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .map(str::to_ascii_lowercase);
     let mut sessions = Vec::new();
     let mut examined = 0;
     let mut truncated = false;
@@ -193,7 +188,13 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
             continue;
         }
         examined += 1;
-        let meta = cached_meta(&cached, e).unwrap_or_else(|| archive::read_meta(e, &ctx.limits));
+        let meta = cached_meta(&cached, e)
+            .or_else(|| {
+                index
+                    .as_ref()
+                    .and_then(|i| i.read_meta_entry(e, &ctx.limits))
+            })
+            .unwrap_or_else(|| archive::read_meta(e, &ctx.limits));
         if meta.subagent && !opts.include_subagents {
             continue;
         }
@@ -202,17 +203,15 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
         {
             continue;
         }
-        if hide_automated
-            && automated_hidden(&meta, &format!("{}/{}", e.backend, e.session_id), &spawned)
-        {
+        if hide_automated && automated_hidden(&meta) {
             hidden_automated += 1;
             continue;
         }
-        if let Some(n) = needle {
+        if let Some(n) = needle.as_deref() {
             let hit = [meta.cwd.as_deref(), meta.relocated_cwd.as_deref()]
                 .into_iter()
                 .flatten()
-                .any(|p| p.contains(n));
+                .any(|p| p.to_ascii_lowercase().contains(n));
             if !hit {
                 continue;
             }
@@ -239,20 +238,19 @@ pub struct SessionDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_blocked_by: Option<String>,
     pub transcript_resource: String,
-    /// Whether trovador may add a turn to this session, and what would change that.
-    pub consent: crate::consent::Check,
 }
 
 pub fn show(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<SessionDetail, Error> {
     let e = archive::find_session(&ctx.paths, id, backend)?;
-    let meta = archive::read_meta(&e, &ctx.limits);
+    let meta = Index::open_existing(&ctx.paths, &ctx.limits)
+        .and_then(|i| i.read_meta_entry(&e, &ctx.limits))
+        .unwrap_or_else(|| archive::read_meta(&e, &ctx.limits));
     let r = row(&e, meta, &ctx.limits);
     Ok(SessionDetail {
         file: e.file.display().to_string(),
         size_bytes: e.size_bytes,
         resume_blocked_by: archive::resumability(&e, &ctx.limits).reason,
         transcript_resource: format!("{}/transcript", r.resource),
-        consent: crate::consent::check(&ctx.paths, e.backend, &e.session_id),
         row: r,
     })
 }
@@ -281,6 +279,21 @@ pub fn transcript(
         backend: e.backend,
         session_id: e.session_id,
         page,
+    })
+}
+
+/// One part of a session as plain text, for the caller to read or summarize. See
+/// [`crate::text`].
+pub fn text(
+    ctx: &Ctx,
+    id: &str,
+    backend: Option<Backend>,
+    offset: usize,
+) -> Result<crate::text::SessionText, Error> {
+    let e = archive::find_session(&ctx.paths, id, backend)?;
+    crate::text::part(&e, offset, &ctx.limits).map_err(|source| Error::Io {
+        path: e.file.display().to_string(),
+        source,
     })
 }
 
@@ -350,8 +363,17 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         return Err(Error::Query("choose regex or fts, not both".into()));
     }
     if opts.regex {
-        regex::Regex::new(&opts.query).map_err(|e| Error::Query(e.to_string()))?;
+        crate::index::search_regex(&opts.query).map_err(|e| Error::Query(e.to_string()))?;
     }
+    // Issue #28: certainly unmatchable terms must fail even if the index cannot open,
+    // and must not spend the caller's refresh budget before reporting invalid input.
+    if !opts.regex && !opts.fts {
+        crate::index::validate_terms(&opts.query).map_err(|err| match err {
+            IndexError::Query(message) => Error::Query(message),
+            other => other.into(),
+        })?;
+    }
+    let (since, until) = window(opts.since.as_deref(), opts.until.as_deref())?;
     let mut idx = Index::open(&ctx.paths, &ctx.limits)?;
     let refresh = idx.refresh(
         &ctx.paths,
@@ -365,26 +387,30 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         .per_session
         .unwrap_or(ctx.limits.per_session_default)
         .max(1);
-    let (since, until) = window(opts.since.as_deref(), opts.until.as_deref())?;
     let vis = Visibility {
+        archive_roots: Some(
+            [
+                &ctx.paths.claude_archive,
+                &ctx.paths.codex_archive,
+                &ctx.paths.codex_archived,
+            ]
+            .into_iter()
+            .map(|root| root.display().to_string())
+            .collect(),
+        ),
         since_ns: since.map(crate::timespec::ns),
         until_ns: until.map(crate::timespec::ns),
         active_since_ns: (!opts.include_active && ctx.limits.active_window_s > 0).then(|| {
             let cutoff = std::time::SystemTime::now()
                 - Duration::from_secs(ctx.limits.active_window_s as u64);
-            crate::summary::mtime_ns(cutoff)
+            crate::timespec::ns(cutoff)
         }),
         exclude_session: opts.exclude_session.clone().filter(|s| !s.is_empty()),
-        automated_except: (!opts.include_automated && opts.origin.is_none())
-            .then(|| crate::consent::spawned_keys(&ctx.paths)),
+        automated_except: (!opts.include_automated && opts.origin.is_none()).then(Vec::new),
     };
     let raw = idx
         .search(opts, &vis, limit, per_session, ctx.limits.redact)
-        .map_err(|e| match e {
-            // A malformed FTS5 expression is the caller's to fix, not an index failure.
-            IndexError::Sql(err) if opts.fts => Error::Query(err.to_string()),
-            other => other.into(),
-        })?;
+        .map_err(|e| search_error(e, opts))?;
 
     let entries: HashMap<(Backend, String), ArchiveEntry> = archive::scan_all(&ctx.paths)
         .into_iter()
@@ -396,8 +422,11 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         .into_iter()
         .filter_map(|h| {
             let e = entries.get(&(h.backend, h.session_id.clone()))?;
+            // Issue #36: a complete final title without a newline is display metadata,
+            // so search must use the same bounded read as list and show.
+            let meta = idx.read_meta_entry(e, &ctx.limits).unwrap_or(h.meta);
             Some(SearchHit {
-                row: row(e, h.meta, &ctx.limits),
+                row: row(e, meta, &ctx.limits),
                 match_count: h.match_count,
                 matches: h.matches,
             })
@@ -433,7 +462,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         )
     });
     let h = &hidden;
-    let hidden_note = (h.active + h.automated + h.excluded > 0).then(|| {
+    let hidden_note = (h.active + h.automated + h.subagents + h.excluded > 0).then(|| {
         let mut parts = Vec::new();
         if h.active > 0 {
             parts.push(format!(
@@ -444,6 +473,9 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         if h.automated > 0 {
             parts.push(format!("{} automated (include_automated)", h.automated));
         }
+        if h.subagents > 0 {
+            parts.push(format!("{} subagents (include_subagents)", h.subagents));
+        }
         if h.excluded > 0 {
             parts.push("the excluded session".to_string());
         }
@@ -452,10 +484,22 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
             parts.join(", ")
         )
     });
-    let note = [stale_note, unavailable_note, excluded_note, hidden_note]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+    let query_note = if opts.fts && hits.is_empty() {
+        crate::index::fts_absence_note(&opts.query)?
+    } else {
+        None
+    };
+    let query_is_proof = query_note.is_none();
+    let note = [
+        stale_note,
+        unavailable_note,
+        excluded_note,
+        hidden_note,
+        query_note,
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
     let note = (!note.is_empty()).then(|| note.join("; "));
     Ok(SearchResult {
         query: opts.query.clone(),
@@ -470,7 +514,9 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         expression: raw.expression,
         sessions_matched: raw.sessions_matched,
         returned: hits.len(),
-        absence_is_proof: hits.is_empty().then_some(exhaustive && !hidden.any()),
+        absence_is_proof: hits
+            .is_empty()
+            .then_some(exhaustive && !hidden.any() && query_is_proof),
         hidden,
         hits,
         exhaustive,
@@ -509,4 +555,67 @@ pub fn reindex(ctx: &Ctx, rebuild: bool) -> Result<RefreshReport, Error> {
 
 pub fn index_status(ctx: &Ctx) -> Option<index::IndexStatus> {
     Index::open_existing(&ctx.paths, &ctx.limits).and_then(|i| i.status().ok())
+}
+
+fn search_error(error: IndexError, opts: &SearchOpts) -> Error {
+    match error {
+        // A malformed FTS5 expression is the caller's to fix, not an index failure.
+        IndexError::Sql(err) if opts.fts => Error::Query(err.to_string()),
+        // Issue #33: callback failures remain invalid queries if validation diverges.
+        // SQLite loses the callback kind; only tagged regex failures are query errors.
+        IndexError::Sql(err)
+            if opts.regex
+                && (matches!(&err, rusqlite::Error::UserFunctionError(_))
+                    || matches!(
+                        &err,
+                        rusqlite::Error::SqliteFailure(_, Some(message))
+                                if message.starts_with(index::REGEXP_QUERY_ERROR_PREFIX)
+                    )) =>
+        {
+            Error::Query(err.to_string())
+        }
+        other => other.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regex_callback_failures_are_queries_but_database_failures_remain_index_errors() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.create_scalar_function(
+            "regexp",
+            2,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+            |ctx| {
+                let re = ctx.get_or_create_aux(0, |v| {
+                    crate::index::sql_search_regex(v.as_str().unwrap_or(""))
+                })?;
+                Ok(re.is_match(ctx.get_raw(1).as_str().unwrap_or("")))
+            },
+        )
+        .unwrap();
+        let opts = SearchOpts {
+            regex: true,
+            ..Default::default()
+        };
+        let err = conn
+            .query_row("SELECT regexp(?1, 'question')", [r"\w{100}"], |r| {
+                r.get::<_, bool>(0)
+            })
+            .unwrap_err();
+        assert!(matches!(
+            search_error(IndexError::Sql(err), &opts),
+            Error::Query(_)
+        ));
+        let err = conn
+            .query_row("SELECT * FROM missing", [], |r| r.get::<_, bool>(0))
+            .unwrap_err();
+        assert!(matches!(
+            search_error(IndexError::Sql(err), &opts),
+            Error::Index(_)
+        ));
+    }
 }

@@ -1,4 +1,4 @@
-//! The SQLite index at `~/.trovador/index.db`: session metadata plus an FTS5 table of
+//! The SQLite index at `~/.bottega/trovador/index.db`: session metadata plus an FTS5 table of
 //! projected record text, kept current incrementally.
 //!
 //! Records are keyed by rowid `session_row << 32 | record_index`, so one session's records
@@ -22,6 +22,9 @@ use crate::paths::Paths;
 use crate::transcript::{CodexMode, PROJECTION_VERSION, Projection, ProjectionState, RecordKind};
 
 const SCHEMA_VERSION: i64 = 3;
+// Issue #36: title state needs one backfill, but projected text and record indexes agree.
+const TITLE_METADATA_VERSION: i64 = 1;
+const TOKENIZER: &str = "unicode61 remove_diacritics 2";
 
 /// Origins whose text is not indexed. A Codex `guardian` session is an approval reviewer
 /// whose input is a copy of its parent session's history: on 2026-10-07 that was 67 MB of
@@ -31,6 +34,8 @@ const TEXT_EXCLUDED_ORIGINS: &[&str] = &["guardian"];
 
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
+    #[error("invalid query: {0}")]
+    Query(String),
     #[error("index database: {0}")]
     Sql(#[from] rusqlite::Error),
     #[error("index directory {path}: {source}")]
@@ -79,16 +84,18 @@ fn bytes_hash(bytes: &[u8]) -> u64 {
 
 const REGION: u64 = 4096;
 
-/// Hashes of the first 4 KB of a file and of the 4 KB before `offset`. An append leaves
+/// Hashes of the first 4 KB of JSONL and of the 4 KB before its decompressed `offset`. An append leaves
 /// both alone; a rewrite of the indexed part, even one that keeps or grows the size,
 /// changes at least one of them (#25).
 fn region_hashes(path: &std::path::Path, offset: u64) -> Option<(i64, i64)> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut f = std::fs::File::open(path).ok()?;
-    let mut read = |from: u64, len: u64| -> Option<i64> {
-        f.seek(SeekFrom::Start(from)).ok()?;
+    use std::io::Read;
+    let read = |from: u64, len: u64| -> Option<i64> {
         let mut buf = Vec::with_capacity(len as usize);
-        (&mut f).take(len).read_to_end(&mut buf).ok()?;
+        archive::open_archive(path, from)
+            .ok()?
+            .take(len)
+            .read_to_end(&mut buf)
+            .ok()?;
         Some(bytes_hash(&buf) as i64)
     };
     let head = read(0, REGION.min(offset))?;
@@ -121,6 +128,8 @@ pub const AUTOMATED_ORIGINS: &[&str] = &["sdk-cli", "exec", "sdk-ts"];
 /// What a search leaves out by default, beyond the caller's own filters.
 #[derive(Clone, Debug, Default)]
 pub struct Visibility {
+    /// Configured archive roots. Rows outside these are out of scope, not hidden.
+    pub archive_roots: Option<Vec<String>>,
     /// The caller's time window: last written at or after, and before. Not defaults, so
     /// what they leave out is not counted as hidden.
     pub since_ns: Option<i64>,
@@ -140,6 +149,9 @@ pub struct Hidden {
     pub active: usize,
     /// Automated and not started by trovador; `include_automated` shows them.
     pub automated: usize,
+    /// Started by another session; `include_subagents` shows them.
+    #[serde(default)]
+    pub subagents: usize,
     /// The session named by `exclude_session`.
     pub excluded: usize,
     /// Matched in the index but in an archive root that could not be read, so not
@@ -150,7 +162,7 @@ pub struct Hidden {
 
 impl Hidden {
     pub fn any(&self) -> bool {
-        self.active + self.automated + self.excluded + self.unavailable > 0
+        self.active + self.automated + self.subagents + self.excluded + self.unavailable > 0
     }
 }
 
@@ -222,6 +234,17 @@ impl Index {
         self.conn
             .execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
         register_regexp(&self.conn)?;
+        self.conn.create_scalar_function(
+            "under_archive_root",
+            2,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8
+                | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+            |ctx| {
+                let file: String = ctx.get(0)?;
+                let root: String = ctx.get(1)?;
+                Ok(std::path::Path::new(&file).starts_with(root))
+            },
+        )?;
         Ok(())
     }
 
@@ -236,11 +259,57 @@ impl Index {
             })
             .optional()?;
         if version == Some(SCHEMA_VERSION) {
+            // Issue #36: an additive migration preserves FTS records during title backfill.
+            // Serialize the column check with the upgrade because CLI and MCP can open together.
+            let tx = rusqlite::Transaction::new_unchecked(
+                &self.conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            if tx
+                .prepare("SELECT title_metadata_version FROM sessions")
+                .is_err()
+            {
+                tx.execute_batch(
+                    "ALTER TABLE sessions ADD COLUMN title_metadata_version INTEGER NOT NULL DEFAULT 0;
+                     ALTER TABLE sessions ADD COLUMN custom_title TEXT;",
+                )?;
+            }
+            if tx.prepare("SELECT title_offset FROM sessions").is_err() {
+                tx.execute_batch(
+                    "ALTER TABLE sessions ADD COLUMN title_offset INTEGER NOT NULL DEFAULT -1;",
+                )?;
+            }
+            // Issue #35: preserve a known fork boundary across index opens without
+            // rebuilding unrelated sessions just to add the checkpoint column.
+            if tx
+                .prepare("SELECT codex_inherited_end FROM sessions")
+                .is_err()
+            {
+                tx.execute_batch("ALTER TABLE sessions ADD COLUMN codex_inherited_end INTEGER;")?;
+            }
+            // Issues #19 and #34: copy recognition must survive append-only resumes.
+            if tx
+                .prepare("SELECT last_user_filtered_hash FROM sessions")
+                .is_err()
+            {
+                tx.execute_batch(
+                    "ALTER TABLE sessions ADD COLUMN last_user_filtered_hash INTEGER;",
+                )?;
+            }
+            if tx
+                .prepare("SELECT last_user_streams FROM sessions")
+                .is_err()
+            {
+                tx.execute_batch(
+                    "ALTER TABLE sessions ADD COLUMN last_user_streams INTEGER NOT NULL DEFAULT 0;",
+                )?;
+            }
+            tx.commit()?;
             return Ok(());
         }
         // Everything here is derived from the archives, so an unknown schema is rebuilt
         // rather than migrated.
-        self.conn.execute_batch(
+        self.conn.execute_batch(&format!(
             "DROP TABLE IF EXISTS records;
              DROP TABLE IF EXISTS sessions;
              CREATE TABLE sessions (
@@ -265,13 +334,19 @@ impl Index {
                  run_count INTEGER,
                  last_kind TEXT,
                  last_hash INTEGER,
+                 last_user_filtered_hash INTEGER,
+                 last_user_streams INTEGER NOT NULL DEFAULT 0,
+                 title_metadata_version INTEGER NOT NULL DEFAULT 0,
+                 custom_title TEXT,
+                 title_offset INTEGER NOT NULL DEFAULT -1,
+                 codex_inherited_end INTEGER,
                  UNIQUE (backend, session_id)
              );
              CREATE VIRTUAL TABLE records USING fts5(
                  text, kind UNINDEXED, name UNINDEXED,
-                 tokenize = 'unicode61 remove_diacritics 2'
-             );",
-        )?;
+                 tokenize = '{TOKENIZER}'
+             );"
+        ))?;
         let (schema, projection, settings) = built_with(limits);
         for (key, value) in [
             ("schema", schema),
@@ -287,6 +362,56 @@ impl Index {
         Ok(())
     }
 
+    pub(crate) fn read_meta_entry(&self, e: &ArchiveEntry, limits: &Limits) -> Option<SessionMeta> {
+        let stored = self
+            .conn
+            .query_row(
+                "SELECT file, size, mtime_ns, meta, offset, head_hash, tail_hash, custom_title
+             FROM sessions WHERE backend = ?1 AND session_id = ?2 AND title_metadata_version = ?3 AND title_offset = offset",
+                params![e.backend.as_str(), e.session_id, TITLE_METADATA_VERSION],
+                |r| {
+                    Ok(IndexedTitle {
+                        file: r.get(0)?,
+                        size: r.get::<_, i64>(1)? as u64,
+                        mtime: r.get(2)?,
+                        json: r.get(3)?,
+                        offset: r.get::<_, i64>(4)? as u64,
+                        hashes: (r.get(5)?, r.get(6)?),
+                        custom_title: r.get(7)?,
+                    })
+                },
+            )
+            .ok()?;
+        if std::path::Path::new(&stored.file) != e.file {
+            return None;
+        }
+        let mut meta = if stored.size == e.size_bytes && stored.mtime == mtime_ns(e.mtime) {
+            serde_json::from_str(&stored.json).ok()?
+        } else {
+            // Issue #36: an indexed append needs only its new bytes, even before refresh.
+            if archive::is_compressed(&e.file)
+                || stored.size >= e.size_bytes
+                || region_hashes(&e.file, stored.offset) != Some(stored.hashes)
+            {
+                return None;
+            }
+            archive::read_meta_windows(e, limits)
+        };
+        if e.backend == Backend::Claude {
+            let mut title = stored.custom_title;
+            // Issue #36: pending appends and final records without a newline share the
+            // display budget; their titles must not change the persisted checkpoint.
+            if stored.offset < e.size_bytes
+                && e.size_bytes - stored.offset <= limits.title_scan_max_bytes as u64
+            {
+                archive::scan_custom_titles(&e.file, stored.offset, e.size_bytes, &mut title)
+                    .ok()?;
+            }
+            archive::apply_custom_title(&mut meta, title);
+        }
+        Some(meta)
+    }
+
     pub fn path(&self) -> &std::path::Path {
         &self.path
     }
@@ -297,11 +422,11 @@ impl Index {
         let mut out = HashMap::new();
         let Ok(mut stmt) = self
             .conn
-            .prepare("SELECT backend, session_id, size, mtime_ns, meta FROM sessions")
+            .prepare("SELECT backend, session_id, size, mtime_ns, meta FROM sessions WHERE title_metadata_version = ?1 AND title_offset = offset AND (backend != 'claude' OR offset = size)")
         else {
             return out;
         };
-        let rows = stmt.query_map([], |r| {
+        let rows = stmt.query_map([TITLE_METADATA_VERSION], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
@@ -360,6 +485,7 @@ pub struct IndexStatus {
 #[derive(Clone, Debug, Default)]
 pub struct RefreshOpts {
     /// Stop starting new files after this long. Files already started finish.
+    /// Without a budget, also prune out-of-root rows if every root is readable or missing.
     pub budget: Option<Duration>,
 }
 
@@ -373,18 +499,34 @@ pub struct RefreshReport {
     pub appended: usize,
     /// Files indexed from the start: new, rewritten, moved, or from an older projection.
     pub reindexed: usize,
+    /// Files whose title state was backfilled without rebuilding existing text (issue #36).
+    pub metadata_refreshed: usize,
     /// Files the budget ran out before reaching. The index is stale for these.
     pub pending: usize,
     /// Index rows dropped because their file is gone.
     pub removed: usize,
     /// Files that could not be read.
     pub failed: usize,
-    /// Archive roots that could not be read although the index holds sessions from them.
+    /// Archive roots that could not be read although the index holds sessions that
+    /// could belong to them, including out-of-root rows with a different spelling (#29).
     /// Their rows are kept, since an unreadable root says nothing about whether its
     /// sessions still exist, but nothing in them can be checked or returned (#27).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unavailable_roots: Vec<String>,
+    /// Why explicit out-of-root cleanup was skipped, including the blocking roots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup_skipped_reason: Option<String>,
     pub ms: u64,
+}
+
+struct IndexedTitle {
+    file: String,
+    size: u64,
+    mtime: i64,
+    json: String,
+    offset: u64,
+    hashes: (i64, i64),
+    custom_title: Option<String>,
 }
 
 struct StoredRow {
@@ -395,12 +537,15 @@ struct StoredRow {
     mtime_ns: i64,
     text_indexed: bool,
     projection_version: i64,
+    title_metadata_version: i64,
+    title_offset: i64,
     state: ProjectionState,
 }
 
 enum Work {
     Full,
     Resume(i64, ProjectionState),
+    Metadata(i64, ProjectionState),
 }
 
 struct Job {
@@ -412,6 +557,7 @@ struct Done {
     entry: ArchiveEntry,
     meta: SessionMeta,
     text: bool,
+    metadata_refresh: bool,
     /// Where this pass started, to detect another process indexing the same file meanwhile.
     resumed_from: Option<(i64, u64)>,
     records: Vec<(usize, RecordKind, Option<String>, String)>,
@@ -441,16 +587,31 @@ fn kind_str(k: RecordKind) -> &'static str {
 }
 
 fn project(job: Job, limits: &Limits) -> Option<Done> {
-    let meta = archive::read_meta(&job.entry, limits);
+    // Issue #36: projection already reads new lines, so metadata must not scan them again.
+    let mut meta = archive::read_meta_windows(&job.entry, limits);
     let text = text_eligible(&meta);
+    let metadata_refresh = matches!(job.work, Work::Metadata(..));
     let (resume, resumed_from) = match job.work {
-        Work::Resume(id, s) => {
+        Work::Resume(id, s) | Work::Metadata(id, s) => {
             let from = (id, s.offset);
             (Some(s), Some(from))
         }
         Work::Full => (None, None),
     };
     let mut records = Vec::new();
+    let resume = if metadata_refresh {
+        let mut state = resume?;
+        // Issue #36: an old binary can rewrite a file while retaining its previous title.
+        // Backfill from an empty title so a rewrite without custom-title clears that name.
+        state.custom_title = None;
+        if job.entry.backend == Backend::Claude {
+            archive::scan_custom_titles(&job.entry.file, 0, state.offset, &mut state.custom_title)
+                .ok()?;
+        }
+        Some(state)
+    } else {
+        resume
+    };
     let state = if text {
         let mut proj = Projection::for_index(&job.entry, limits, resume).ok()?;
         for r in proj.by_ref() {
@@ -461,19 +622,35 @@ fn project(job: Job, limits: &Limits) -> Option<Done> {
                 records.push((r.index, r.kind, r.name, t));
             }
         }
+        if proj.take_read_error().is_some() {
+            return None;
+        }
         proj.state().clone()
     } else {
+        // Excluded text still needs a decoded checkpoint and validation; disk size
+        // is not a JSONL offset and a damaged compressed stream must count as failed.
+        let offset = if archive::is_compressed(&job.entry.file) {
+            std::io::copy(
+                &mut archive::open_archive(&job.entry.file, 0).ok()?,
+                &mut std::io::sink(),
+            )
+            .ok()?
+        } else {
+            job.entry.size_bytes
+        };
         // Not projected at all: the row only carries metadata.
         ProjectionState {
-            offset: job.entry.size_bytes,
+            offset,
             ..Default::default()
         }
     };
+    archive::apply_custom_title(&mut meta, state.custom_title.clone());
     let hashes = region_hashes(&job.entry.file, state.offset)?;
     Some(Done {
         entry: job.entry,
         meta,
         text,
+        metadata_refresh,
         resumed_from,
         records,
         state,
@@ -486,7 +663,7 @@ impl Index {
         let mut stmt = self.conn.prepare(
             "SELECT id, backend, session_id, file, size, mtime_ns, text_indexed,
                     projection_version, offset, next_index, codex_mode, head_hash, tail_hash,
-                    run_category, run_count, last_kind, last_hash
+                    run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end, last_user_filtered_hash, last_user_streams
              FROM sessions",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -507,12 +684,18 @@ impl Index {
                     mtime_ns: r.get(5)?,
                     text_indexed: r.get::<_, i64>(6)? != 0,
                     projection_version: r.get(7)?,
+                    title_metadata_version: r.get(17)?,
+                    title_offset: r.get(19)?,
                     hashes: (r.get(11)?, r.get(12)?),
                     state: ProjectionState {
                         offset: r.get::<_, i64>(8)? as u64,
+                        codex_inherited_end: r.get::<_, Option<i64>>(20)?.map(|n| n as u64),
                         next_index: r.get::<_, i64>(9)? as usize,
+                        custom_title: r.get(18)?,
                         mode: CodexMode::from_i64(r.get(10)?),
                         run,
+                        last_user_streams: r.get(22)?,
+                        last_user_filtered_hash: r.get::<_, Option<i64>>(21)?.map(|h| h as u64),
                         last_turn: match (
                             r.get::<_, Option<String>>(15)?,
                             r.get::<_, Option<i64>>(16)?,
@@ -558,23 +741,41 @@ impl Index {
                     if s.file == file
                         && s.size == e.size_bytes as i64
                         && s.mtime_ns == mtime_ns(e.mtime)
-                        && s.projection_version == PROJECTION_VERSION =>
+                        && s.projection_version == PROJECTION_VERSION
+                        && s.title_metadata_version == TITLE_METADATA_VERSION
+                        && s.title_offset == s.state.offset as i64 =>
                 {
                     report.unchanged += 1;
                     continue;
                 }
+                Some(s)
+                    if s.file == file
+                        && s.size == e.size_bytes as i64
+                        && s.mtime_ns == mtime_ns(e.mtime)
+                        && s.projection_version == PROJECTION_VERSION =>
+                {
+                    Work::Metadata(s.id, s.state.clone())
+                }
                 // A file continues where the last pass stopped only if it grew and the
                 // bytes it was indexed from are still the same. Growing alone did not prove
                 // that: a rewrite of the same size or larger kept its old rows (#25).
+                // Compressed rollouts are immutable; any change requires full projection.
                 Some(s)
                     if s.file == file
+                        && !archive::is_compressed(&e.file)
                         && s.text_indexed
                         && s.projection_version == PROJECTION_VERSION
                         && e.size_bytes as i64 > s.size
                         && e.size_bytes >= s.state.offset
                         && region_hashes(&e.file, s.state.offset) == Some(s.hashes) =>
                 {
-                    Work::Resume(s.id, s.state.clone())
+                    if s.title_metadata_version == TITLE_METADATA_VERSION
+                        && s.title_offset == s.state.offset as i64
+                    {
+                        Work::Resume(s.id, s.state.clone())
+                    } else {
+                        Work::Metadata(s.id, s.state.clone())
+                    }
                 }
                 _ => Work::Full,
             };
@@ -584,49 +785,88 @@ impl Index {
             });
         }
 
-        // Rows whose file is gone, but only for an archive root that could be read: an
-        // unmounted or unreadable root says nothing about whether its sessions still exist.
+        // Issue #29: search processes can share an index with different archive settings,
+        // so only an explicit, unbudgeted index run may discard out-of-root rows. Paths
+        // are compared as spelled (case-sensitive and lossy), so require every root to
+        // be readable or missing before discarding rows that might use another spelling
+        // of one. A missing provider archive must not block single-provider cleanup.
         let live: std::collections::HashSet<(Backend, String)> = entries
             .iter()
             .map(|e| key(e.backend, &e.session_id))
             .collect();
-        let roots: Vec<(&std::path::Path, bool)> = [
+        let roots: Vec<(&std::path::Path, bool, Option<String>)> = [
             &paths.claude_archive,
             &paths.codex_archive,
             &paths.codex_archived,
         ]
         .into_iter()
-        .map(|r| (r.as_path(), std::fs::read_dir(r).is_ok()))
+        .map(|r| match std::fs::read_dir(r) {
+            Ok(_) => (r.as_path(), true, None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (r.as_path(), false, None),
+            Err(e) => (r.as_path(), false, Some(e.to_string())),
+        })
         .collect();
-        let root_readable = |file: &str| {
+        let blocking_roots: Vec<String> = roots
+            .iter()
+            .filter_map(|(root, _, error)| {
+                error
+                    .as_ref()
+                    .map(|error| format!("{}: {error}", root.display()))
+            })
+            .collect();
+        let remove_out_of_root = opts.budget.is_none() && blocking_roots.is_empty();
+        if opts.budget.is_none() && !blocking_roots.is_empty() {
+            report.cleanup_skipped_reason = Some(format!(
+                "out-of-root cleanup skipped because configured roots could not be read: {}",
+                blocking_roots.join(", ")
+            ));
+        }
+        let has_out_of_root_rows = stored.values().any(|s| {
+            !roots
+                .iter()
+                .any(|(root, _, _)| std::path::Path::new(&s.file).starts_with(root))
+        });
+        let can_remove = |file: &str| {
             roots
                 .iter()
-                .find(|(root, _)| std::path::Path::new(file).starts_with(root))
-                .is_some_and(|(_, ok)| *ok)
+                .find(|(root, _, _)| std::path::Path::new(file).starts_with(root))
+                .map_or(remove_out_of_root, |(_, ok, _)| *ok)
         };
         report.unavailable_roots = roots
             .iter()
-            .filter(|(root, ok)| {
-                !*ok && stored
-                    .values()
-                    .any(|s| std::path::Path::new(&s.file).starts_with(root))
+            .filter(|(root, ok, error)| {
+                // Issue #29: an unreadable root may own out-of-root rows indexed under
+                // another spelling, so search cannot prove absence by filtering them out.
+                !*ok && ((error.is_some() && has_out_of_root_rows)
+                    || stored
+                        .values()
+                        .any(|s| std::path::Path::new(&s.file).starts_with(root)))
             })
-            .map(|(root, _)| root.display().to_string())
+            .map(|(root, _, _)| root.display().to_string())
             .collect();
-        let gone: Vec<i64> = stored
+        let gone: Vec<(i64, &str)> = stored
             .iter()
             .filter(|(k, _)| !live.contains(*k))
-            .filter(|(_, s)| root_readable(&s.file))
-            .map(|(_, s)| s.id)
+            .filter(|(_, s)| can_remove(&s.file))
+            .map(|(_, s)| (s.id, s.file.as_str()))
             .collect();
         if !gone.is_empty() {
-            let tx = self.conn.transaction()?;
-            for id in &gone {
-                delete_records(&tx, *id)?;
-                tx.execute("DELETE FROM sessions WHERE id = ?1", [id])?;
+            let tx = self
+                .conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            for (id, file) in &gone {
+                // Issue #29: the scan's snapshot can precede another process relocating
+                // this row. Delete its records only if its file still matches that snapshot.
+                let removed = tx.execute(
+                    "DELETE FROM sessions WHERE id = ?1 AND file = ?2",
+                    params![id, file],
+                )?;
+                if removed > 0 {
+                    delete_records(&tx, *id)?;
+                    report.removed += removed;
+                }
             }
             tx.commit()?;
-            report.removed = gone.len();
         }
 
         let deadline = opts.budget.map(|b| started + b);
@@ -669,7 +909,9 @@ impl Index {
                     None => report.failed += 1,
                     Some(d) => {
                         let resumed = d.resumed_from.is_some();
+                        let metadata_refresh = d.metadata_refresh;
                         match self.write(d) {
+                            Ok(true) if metadata_refresh => report.metadata_refreshed += 1,
                             Ok(true) if resumed => report.appended += 1,
                             Ok(true) => report.reindexed += 1,
                             Ok(false) => {}
@@ -715,11 +957,13 @@ impl Index {
             .join("\n");
         let meta_json = serde_json::to_string(&d.meta).unwrap_or_else(|_| "{}".into());
         let s = &d.state;
+        // Issue #36: old binaries leave title_offset behind when advancing offset, so
+        // readers can detect that the cached title did not follow the new checkpoint.
         let id: i64 = tx.query_row(
             "INSERT INTO sessions (backend, session_id, file, size, mtime_ns, meta, paths, origin,
                  subagent, text_indexed, projection_version, offset, next_index, codex_mode,
-                 head_hash, tail_hash, run_category, run_count, last_kind, last_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+                 head_hash, tail_hash, run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end, last_user_filtered_hash, last_user_streams)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
              ON CONFLICT (backend, session_id) DO UPDATE SET
                  file = excluded.file, size = excluded.size, mtime_ns = excluded.mtime_ns,
                  meta = excluded.meta, paths = excluded.paths, origin = excluded.origin,
@@ -729,7 +973,13 @@ impl Index {
                  head_hash = excluded.head_hash, tail_hash = excluded.tail_hash,
                  run_category = excluded.run_category,
                  run_count = excluded.run_count, last_kind = excluded.last_kind,
-                 last_hash = excluded.last_hash
+                 last_hash = excluded.last_hash,
+                 title_metadata_version = excluded.title_metadata_version,
+                 custom_title = excluded.custom_title,
+                 title_offset = excluded.title_offset,
+                 codex_inherited_end = excluded.codex_inherited_end,
+                 last_user_filtered_hash = excluded.last_user_filtered_hash,
+                 last_user_streams = excluded.last_user_streams
              RETURNING id",
             params![
                 k.0.as_str(),
@@ -752,6 +1002,12 @@ impl Index {
                 s.run.as_ref().map(|(_, n)| *n as i64),
                 s.last_turn.map(|(k, _)| kind_str(k)),
                 s.last_turn.map(|(_, h)| h as i64),
+                TITLE_METADATA_VERSION,
+                s.custom_title,
+                s.offset as i64,
+                s.codex_inherited_end.map(|n| n as i64),
+                s.last_user_filtered_hash.map(|h| h as i64),
+                s.last_user_streams,
             ],
             |r| r.get(0),
         )?;
@@ -788,6 +1044,22 @@ fn delete_records(tx: &rusqlite::Transaction, id: i64) -> rusqlite::Result<usize
     )
 }
 
+// Issue #33: validation must enforce SQL's regex limits before refreshing the index.
+pub(crate) fn search_regex(pattern: &str) -> std::result::Result<regex::Regex, regex::Error> {
+    regex::RegexBuilder::new(pattern)
+        .case_insensitive(true)
+        .size_limit(1 << 22)
+        .build()
+}
+
+// Issue #33: SQLite loses the callback error kind, so retain its query origin.
+pub(crate) const REGEXP_QUERY_ERROR_PREFIX: &str = "regexp query: ";
+
+pub(crate) fn sql_search_regex(pattern: &str) -> std::io::Result<regex::Regex> {
+    search_regex(pattern)
+        .map_err(|err| std::io::Error::other(format!("{REGEXP_QUERY_ERROR_PREFIX}{err}")))
+}
+
 fn register_regexp(conn: &Connection) -> rusqlite::Result<()> {
     use rusqlite::functions::FunctionFlags;
     conn.create_scalar_function(
@@ -796,11 +1068,8 @@ fn register_regexp(conn: &Connection) -> rusqlite::Result<()> {
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
         |ctx| {
             // Compiled once per statement rather than once per row.
-            let re = ctx.get_or_create_aux(0, |v| -> std::result::Result<_, regex::Error> {
-                regex::RegexBuilder::new(v.as_str().unwrap_or(""))
-                    .case_insensitive(true)
-                    .size_limit(1 << 22)
-                    .build()
+            let re = ctx.get_or_create_aux(0, |v| -> std::io::Result<_> {
+                sql_search_regex(v.as_str().unwrap_or(""))
             })?;
             let text = ctx.get_raw(1).as_str().unwrap_or("");
             Ok(re.is_match(text))
@@ -832,7 +1101,7 @@ pub struct SearchOpts {
     #[serde(default)]
     pub regex: bool,
     pub backend: Option<Backend>,
-    /// Only sessions whose project path contains this text.
+    /// Only sessions whose project path contains this text (ASCII case-insensitive).
     pub project: Option<String>,
     /// Only sessions with this origin.
     pub origin: Option<String>,
@@ -892,6 +1161,14 @@ pub struct RawSearch {
 /// and all are required. Quoting every term keeps punctuation in identifiers from being
 /// read as FTS5 operators.
 pub fn terms_to_fts(query: &str) -> Option<String> {
+    let terms = search_terms(query)
+        .into_iter()
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>();
+    (!terms.is_empty()).then(|| terms.join(" "))
+}
+
+fn search_terms(query: &str) -> Vec<&str> {
     let mut terms = Vec::new();
     let mut rest = query.trim();
     while !rest.is_empty() {
@@ -907,11 +1184,125 @@ pub fn terms_to_fts(query: &str) -> Option<String> {
             }
         };
         if !term.trim().is_empty() {
-            terms.push(format!("\"{}\"", term.trim().replace('"', "\"\"")));
+            terms.push(term.trim());
         }
         rest = tail.trim_start();
     }
-    (!terms.is_empty()).then(|| terms.join(" "))
+    terms
+}
+
+struct QueryTokenizer(Connection);
+
+impl QueryTokenizer {
+    fn new() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        // Issue #28: Rust character categories differ from SQLite's, including PUA
+        // glyphs and combining marks. Share the records tokenizer to avoid guessing.
+        conn.execute_batch(&format!(
+            "CREATE VIRTUAL TABLE tokens USING fts5(text, tokenize = '{TOKENIZER}');
+             CREATE VIRTUAL TABLE vocabulary USING fts5vocab(tokens, 'row');"
+        ))?;
+        Ok(Self(conn))
+    }
+
+    fn has_tokens(&self, text: &str) -> Result<bool> {
+        self.0.execute("DELETE FROM tokens", [])?;
+        self.0
+            .execute("INSERT INTO tokens(text) VALUES (?1)", [text])?;
+        Ok(self
+            .0
+            .query_row("SELECT EXISTS(SELECT 1 FROM vocabulary)", [], |r| r.get(0))?)
+    }
+}
+
+pub fn validate_terms(query: &str) -> Result<()> {
+    let tokenizer = QueryTokenizer::new()?;
+    let terms = search_terms(query);
+    if terms.is_empty() {
+        return Err(IndexError::Query(
+            "query cannot match: no searchable terms remain".into(),
+        ));
+    }
+    for term in terms {
+        if !tokenizer.has_tokens(term)? {
+            return Err(IndexError::Query(format!(
+                "term {term:?} cannot match: the records tokenizer produces no tokens; use regex for punctuation"
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn fts_absence_note(query: &str) -> Result<Option<String>> {
+    let tokenizer = QueryTokenizer::new()?;
+    let mut chars = query.chars().peekable();
+    let mut tokens = Vec::new();
+    let mut tokenless_phrase_or_word = false;
+    while let Some(c) = chars.next() {
+        if c.is_whitespace() {
+            continue;
+        }
+        if c == '"' {
+            let mut phrase = String::new();
+            while let Some(c) = chars.next() {
+                if c == '"' {
+                    if chars.peek() == Some(&'"') {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                phrase.push(c);
+            }
+            tokenless_phrase_or_word |= !tokenizer.has_tokens(&phrase)?;
+            tokens.push(phrase);
+        } else if ":{}()-+*^,".contains(c) {
+            tokens.push(c.to_string());
+        } else {
+            let mut word = c.to_string();
+            while let Some(&c) = chars.peek() {
+                if c.is_whitespace() || "\":{}()-+*^,".contains(c) {
+                    break;
+                }
+                word.push(c);
+                chars.next();
+            }
+            // Issue #28: FTS5 accepts non-ASCII barewords that unicode61 drops.
+            // Operators and column names are syntax, so only search words affect proof.
+            let column_name = chars.clone().find(|c| !c.is_whitespace()) == Some(':');
+            if !column_name && !matches!(word.as_str(), "AND" | "OR" | "NOT" | "NEAR") {
+                tokenless_phrase_or_word |= !tokenizer.has_tokens(word.trim_end_matches('*'))?;
+            }
+            tokens.push(word);
+        }
+    }
+    // Issue #28: these references may be in OR branches or negated filters. They
+    // cannot justify rejecting a valid expression, but make an empty result ambiguous.
+    let unindexed = tokens.iter().enumerate().any(|(i, token)| {
+        if token != ":" || i == 0 {
+            return false;
+        }
+        let columns = if tokens[i - 1] == "}" {
+            let start = tokens[..i - 1]
+                .iter()
+                .rposition(|t| t == "{")
+                .unwrap_or(i - 1);
+            &tokens[start..i - 1]
+        } else {
+            &tokens[i - 1..i]
+        };
+        columns
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case("kind") || c.eq_ignore_ascii_case("name"))
+    });
+    let mut reasons = Vec::new();
+    if unindexed {
+        reasons.push("query references unindexed kind or name columns");
+    }
+    if tokenless_phrase_or_word {
+        reasons.push("query contains a phrase or word with no tokens");
+    }
+    Ok((!reasons.is_empty()).then(|| format!("absence is not proof: {}", reasons.join("; "))))
 }
 
 fn like_escape(s: &str) -> String {
@@ -945,6 +1336,20 @@ impl Index {
 
         let mut filters = vec!["s.text_indexed = 1".to_string()];
         let mut args: Vec<rusqlite::types::Value> = vec![expression.clone().into()];
+        // Issue #29: scope before counting matches or hidden defaults, so another
+        // process's archive rows cannot invalidate this process's absence proof.
+        if let Some(roots) = &vis.archive_roots {
+            let mut scoped = Vec::new();
+            for root in roots {
+                args.push(root.clone().into());
+                scoped.push(format!("under_archive_root(s.file, ?{})", args.len()));
+            }
+            filters.push(if scoped.is_empty() {
+                "0".into()
+            } else {
+                format!("({})", scoped.join(" OR "))
+            });
+        }
         if let Some(b) = opts.backend {
             args.push(b.as_str().to_string().into());
             filters.push(format!("s.backend = ?{}", args.len()));
@@ -957,9 +1362,6 @@ impl Index {
             args.push(o.to_string().into());
             filters.push(format!("s.origin = ?{}", args.len()));
         }
-        if !opts.include_subagents {
-            filters.push("s.subagent = 0".to_string());
-        }
         if let Some(t) = vis.since_ns {
             args.push(t.into());
             filters.push(format!("s.mtime_ns >= ?{}", args.len()));
@@ -970,6 +1372,10 @@ impl Index {
         }
         // The defaults, each kept apart so what it hid can be counted.
         let mut defaults: Vec<(&str, String, rusqlite::types::Value)> = Vec::new();
+        // Issue #15: an uncounted subagent filter made hidden matches look provably absent.
+        if !opts.include_subagents {
+            defaults.push(("subagents", "s.subagent = ?".into(), 0.into()));
+        }
         if let Some(t) = vis.active_since_ns {
             defaults.push(("active", "s.mtime_ns < ?".into(), t.into()));
         }
@@ -1036,6 +1442,7 @@ impl Index {
             match *name {
                 "active" => hidden.active = n as usize,
                 "automated" => hidden.automated = n as usize,
+                "subagents" => hidden.subagents = n as usize,
                 _ => hidden.excluded = n as usize,
             }
         }
@@ -1061,10 +1468,7 @@ impl Index {
              ORDER BY {order_by} LIMIT {per_session}"
         ))?;
         let re = if opts.regex {
-            regex::RegexBuilder::new(&opts.query)
-                .case_insensitive(true)
-                .build()
-                .ok()
+            search_regex(&opts.query).ok()
         } else {
             fts_highlighter(&expression)
         };

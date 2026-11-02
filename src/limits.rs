@@ -11,7 +11,7 @@ use serde::Serialize;
 #[derive(Clone, Debug, Serialize)]
 pub struct Limits {
     /// Ceiling on the content of one response: the characters of transcript records in a
-    /// page, or of model text (an ask reply, a summary). The fields around them are extra.
+    /// page, or of a session's text. The fields around them are extra.
     /// Model text past it is cut, and the response says how to read the rest.
     pub response_max_chars: usize,
     /// Head read steps for session metadata, smallest first. Each step is used only when
@@ -20,6 +20,9 @@ pub struct Limits {
     /// session that opens with attachments was seen with its first user message at byte
     /// 757,435, past spike's 512 KB ceiling.
     pub head_steps: Vec<usize>,
+    /// Unindexed Claude files above this size keep head/tail title metadata. Indexing
+    /// tracks titles incrementally regardless of this fallback scan budget (issue #36).
+    pub title_scan_max_bytes: usize,
     /// Per-record cap in a transcript projection, so one huge message cannot dominate.
     pub record_chars: usize,
     /// Cap for tool results and tool call arguments, which are rarely worth more.
@@ -39,23 +42,6 @@ pub struct Limits {
     pub search_default: usize,
     /// Default number of matching records shown per session.
     pub per_session_default: usize,
-    /// Seconds a Claude turn may run before it is killed.
-    pub claude_timeout_s: usize,
-    /// Seconds a Codex turn may run. Longer than Claude's: spike's 120 s default killed a
-    /// Codex turn between two MCP writes it was making (spike#107).
-    pub codex_timeout_s: usize,
-    /// Nesting depth at which a run is refused. Every session trovador starts can reach
-    /// trovador again, so without a ceiling one prompt could recurse indefinitely.
-    pub max_depth: usize,
-    /// Model for summaries. They read a lot and write little, so a small model.
-    pub summary_model: String,
-    /// Characters of rendered transcript per summary chunk.
-    pub summary_chunk_chars: usize,
-    /// Chunks summarized at most. Past this the first and last halves are kept, which
-    /// bounds the cost of summarizing a very large session.
-    pub summary_max_chunks: usize,
-    /// Provider runs started at once by one operation. Each is a full CLI start.
-    pub fanout: usize,
     /// Seconds within which a session counts as active and is left out of search by
     /// default. The session doing the search is always active, and its own transcript
     /// contains the words it searches for. Zero turns the default off.
@@ -74,6 +60,7 @@ impl Default for Limits {
         Self {
             response_max_chars: 100_000,
             head_steps: vec![64 * 1024, 512 * 1024, 4 * 1024 * 1024],
+            title_scan_max_bytes: 4 * 1024 * 1024,
             record_chars: 4_000,
             tool_chars: 600,
             page_size: 200,
@@ -82,13 +69,6 @@ impl Default for Limits {
             index_budget_ms: 15_000,
             search_default: 20,
             per_session_default: 3,
-            claude_timeout_s: 600,
-            codex_timeout_s: 900,
-            max_depth: 2,
-            summary_model: "haiku".into(),
-            summary_chunk_chars: 250_000,
-            summary_max_chunks: 8,
-            fanout: 3,
             active_window_s: 600,
             index_reasoning: true,
             redact: true,
@@ -128,6 +108,7 @@ impl Limits {
         Self {
             response_max_chars: num("TROVADOR_RESPONSE_MAX_CHARS", d.response_max_chars),
             head_steps,
+            title_scan_max_bytes: num("TROVADOR_TITLE_SCAN_MAX_BYTES", d.title_scan_max_bytes),
             record_chars: num("TROVADOR_RECORD_CHARS", d.record_chars),
             tool_chars: num("TROVADOR_TOOL_CHARS", d.tool_chars),
             page_size: num("TROVADOR_PAGE_SIZE", d.page_size).max(1),
@@ -136,15 +117,6 @@ impl Limits {
             index_budget_ms: num("TROVADOR_INDEX_BUDGET_MS", d.index_budget_ms),
             search_default: num("TROVADOR_SEARCH_DEFAULT", d.search_default).max(1),
             per_session_default: num("TROVADOR_PER_SESSION", d.per_session_default).max(1),
-            claude_timeout_s: num("TROVADOR_CLAUDE_TIMEOUT_S", d.claude_timeout_s).max(1),
-            codex_timeout_s: num("TROVADOR_CODEX_TIMEOUT_S", d.codex_timeout_s).max(1),
-            max_depth: num("TROVADOR_MAX_DEPTH", d.max_depth),
-            summary_model: get("TROVADOR_SUMMARY_MODEL")
-                .filter(|m| !m.trim().is_empty())
-                .unwrap_or(d.summary_model),
-            summary_chunk_chars: num("TROVADOR_SUMMARY_CHUNK_CHARS", d.summary_chunk_chars).max(1),
-            summary_max_chunks: num("TROVADOR_SUMMARY_MAX_CHUNKS", d.summary_max_chunks).max(1),
-            fanout: num("TROVADOR_FANOUT", d.fanout).max(1),
             active_window_s: num("TROVADOR_ACTIVE_WINDOW_S", d.active_window_s),
             index_reasoning: get("TROVADOR_INDEX_REASONING")
                 .map(|v| !matches!(v.trim(), "0" | "false" | "no" | "off"))
@@ -172,6 +144,14 @@ mod tests {
     fn an_unparseable_override_keeps_the_default_instead_of_becoming_zero() {
         let l = Limits::from_lookup(lookup(&[("TROVADOR_PAGE_SIZE", "lots")]));
         assert_eq!(l.page_size, 200);
+    }
+
+    #[test]
+    fn the_title_scan_budget_can_be_overridden_or_disabled() {
+        let l = Limits::from_lookup(lookup(&[("TROVADOR_TITLE_SCAN_MAX_BYTES", "12345")]));
+        assert_eq!(l.title_scan_max_bytes, 12345);
+        let l = Limits::from_lookup(lookup(&[("TROVADOR_TITLE_SCAN_MAX_BYTES", "0")]));
+        assert_eq!(l.title_scan_max_bytes, 0);
     }
 
     #[test]

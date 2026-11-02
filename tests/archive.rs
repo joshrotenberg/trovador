@@ -134,6 +134,157 @@ fn a_title_rewritten_past_the_head_read_comes_from_the_tail() {
 }
 
 #[test]
+fn a_custom_title_between_head_and_tail_outranks_later_generated_titles() {
+    let f = Fixture::new();
+    let filler = claude_assistant(&"x".repeat(100 * 1024));
+    let records = vec![
+        claude_user("/w", "hello"),
+        filler.clone(),
+        json!({"type": "custom-title", "customTitle": "My Typed Title"}),
+        filler.clone(),
+        filler.clone(),
+        filler.clone(),
+        filler.clone(),
+        filler,
+        json!({"type": "ai-title", "aiTitle": "generated title"}),
+    ];
+    let path = f.claude("-w", ID_A, &records, 0);
+    let body = std::fs::read_to_string(path).unwrap();
+    let custom_at = body.find("custom-title").unwrap();
+    assert!(custom_at > 64 * 1024);
+    assert!(custom_at < body.len() - 256 * 1024);
+    let d = sessions::show(&f.ctx(), ID_A, None).unwrap();
+    assert_eq!(d.row.meta.title.as_deref(), Some("My Typed Title"));
+    assert_eq!(d.row.meta.title_source, Some(TitleSource::Custom));
+}
+
+#[test]
+fn custom_titles_at_or_across_the_head_boundary_are_not_lost() {
+    for head_bytes in [64 * 1024, 64 * 1024 + 20] {
+        let f = Fixture::new();
+        let user = claude_user("/w", "hello");
+        let filler = claude_assistant("");
+        let padding = 64 * 1024 - user.to_string().len() - filler.to_string().len() - 2;
+        let records = vec![
+            user,
+            claude_assistant(&"x".repeat(padding)),
+            json!({"type": "custom-title", "customTitle": "boundary title"}),
+            claude_assistant(&"y".repeat(600 * 1024)),
+            json!({"type": "ai-title", "aiTitle": "generated"}),
+        ];
+        f.claude("-w", ID_A, &records, 0);
+        let ctx = f.ctx_with(trovador::Limits {
+            head_steps: vec![head_bytes],
+            ..limits()
+        });
+        let d = sessions::show(&ctx, ID_A, None).unwrap();
+        assert_eq!(d.row.meta.title.as_deref(), Some("boundary title"));
+        assert_eq!(d.row.meta.title_source, Some(TitleSource::Custom));
+    }
+}
+
+#[test]
+fn a_custom_title_crossing_the_tail_start_outranks_a_later_ai_title() {
+    let f = Fixture::new();
+    let custom = json!({"type": "custom-title", "customTitle": "crossing title"});
+    let ai = json!({"type": "ai-title", "aiTitle": "generated"});
+    let suffix_bytes = 256 * 1024 - (custom.to_string().len() + 1) + 20;
+    let padding =
+        suffix_bytes - (claude_assistant("").to_string().len() + 1) - (ai.to_string().len() + 1);
+    let path = f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "hello"),
+            claude_assistant(&"x".repeat(100 * 1024)),
+            custom.clone(),
+            claude_assistant(&"y".repeat(padding)),
+            ai,
+        ],
+        0,
+    );
+    let body = std::fs::read_to_string(path).unwrap();
+    let start = body.find(&custom.to_string()).unwrap();
+    let tail_start = body.len() - 256 * 1024;
+    assert!(start > 64 * 1024);
+    assert!(start < tail_start && tail_start < start + custom.to_string().len());
+    let d = sessions::show(&f.ctx(), ID_A, None).unwrap();
+    assert_eq!(d.row.meta.title.as_deref(), Some("crossing title"));
+    assert_eq!(d.row.meta.title_source, Some(TitleSource::Custom));
+}
+
+#[test]
+fn a_later_custom_title_in_the_tail_replaces_a_custom_title_in_the_gap() {
+    let f = Fixture::new();
+    f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "hello"),
+            claude_assistant(&"x".repeat(100 * 1024)),
+            json!({"type": "custom-title", "customTitle": "A"}),
+            claude_assistant(&"y".repeat(500 * 1024)),
+            json!({"type": "custom-title", "customTitle": "B"}),
+            json!({"type": "ai-title", "aiTitle": "generated"}),
+        ],
+        0,
+    );
+    let d = sessions::show(&f.ctx(), ID_A, None).unwrap();
+    assert_eq!(d.row.meta.title.as_deref(), Some("B"));
+    assert_eq!(d.row.meta.title_source, Some(TitleSource::Custom));
+}
+
+#[test]
+fn an_unindexed_file_above_the_title_scan_budget_keeps_head_tail_metadata() {
+    let f = Fixture::new();
+    let ctx = f.ctx_with(trovador::Limits {
+        title_scan_max_bytes: 300 * 1024,
+        ..limits()
+    });
+    let path = f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "hello"),
+            claude_assistant(&"x".repeat(100 * 1024)),
+            json!({"type": "custom-title", "customTitle": "in the gap"}),
+            claude_assistant(&"y".repeat(500 * 1024)),
+            json!({"type": "ai-title", "aiTitle": "generated"}),
+        ],
+        0,
+    );
+    let e = archive::find_session(&ctx.paths, ID_A, None).unwrap();
+    assert!(e.size_bytes > ctx.limits.title_scan_max_bytes as u64);
+    let d = sessions::show(&ctx, ID_A, None).unwrap();
+    assert_eq!(d.row.meta.title.as_deref(), Some("generated"));
+    assert_eq!(d.row.meta.title_source, Some(TitleSource::Generated));
+    assert!(!ctx.paths.home.join("index.db").exists());
+    assert!(path.exists());
+}
+
+#[test]
+fn a_complete_final_custom_title_without_a_newline_wins_over_an_earlier_title() {
+    let f = Fixture::new();
+    let path = f.claude(
+        "-w",
+        ID_A,
+        &[
+            claude_user("/w", "hello"),
+            claude_assistant(&"x".repeat(100 * 1024)),
+            json!({"type": "custom-title", "customTitle": "A"}),
+            claude_assistant(&"y".repeat(500 * 1024)),
+            json!({"type": "custom-title", "customTitle": "B"}),
+        ],
+        0,
+    );
+    let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_len(file.metadata().unwrap().len() - 1).unwrap();
+    let d = sessions::show(&f.ctx(), ID_A, None).unwrap();
+    assert_eq!(d.row.meta.title.as_deref(), Some("B"));
+    assert_eq!(d.row.meta.title_source, Some(TitleSource::Custom));
+}
+
+#[test]
 fn a_guardian_codex_session_is_marked_as_a_subagent_with_its_parent() {
     let f = Fixture::new();
     f.codex(
@@ -281,10 +432,98 @@ fn a_session_over_the_resume_ceiling_says_why_it_cannot_resume() {
     f.claude("-w", ID_A, &[claude_user("/w", &"z".repeat(950_000))], 0);
     let d = sessions::show(&f.ctx(), ID_A, None).unwrap();
     assert!(!d.row.resumable);
-    assert!(d.resume_blocked_by.unwrap().contains("ask with about"));
+    assert!(
+        d.resume_blocked_by
+            .unwrap()
+            .contains("read it with sessions action=text")
+    );
 }
 
 // --- transcripts -----------------------------------------------------------
+
+#[test]
+fn a_claude_snippet_never_uses_a_compact_summary_as_the_typed_prompt() {
+    for prompt in [None, Some("later typed prompt")] {
+        let f = Fixture::new();
+        let mut records = vec![
+            claude_user("/w", "<command-name>/compact</command-name>"),
+            json!({"type": "user", "isMeta": true,
+                "message": {"content": "Continue from where you left off."}}),
+            json!({"type": "user", "isCompactSummary": true,
+                "message": {"content": "generated summary"}}),
+        ];
+        if let Some(text) = prompt {
+            records.push(claude_user("/w", text));
+        }
+        f.claude("-w", ID_A, &records, 0);
+        let e = archive::find_session(&f.paths, ID_A, None).unwrap();
+        let meta = archive::read_meta(&e, &f.ctx().limits);
+        assert_eq!(meta.snippet.as_deref(), prompt);
+    }
+}
+
+#[test]
+fn meta_and_compact_summary_records_are_not_user_turns() {
+    let f = Fixture::new();
+    let mut records = vec![claude_user("/w", "real user prompt")];
+    for content in [
+        json!("generated context"),
+        json!([{"type": "text", "text": "generated context"}]),
+    ] {
+        records.push(json!({"type": "user", "isMeta": true,
+            "message": {"content": content}}));
+        records.push(json!({"type": "user", "isCompactSummary": true,
+            "message": {"content": content}}));
+        records.push(
+            json!({"type": "user", "isCompactSummary": true, "isMeta": true,
+            "message": {"content": content}}),
+        );
+    }
+    records.push(
+        json!({"type": "user", "isMeta": false, "isCompactSummary": false,
+        "message": {"content": [{"type": "text", "text": "another user prompt"},
+            {"type": "tool_result", "content": "tool output"}]}}),
+    );
+    for content in [
+        json!(""),
+        json!(" \n\t"),
+        json!([{"type": "image", "source": {}}]),
+        json!([{"type": "text", "text": "  "}]),
+    ] {
+        records.push(json!({"type": "user", "isCompactSummary": true,
+            "message": {"content": content}}));
+    }
+    f.claude("-w", ID_A, &records, 0);
+    let t = sessions::transcript(&f.ctx(), ID_A, None, 0, None).unwrap();
+    assert_eq!(
+        kinds(&t),
+        vec![
+            (RecordKind::User, "real user prompt".into()),
+            (RecordKind::Omitted, "meta".into()),
+            (RecordKind::System, "generated context".into()),
+            (RecordKind::System, "generated context".into()),
+            (RecordKind::Omitted, "meta".into()),
+            (RecordKind::System, "generated context".into()),
+            (RecordKind::System, "generated context".into()),
+            (RecordKind::User, "another user prompt".into()),
+            (RecordKind::ToolResult, "tool output".into()),
+            (RecordKind::Omitted, "compact_summary".into()),
+        ]
+    );
+    for index in [1, 4] {
+        assert_eq!(t.page.records[index].name.as_deref(), Some("meta"));
+        assert_eq!(t.page.records[index].count, Some(1));
+        assert_eq!(t.page.records[index].text, None);
+    }
+    for index in [2, 3, 5, 6] {
+        assert_eq!(
+            t.page.records[index].name.as_deref(),
+            Some("compact_summary")
+        );
+    }
+    assert_eq!(t.page.records[9].text, None);
+    assert_eq!(t.page.records[9].count, Some(4));
+}
 
 #[test]
 fn a_current_codex_turn_is_projected_once_not_once_per_stream() {

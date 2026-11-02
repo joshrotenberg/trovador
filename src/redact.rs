@@ -100,17 +100,70 @@ pub fn redact_str(text: &str) -> Cow<'_, str> {
     out
 }
 
-/// Redacts every string in a JSON value in place. Object keys are left alone: they are
-/// trovador's field names, not session content.
+/// A key that names a secret: one ending in a secret word, optionally plural (`DB_PASSWORD`,
+/// `apiKey`, `client_secret`, `tokens`). A key with a word after it describes a secret
+/// rather than holding one (`token_type`, `secret_name`, `private_key_path`, `tokenizer`),
+/// and blanking those broke schemas for no gain (found in review).
+fn names_a_secret(key: &str) -> bool {
+    static NAME: OnceLock<Regex> = OnceLock::new();
+    NAME.get_or_init(|| {
+        Regex::new(
+            r"(?i)(?:secret|token|password|passwd|api[_-]?key|access[_-]?key|private[_-]?key)s?$",
+        )
+        .expect("secret name pattern")
+    })
+    .is_match(key)
+}
+
+/// Whether a string under a secret-named key is redacted whole: the assignment rule's
+/// exceptions, so a count, a short word, a sentence, or an earlier redaction is kept.
+fn looks_like_a_value(s: &str) -> bool {
+    s.chars().count() >= 6
+        && !s.chars().all(|c| c.is_ascii_digit())
+        && !s.chars().any(char::is_whitespace)
+        && !s.starts_with("[redacted:")
+}
+
+/// Redacts every string in a JSON value in place, and every object key.
+///
+/// JSON keeps a name and its value in separate strings, so the assignment rule, which needs
+/// `NAME=value` in one string, never saw `{"DB_PASSWORD": "hunter2hunter2"}`. Every string
+/// under a key that names a secret, including inside arrays and objects below it, is
+/// therefore redacted whole, with the rule's exceptions (see `looks_like_a_value`). Keys are
+/// redacted too, since JSON a worker wrote can use a token as a key (found in review of
+/// tosi's result redaction). trovador's own field names match no rule.
 pub fn redact_value(v: &mut Value) {
+    redact_within(v, false);
+}
+
+fn redact_within(v: &mut Value, under_secret: bool) {
     match v {
+        Value::String(s) if under_secret && looks_like_a_value(s) => {
+            *s = "[redacted:assignment]".to_string();
+        }
         Value::String(s) => {
             if let Cow::Owned(r) = redact_str(s) {
                 *s = r;
             }
         }
-        Value::Array(items) => items.iter_mut().for_each(redact_value),
-        Value::Object(map) => map.values_mut().for_each(redact_value),
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| redact_within(item, under_secret)),
+        Value::Object(map) => {
+            for (key, mut value) in std::mem::take(map) {
+                redact_within(&mut value, under_secret || names_a_secret(&key));
+                let mut key = redact_str(&key).into_owned();
+                // Two keys can redact to the same text; neither value may be lost.
+                if map.contains_key(&key) {
+                    let base = key.clone();
+                    key = (2..)
+                        .map(|n| format!("{base} ({n})"))
+                        .find(|k| !map.contains_key(k))
+                        .expect("an unused key");
+                }
+                map.insert(key, value);
+            }
+        }
         _ => {}
     }
 }
@@ -224,15 +277,60 @@ mod tests {
     }
 
     #[test]
-    fn redacting_a_value_changes_strings_but_never_keys() {
+    fn a_value_is_redacted_by_its_key_and_keys_are_redacted_too() {
+        let key = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123";
         let mut v = serde_json::json!({
-            "OPENAI_API_KEY": "fine as a key",
+            "env": {"DB_PASSWORD": "hunter2hunter2", "STRIPE_SECRET": "rk_live_abc123",
+                    "api_key": "short", "max_tokens": 4000, "input_tokens": "123456",
+                    "clientSecret": "abc123def456", "password_policy": "min 12 chars"},
+            "tokens": ["hunter2hunter2", {"value": "abc123def456"}],
+            "described": {"token_type": "Bearer", "secret_type": "aws_access_key",
+                          "private_key_path": "/home/u/.ssh/id_ed25519",
+                          "tokenizer": "cl100k_base", "secret_name": "prod/db",
+                          "note": "the password is in the vault"},
             "records": [{"text": "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz"}],
+            "found": {key: "config.toml", "sk-ant-api03-zyxwvutsrqponmlkjihgfedcba9876": "other.toml"},
             "n": 3
         });
         redact_value(&mut v);
-        assert_eq!(v["OPENAI_API_KEY"], "fine as a key");
+        assert_eq!(v["env"]["DB_PASSWORD"], "[redacted:assignment]");
+        assert_eq!(v["env"]["STRIPE_SECRET"], "[redacted:assignment]");
+        assert_eq!(v["env"]["api_key"], "short", "too short to be a secret");
+        assert_eq!(v["env"]["max_tokens"], 4000);
+        assert_eq!(v["env"]["input_tokens"], "123456", "all digits");
+        assert_eq!(v["env"]["clientSecret"], "[redacted:assignment]");
+        assert_eq!(v["env"]["password_policy"], "min 12 chars");
+        assert_eq!(v["tokens"][0], "[redacted:assignment]");
+        assert_eq!(v["tokens"][1]["value"], "[redacted:assignment]");
+        let described = serde_json::json!({"token_type": "Bearer", "secret_type": "aws_access_key",
+            "private_key_path": "/home/u/.ssh/id_ed25519", "tokenizer": "cl100k_base",
+            "secret_name": "prod/db", "note": "the password is in the vault"});
+        assert_eq!(
+            v["described"], described,
+            "keys that describe a secret keep their values"
+        );
         assert_eq!(v["records"][0]["text"], "OPENAI_API_KEY=[redacted:openai]");
         assert_eq!(v["n"], 3);
+        let found = v["found"].as_object().unwrap();
+        assert!(
+            !serde_json::to_string(found).unwrap().contains("sk-ant"),
+            "{found:?}"
+        );
+        let mut values: Vec<&str> = found.values().map(|x| x.as_str().unwrap()).collect();
+        values.sort();
+        assert_eq!(
+            values,
+            ["config.toml", "other.toml"],
+            "colliding keys keep both values"
+        );
+    }
+
+    #[test]
+    fn trovadors_own_field_names_are_left_alone() {
+        let mut v = serde_json::json!({"session_id": "a1", "next_offset": 3,
+            "usage": {"cache_creation_input_tokens": 24897, "output_tokens": 470}});
+        let before = v.clone();
+        redact_value(&mut v);
+        assert_eq!(v, before);
     }
 }

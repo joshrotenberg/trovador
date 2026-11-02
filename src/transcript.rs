@@ -9,17 +9,16 @@
 //! Files are streamed line by line. Codex sessions over 370 MB exist, so nothing here reads
 //! a whole file into memory, and a page stops reading once it is full.
 
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 
 /// Bumped whenever the projection changes what it emits, which invalidates every index row.
-pub const PROJECTION_VERSION: i64 = 4;
+pub const PROJECTION_VERSION: i64 = 9;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::archive::{ArchiveEntry, Backend, block_text};
+use crate::archive::{ArchiveEntry, Backend, block_text, open_archive};
 use crate::limits::Limits;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -104,6 +103,19 @@ fn str_at<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 fn project_claude(r: &Value, limits: &Limits, out: &mut Vec<Draft>) {
     let (rc, tc) = (limits.record_chars, limits.tool_chars);
     match str_at(r, "type") {
+        // Issue #38: client-generated context is not a user turn. Keep compact
+        // summaries readable even when Claude also marks them as meta.
+        Some("user") if r.get("isCompactSummary").and_then(Value::as_bool) == Some(true) => {
+            let text = block_text(r.pointer("/message/content").unwrap_or(&Value::Null));
+            out.push(if text.trim().is_empty() {
+                Draft::omitted("compact_summary")
+            } else {
+                Draft::named(RecordKind::System, "compact_summary", cap(&text, rc))
+            });
+        }
+        Some("user") if r.get("isMeta").and_then(Value::as_bool) == Some(true) => {
+            out.push(Draft::omitted("meta"));
+        }
         Some("user") => match r.pointer("/message/content") {
             Some(Value::String(s)) => out.push(Draft::new(RecordKind::User, cap(s, rc))),
             Some(Value::Array(blocks)) => {
@@ -255,10 +267,9 @@ pub(crate) fn project_codex(r: &Value, mode: CodexMode, limits: &Limits, out: &m
             if mode == CodexMode::Events
                 && let Some(m) = str_at(p, "message")
             {
-                if is_injected(m) {
-                    out.push(Draft::omitted("injected_context"));
-                } else {
-                    out.push(Draft::new(RecordKind::User, cap(m, rc)));
+                match user_text(m) {
+                    Some(text) => out.push(Draft::new(RecordKind::User, cap(&text, rc))),
+                    None => out.push(Draft::omitted("injected_context")),
                 }
             }
         }
@@ -270,7 +281,9 @@ pub(crate) fn project_codex(r: &Value, mode: CodexMode, limits: &Limits, out: &m
             }
         }
         (_, Some("message")) => {
-            if mode != CodexMode::Responses {
+            if mode != CodexMode::Responses
+                && !(mode == CodexMode::Items && str_at(p, "role") == Some("user"))
+            {
                 return;
             }
             let content = p.get("content").unwrap_or(&Value::Null);
@@ -283,6 +296,8 @@ pub(crate) fn project_codex(r: &Value, mode: CodexMode, limits: &Limits, out: &m
                 if typed.trim().is_empty() {
                     if !block_text(content).trim().is_empty() {
                         out.push(Draft::omitted("injected_context"));
+                    } else {
+                        out.push(Draft::omitted("message"));
                     }
                 } else {
                     out.push(Draft::new(RecordKind::User, cap(&typed, rc)));
@@ -667,16 +682,41 @@ fn is_injected(text: &str) -> bool {
     t.starts_with('<') || t.starts_with("# AGENTS.md instructions")
 }
 
+fn user_text(text: &str) -> Option<String> {
+    // Issue #37: question replies carry user decisions inside a client wrapper. Only
+    // decode this exact envelope so other injected context remains omitted.
+    if let Some(payload) = text
+        .trim()
+        .strip_prefix("<send_user_message_question_reply>")
+    {
+        let payload = payload.strip_suffix("</send_user_message_question_reply>")?;
+        let replies: Vec<Value> = serde_json::from_str(payload).ok()?;
+        let answers: Vec<String> = replies
+            .iter()
+            .filter_map(|reply| {
+                let answer = reply.get("answer")?.as_str()?;
+                Some(match reply.get("question").and_then(Value::as_str) {
+                    Some(question) => format!("{question} → {answer}"),
+                    None => answer.to_owned(),
+                })
+            })
+            .collect();
+        return (!answers.is_empty()).then(|| answers.join("\n"));
+    }
+    (!is_injected(text)).then(|| text.to_owned())
+}
+
 /// The blocks of a message a person typed, joined.
 fn typed_text(content: &Value) -> String {
     match content {
         Value::Array(blocks) => blocks
             .iter()
             .filter_map(|b| b.get("text").and_then(Value::as_str))
-            .filter(|t| !t.trim().is_empty() && !is_injected(t))
+            .filter(|t| !t.trim().is_empty())
+            .filter_map(user_text)
             .collect::<Vec<_>>()
-            .join(" "),
-        Value::String(s) if !is_injected(s) => s.clone(),
+            .concat(),
+        Value::String(s) => user_text(s).unwrap_or_default(),
         _ => String::new(),
     }
 }
@@ -704,16 +744,24 @@ fn search_queries(action: &Value, outer: &Value) -> String {
 /// and assign exactly the record indexes a full read would.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectionState {
-    /// Bytes consumed, always at a line boundary.
+    /// Decompressed bytes consumed, always at a line boundary.
     pub offset: u64,
+    /// Issue #35: a known byte boundary survives index resumes without rescanning history.
+    pub codex_inherited_end: Option<u64>,
     pub next_index: usize,
+    /// Issue #36: retain typed titles across resumes without rereading the old transcript.
+    pub custom_title: Option<String>,
     pub mode: CodexMode,
     /// An omitted run still open at `offset`. A full read would merge records appended
     /// after it into the same run, so it is carried rather than flushed.
     pub run: Option<(String, usize)>,
-    /// The last user or assistant record emitted, as its kind and a hash of its text, so a
-    /// copy of it arriving at a Codex stream switch can be recognised after a resume too.
+    /// The last turn eligible for a different-stream copy, with a hash of concatenated source
+    /// text for users and projected text for assistants. Persisted across index resumes.
     pub last_turn: Option<(RecordKind, u64)>,
+    /// Clients may add injected blocks to just one copy, so retain its filtered hash too.
+    pub last_user_filtered_hash: Option<u64>,
+    /// Each stream can contribute one copy, including across an index resume.
+    pub last_user_streams: u8,
 }
 
 /// FNV-1a, 64-bit. Stable across Rust versions and platforms, unlike the std hasher,
@@ -727,14 +775,59 @@ pub fn text_hash(s: &str) -> u64 {
     h
 }
 
+fn codex_user_hash(r: &Value, filtered: bool) -> Option<u64> {
+    let p = r.get("payload").unwrap_or(r);
+    let content = match str_at(p, "type") {
+        Some("message") if str_at(p, "role") == Some("user") => p.get("content")?,
+        Some("item_completed")
+            if p.pointer("/item/type").and_then(Value::as_str) == Some("UserMessage") =>
+        {
+            p.pointer("/item/content")?
+        }
+        Some("user_message") => {
+            let text = str_at(p, "message")?;
+            return Some(text_hash(&if filtered {
+                user_text(text).unwrap_or_default()
+            } else {
+                text.to_owned()
+            }));
+        }
+        _ => return None,
+    };
+    let text = match content {
+        Value::String(s) => {
+            if filtered {
+                user_text(s).unwrap_or_default()
+            } else {
+                s.clone()
+            }
+        }
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|b| str_at(b, "text"))
+            .filter_map(|text| {
+                if filtered {
+                    user_text(text)
+                } else {
+                    Some(text.to_owned())
+                }
+            })
+            .collect::<String>(),
+        _ => return None,
+    };
+    Some(text_hash(&text))
+}
+
 fn is_turn(k: RecordKind) -> bool {
     matches!(k, RecordKind::User | RecordKind::Assistant)
 }
 
 /// Streams a session's projected records, with omitted runs collapsed and indexes assigned.
 pub struct Projection {
-    reader: BufReader<File>,
+    reader: Box<dyn BufRead + Send>,
     backend: Backend,
+    inherited_end: u64,
+    scan_limit: Option<u64>,
     limits: Limits,
     state: ProjectionState,
     pending: std::collections::VecDeque<Draft>,
@@ -742,6 +835,7 @@ pub struct Projection {
     /// page reads whatever is there and closes the run.
     for_index: bool,
     done: bool,
+    read_error: Option<std::io::Error>,
     line: Vec<u8>,
 }
 
@@ -767,28 +861,45 @@ impl Projection {
         resume: Option<ProjectionState>,
         for_index: bool,
     ) -> std::io::Result<Self> {
-        let mut file = File::open(&e.file)?;
-        let state = match resume {
-            Some(s) => {
-                use std::io::{Seek, SeekFrom};
-                file.seek(SeekFrom::Start(s.offset))?;
-                s
+        // Every file starts in the oldest stream and moves forward only as newer
+        // stream records appear, in order. A pre-scan that started in the newest stream
+        // it could find dropped the older-format turns of a session continued by a newer
+        // client (#31); the copy written at each switch is dropped by comparing it with
+        // the last emitted turn instead.
+        let mut state = resume.unwrap_or_default();
+        let mut scan_limit = None;
+        let inherited_end = if e.backend == Backend::Codex {
+            if let Some(end) = state.codex_inherited_end {
+                end
+            } else {
+                let mut reader = open_archive(&e.file, 0)?;
+                let boundary = crate::codex::fork_boundary(&mut reader, e.archived, true)?;
+                // Issue #35: terminal events before the start ordinal belong to
+                // copied history. Display may fall back, but indexing must wait
+                // for the real boundary and never persist the parent's completion.
+                state.codex_inherited_end = boundary.end.filter(|_| !boundary.display_fallback);
+                let end = boundary
+                    .end
+                    .filter(|_| !for_index || !boundary.display_fallback);
+                if end.is_none() {
+                    scan_limit = Some(boundary.scanned);
+                }
+                end.unwrap_or(boundary.scanned)
             }
-            // Every file starts in the oldest stream and moves forward only as newer
-            // stream records appear, in order. A pre-scan that started in the newest stream
-            // it could find dropped the older-format turns of a session continued by a newer
-            // client (#31); the copy written at each switch is dropped by comparing it with
-            // the last emitted turn instead.
-            None => ProjectionState::default(),
+        } else {
+            0
         };
         Ok(Self {
-            reader: BufReader::new(file),
+            reader: open_archive(&e.file, state.offset)?,
             backend: e.backend,
+            inherited_end,
+            scan_limit,
             limits: limits.clone(),
             state,
             pending: Default::default(),
             for_index,
             done: false,
+            read_error: None,
             line: Vec::new(),
         })
     }
@@ -798,11 +909,33 @@ impl Projection {
         &self.state
     }
 
+    pub(crate) fn take_read_error(&mut self) -> Option<std::io::Error> {
+        self.read_error.take()
+    }
+
     fn fill(&mut self) {
         while self.pending.is_empty() && !self.done {
+            // Issue #35: bytes appended after an incomplete boundary scan belong to
+            // the next pass, which can determine whether they are child-owned.
+            if self
+                .scan_limit
+                .is_some_and(|limit| self.state.offset >= limit)
+            {
+                self.done = true;
+                break;
+            }
             self.line.clear();
             let n = match self.reader.read_until(b'\n', &mut self.line) {
-                Ok(0) | Err(_) => {
+                Ok(0) => {
+                    self.done = true;
+                    break;
+                }
+                Err(error) => {
+                    // Decoding may fail after a valid Codex header. A partial projection
+                    // must not look like a successful transcript or index checkpoint.
+                    if self.backend == Backend::Codex {
+                        self.read_error = Some(error);
+                    }
                     self.done = true;
                     break;
                 }
@@ -814,7 +947,12 @@ impl Projection {
                 self.done = true;
                 break;
             }
+            let line_start = self.state.offset;
             self.state.offset += n as u64;
+            if line_start > 0 && line_start < self.inherited_end {
+                self.pending.push_back(Draft::omitted("forked_history"));
+                continue;
+            }
             if self.line.iter().all(|b| b.is_ascii_whitespace()) {
                 continue;
             }
@@ -831,34 +969,86 @@ impl Projection {
             let Ok(r) = parsed else {
                 continue;
             };
+            if self.backend == Backend::Claude
+                && let Some(title) = crate::archive::custom_title(&r)
+            {
+                self.state.custom_title = Some(title.to_owned());
+            }
             let mut drafts = Vec::new();
             match self.backend {
                 Backend::Claude => project_claude(&r, &self.limits, &mut drafts),
                 Backend::Codex => {
                     // A stream seen later than the pre-scan reached still takes over from
                     // that point on.
+                    // A new task cannot be a copy of the preceding task's identical user.
+                    if matches!(
+                        r.pointer("/payload/type").and_then(Value::as_str),
+                        Some("task_started" | "task_complete")
+                    ) && self
+                        .state
+                        .last_turn
+                        .is_some_and(|(kind, _)| kind == RecordKind::User)
+                    {
+                        self.state.last_turn = None;
+                        self.state.last_user_filtered_hash = None;
+                        self.state.last_user_streams = 0;
+                    }
                     let before = self.state.mode;
                     if let Some(m) = codex_mode_signal(&r) {
                         self.state.mode = self.state.mode.max(m);
                     }
                     project_codex(&r, self.state.mode, &self.limits, &mut drafts);
-                    // Codex writes a turn to the lower stream and then to the higher one.
-                    // When the pre-scan stopped before the higher stream appeared (a 477 KB
-                    // pasted prompt carried it past its window), the turn that triggers the
-                    // switch is a copy of the one just emitted.
-                    if self.state.mode > before
+                    // Issues #19 and #34: copies may span all three streams. Remember
+                    // which streams matched instead of consuming eligibility at the first
+                    // switch. A repeated stream starts a new turn, so consecutive identical
+                    // user messages survive even without a task boundary.
+                    // Exact concatenation preserves the real flattened item copy. The
+                    // filtered hash also allows injected blocks added to only one copy;
+                    // neither hash ignores whitespace or compares a truncated prefix.
+                    let source_hash = codex_user_hash(&r, false);
+                    let filtered_hash = codex_user_hash(&r, true);
+                    let stream = if r.pointer("/payload/item/type").and_then(Value::as_str)
+                        == Some("UserMessage")
+                    {
+                        4
+                    } else if r.pointer("/payload/type").and_then(Value::as_str)
+                        == Some("user_message")
+                    {
+                        2
+                    } else if source_hash.is_some() {
+                        1
+                    } else {
+                        0
+                    };
+                    let user_copy = stream != 0
+                        && self.state.last_user_streams & stream == 0
+                        && self.state.last_turn.is_some_and(|(kind, hash)| {
+                            kind == RecordKind::User
+                                && (source_hash == Some(hash)
+                                    || (filtered_hash.is_some()
+                                        && filtered_hash == self.state.last_user_filtered_hash))
+                        });
+                    if user_copy {
+                        drafts.retain(|d| d.kind != RecordKind::User);
+                        self.state.last_user_streams |= stream;
+                    } else if self.state.mode > before
                         && let Some(last) = self.state.last_turn
                         && let Some(i) = drafts.iter().position(|d| {
-                            is_turn(d.kind)
+                            d.kind == RecordKind::Assistant
                                 && (d.kind, text_hash(d.text.as_deref().unwrap_or(""))) == last
                         })
                     {
                         drafts.remove(i);
+                    } else if let Some(d) = drafts.iter().rev().find(|d| is_turn(d.kind)) {
+                        self.state.last_user_filtered_hash = filtered_hash;
+                        self.state.last_user_streams = stream;
+                        self.state.last_turn = Some((
+                            d.kind,
+                            source_hash
+                                .unwrap_or_else(|| text_hash(d.text.as_deref().unwrap_or(""))),
+                        ));
                     }
                 }
-            }
-            if let Some(d) = drafts.iter().rev().find(|d| is_turn(d.kind)) {
-                self.state.last_turn = Some((d.kind, text_hash(d.text.as_deref().unwrap_or(""))));
             }
             self.pending.extend(drafts);
         }
@@ -940,7 +1130,8 @@ pub fn page(
     let mut records = Vec::new();
     let mut chars = 0usize;
     let mut seen = 0usize;
-    for r in Projection::open(e, limits)? {
+    let mut projection = Projection::open(e, limits)?;
+    for r in projection.by_ref() {
         seen += 1;
         if r.index < offset {
             continue;
@@ -965,6 +1156,9 @@ pub fn page(
         }
         chars += size;
         records.push(r);
+    }
+    if let Some(error) = projection.take_read_error() {
+        return Err(error);
     }
     Ok(TranscriptPage {
         offset,

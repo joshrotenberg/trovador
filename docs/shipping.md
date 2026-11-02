@@ -1,5 +1,9 @@
 # What shipping means here
 
+> **2026-11-02:** trovador is now read-only and runs no model. `ask`, `summarize`, consent,
+> `import`, and `gc` were removed; `sessions text` hands the caller a session's text to
+> summarize itself. The items below are kept as the record of what was decided at the time.
+
 **Shipped** means the repository is public, `v0.1.0` is tagged and published to crates.io
 as `trovador`, `cargo install trovador` followed by the README's setup works on a machine
 that has never seen it, and the live suite passes on at least two machines with different

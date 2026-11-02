@@ -3,21 +3,19 @@
 //! answer.
 
 pub mod archive;
-pub mod consent;
+mod backend;
+mod codex;
 pub mod doctor;
-pub mod gc;
 pub mod hook;
-pub mod import;
 pub mod index;
 pub mod limits;
 pub mod mcp;
 pub mod output;
 pub mod paths;
+mod private;
 pub mod redact;
-pub mod run;
-pub mod runlog;
 pub mod sessions;
-pub mod summary;
+pub mod text;
 pub mod timespec;
 pub mod transcript;
 

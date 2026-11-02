@@ -4,10 +4,9 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use trovador::consent;
+use trovador::Limits;
 use trovador::index::{Index, SearchOpts};
 use trovador::sessions::{self, Ctx, ListOpts};
-use trovador::{Backend, Limits};
 
 fn search(ctx: &Ctx, opts: SearchOpts) -> sessions::SearchResult {
     sessions::search(ctx, &opts).unwrap()
@@ -120,17 +119,13 @@ fn automated_fixture() -> Fixture {
 }
 
 #[test]
-fn automated_sessions_are_left_out_unless_trovador_started_them() {
+fn automated_sessions_are_left_out_unless_asked_for() {
     let f = automated_fixture();
     let ctx = f.ctx();
-    // trovador started ID_C, so it is one of its own workers and stays visible.
-    consent::record_spawned(&ctx.paths, Backend::Codex, ID_C).unwrap();
 
     let r = search(&ctx, q("deploy script"));
-    let mut found = ids(&r);
-    found.sort();
-    assert_eq!(found, vec![ID_A, ID_C]);
-    assert_eq!(r.hidden.automated, 1);
+    assert_eq!(ids(&r), vec![ID_A]);
+    assert_eq!(r.hidden.automated, 2);
     assert!(r.note.unwrap().contains("include_automated"));
 
     let all = search(
@@ -160,8 +155,8 @@ fn automated_sessions_are_left_out_unless_trovador_started_them() {
         .map(|s| s.session_id.clone())
         .collect();
     listed_ids.sort();
-    assert_eq!(listed_ids, vec![ID_A, ID_C]);
-    assert_eq!(listed.hidden_automated, 1);
+    assert_eq!(listed_ids, vec![ID_A]);
+    assert_eq!(listed.hidden_automated, 2);
     let listed_all = sessions::list(
         &ctx,
         &ListOpts {
