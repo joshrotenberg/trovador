@@ -4,8 +4,6 @@ use std::io::BufRead;
 
 use serde::Deserialize;
 
-use crate::archive::{ArchiveEntry, Backend, open_archive};
-
 #[derive(Default, Deserialize)]
 struct Header {
     #[serde(default, rename = "type")]
@@ -26,18 +24,6 @@ impl Header {
             && self.payload.forked_from_id.is_some()
             && self.payload.subagent_history_start_ordinal.is_some()
     }
-}
-
-pub(crate) fn is_forked_child(e: &ArchiveEntry) -> bool {
-    if e.backend != Backend::Codex {
-        return false;
-    }
-    let Ok(mut reader) = open_archive(&e.file, 0) else {
-        return false;
-    };
-    let mut line = Vec::new();
-    reader.read_until(b'\n', &mut line).is_ok()
-        && serde_json::from_slice::<Header>(&line).is_ok_and(|h| h.forked())
 }
 
 pub(crate) struct ForkBoundary {

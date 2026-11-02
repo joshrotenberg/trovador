@@ -67,7 +67,6 @@ pub fn scan_codex(root: &Path, archived: bool) -> Vec<ArchiveEntry> {
 }
 
 pub(crate) struct ScanFailure {
-    pub backend: Backend,
     pub path: PathBuf,
     pub kind: std::io::ErrorKind,
 }
@@ -85,7 +84,6 @@ fn scan_root(
             Ok(items) => items,
             Err(error) => {
                 failures.push(ScanFailure {
-                    backend,
                     path: dir,
                     kind: error.kind(),
                 });
@@ -97,7 +95,6 @@ fn scan_root(
                 Ok(item) => item,
                 Err(error) => {
                     failures.push(ScanFailure {
-                        backend,
                         path: dir.clone(),
                         kind: error.kind(),
                     });
@@ -109,7 +106,6 @@ fn scan_root(
                 Ok(ft) => ft,
                 Err(error) => {
                     failures.push(ScanFailure {
-                        backend,
                         path,
                         kind: error.kind(),
                     });
@@ -142,7 +138,6 @@ fn scan_root(
                     Ok(Some(e)) => out.push(e),
                     Ok(None) => {}
                     Err(error) => failures.push(ScanFailure {
-                        backend,
                         path,
                         kind: error.kind(),
                     }),
@@ -178,7 +173,6 @@ fn entry(
     }
     let mtime = md.modified().unwrap_or_else(|error| {
         failures.push(ScanFailure {
-            backend,
             path: path.to_path_buf(),
             kind: error.kind(),
         });
@@ -721,16 +715,34 @@ pub struct Resumability {
     pub reason: Option<String>,
 }
 
+/// The transcript's size as the provider sees it on resume. A compressed rollout is
+/// several times smaller on disk: one measured at 749 KB held 3.0 MB of JSONL, under the
+/// resume ceiling by disk size and well over it by content. Codex records the decompressed
+/// size in the frame header, so this reads at most 18 bytes and never decodes the file;
+/// a header without one falls back to the disk size.
+pub fn transcript_bytes(e: &ArchiveEntry) -> u64 {
+    if !is_compressed(&e.file) {
+        return e.size_bytes;
+    }
+    let mut header = [0u8; 18];
+    let n = File::open(&e.file)
+        .and_then(|mut f| f.read(&mut header))
+        .unwrap_or(0);
+    match zstd::zstd_safe::get_frame_content_size(&header[..n]) {
+        Ok(Some(size)) => size,
+        _ => e.size_bytes,
+    }
+}
+
 pub fn resumability(e: &ArchiveEntry, limits: &Limits) -> Resumability {
-    // Keep this an on-disk size heuristic, including compressed rollouts. It can
-    // understate their resume cost, but listing must not decode whole files for a size.
-    let resumable = e.size_bytes < limits.resume_limit_bytes;
+    let size = transcript_bytes(e);
+    let resumable = size < limits.resume_limit_bytes;
     Resumability {
         resumable,
         reason: (!resumable).then(|| {
             format!(
-                "transcript is {}KB, over the ~{}KB practical resume ceiling; to carry the work on, summarize it and start a new session with the summary (tosi's spawn_task; see its consult reference)",
-                e.size_bytes / 1024,
+                "transcript is {}KB, over the ~{}KB practical resume ceiling; to carry the work on, read it with sessions action=text and start a new session from what matters",
+                size / 1024,
                 limits.resume_limit_bytes / 1024
             )
         }),

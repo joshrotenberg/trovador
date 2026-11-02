@@ -396,6 +396,13 @@ fn corrupt_zstd_is_reported_without_hiding_or_aborting_other_sessions() {
             ),
             "{corruption}"
         );
+        assert!(
+            matches!(
+                sessions::text(&ctx, ID_A, None, 0),
+                Err(sessions::Error::Io { .. })
+            ),
+            "{corruption}: a partial decode must not pass for the whole session's text"
+        );
         let report = refresh(&ctx);
         assert_eq!((report.failed, report.reindexed), (1, 1), "{corruption}");
         assert_eq!(
@@ -452,7 +459,7 @@ fn compressed_fork_boundaries_hide_parent_history_and_keep_child_metadata() {
 }
 
 #[test]
-fn compressed_resumability_uses_disk_size_without_scanning_for_a_decoded_size() {
+fn compressed_resumability_falls_back_to_disk_size_when_the_frame_has_no_content_size() {
     let f = Fixture::new();
     let records = vec![
         codex_meta("/work", json!("cli")),
@@ -498,4 +505,41 @@ fn excluded_compressed_text_still_uses_a_validated_decoded_checkpoint() {
         .write_all(b"invalid next zstd frame")
         .unwrap();
     assert_eq!(refresh(&ctx).failed, 1);
+}
+
+#[test]
+fn compressed_resumability_uses_the_frame_content_size_not_the_smaller_disk_size() {
+    // A 749 KB rollout on the development machine held 3.0 MB of JSONL: resumable by its
+    // disk size and over the ceiling by content.
+    let f = Fixture::new();
+    let records = vec![
+        codex_meta("/work", json!("cli")),
+        codex_user_item(&"x".repeat(100_000)),
+    ];
+    let path = f.codex_zstd(ID_A, &records, 0, false);
+    let body: String = records.iter().map(|r| format!("{r}\n")).collect();
+    // bulk compression writes the content size into the frame header, as Codex does.
+    fs::write(&path, zstd::bulk::compress(body.as_bytes(), 3).unwrap()).unwrap();
+    let entry = archive::find_session(&f.paths, ID_A, None).unwrap();
+    assert!(entry.size_bytes < jsonl_len(&records) / 10);
+    assert_eq!(archive::transcript_bytes(&entry), jsonl_len(&records));
+    let limits = Limits {
+        resume_limit_bytes: entry.size_bytes + 1,
+        ..limits()
+    };
+    let r = archive::resumability(&entry, &limits);
+    assert!(!r.resumable);
+    assert!(r.reason.unwrap().contains("sessions action=text"));
+}
+
+#[test]
+fn compressed_text_matches_the_same_session_uncompressed() {
+    let plain = Fixture::new();
+    plain.codex(ID_A, &records(), 0);
+    let compressed = Fixture::new();
+    compressed.codex_zstd(ID_A, &records(), 0, false);
+    let a = sessions::text(&plain.ctx(), ID_A, None, 0).unwrap();
+    let b = sessions::text(&compressed.ctx(), ID_A, None, 0).unwrap();
+    assert!(a.text.contains("zstdonlyneedle"));
+    assert_eq!(a.text, b.text);
 }

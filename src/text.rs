@@ -30,14 +30,20 @@ pub struct SessionText {
 /// longer.
 pub fn render(e: &ArchiveEntry, limits: &Limits) -> std::io::Result<String> {
     let mut out = String::new();
-    for r in Projection::open(e, limits)? {
+    let mut projection = Projection::open(e, limits)?;
+    for r in projection.by_ref() {
         if matches!(r.kind, RecordKind::Omitted | RecordKind::Reasoning) {
             continue;
         }
         out.push_str(&transcript::render(&r));
         out.push('\n');
     }
-    Ok(out)
+    // A compressed rollout that stops decoding partway would otherwise come back as a
+    // shorter session, and a caller summarizing it could not tell.
+    match projection.take_read_error() {
+        Some(error) => Err(error),
+        None => Ok(out),
+    }
 }
 
 /// At most `response_max_chars` of the session's text from character `offset`. Every part

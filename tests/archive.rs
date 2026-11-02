@@ -435,7 +435,7 @@ fn a_session_over_the_resume_ceiling_says_why_it_cannot_resume() {
     assert!(
         d.resume_blocked_by
             .unwrap()
-            .contains("summarize it and start a new session")
+            .contains("read it with sessions action=text")
     );
 }
 
