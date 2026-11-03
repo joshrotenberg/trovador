@@ -8,6 +8,7 @@ mod codex;
 pub mod doctor;
 pub mod hook;
 pub mod index;
+pub mod init;
 pub mod limits;
 pub mod mcp;
 pub mod output;

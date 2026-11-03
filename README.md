@@ -52,8 +52,8 @@ From crates.io once published, or from a checkout:
 ```sh
 cargo install trovador --locked        # or: cargo install --path . --locked
 trovador index                 # build the search index once; searches keep it current
-claude mcp add --scope user trovador -- ~/.cargo/bin/trovador serve
-codex mcp add trovador -- ~/.cargo/bin/trovador serve
+trovador init --dry-run        # what init would write and which host commands it would run
+trovador init                  # install the plugin into Claude Code and Codex
 ```
 
 `trovador doctor` checks the setup: it reads the archives and reports the index, with a
@@ -61,9 +61,54 @@ fix for each problem.
 
 Supported on macOS and Linux. Windows is untested.
 
-Register the absolute path: a client launched from the desktop may not have `~/.cargo/bin`
-on its `PATH`. A stdio server is started once per client session and never reloads, so
-restart the client after reinstalling.
+### The plugin
+
+`trovador init` installs a plugin that gives an agent three things:
+
+- the MCP server (`trovador serve`), with the `search` and `sessions` tools;
+- a `recall` skill that says when to look in past sessions and how to read what it finds;
+- on Claude Code, a SessionStart hook that tells the session its own id, so search can
+  leave out exactly this conversation instead of every session active in the last 10
+  minutes.
+
+It writes a local marketplace to `~/.trovador/plugin` and registers it with each host's own
+commands: `claude plugin marketplace add` and `claude plugin install` (or `update`) at user
+scope, and `codex plugin marketplace add` and `codex plugin add`. It edits no host
+configuration file itself. `--host claude` or `--host codex` limits it to one host; under
+the default `both`, a host that is not on PATH is skipped. Run it again after upgrading
+trovador to update the plugin, and restart the host: a stdio server is started once per
+session and never reloads.
+
+The plugin starts the binary by absolute path, the one `init` ran as unless `--binary`
+says otherwise, because a host started from the desktop may not have `~/.cargo/bin` on its
+`PATH`.
+
+The plugin carries the MCP server, not only a skill that runs the CLI, because an agent's
+sandbox usually cannot write `~/.trovador`. Under `codex sandbox -c
+'sandbox_mode="workspace-write"'`, `trovador search` cannot update the index
+(2026-11-02); it searches the existing one read-only and says the result is not exhaustive.
+A host starts its MCP servers outside the agent's sandbox, so the server keeps the index
+current.
+
+Codex does not load hooks from plugins (`codex features list` shows `plugin_hooks` as
+removed in 0.165), so on Codex the hook is an entry in `~/.codex/hooks.json`. `init`
+reports whether one is there and, if not, the entry to add under `hooks.SessionStart`:
+
+```json
+{"hooks": [{"type": "command", "command": "/path/to/trovador hook session-start --backend codex || true"}]}
+```
+
+`init` reports a `trovador` MCP server configured by hand in either host, since its tools
+would be offered twice; remove it with `claude mcp remove trovador` or `codex mcp remove
+trovador`. To uninstall, `claude plugin uninstall trovador@trovador-local` and `codex plugin
+remove trovador@trovador-local`, then remove the `trovador-local` marketplace from each.
+
+Without the plugin, register the server by hand:
+
+```sh
+claude mcp add --scope user trovador -- ~/.cargo/bin/trovador serve
+codex mcp add trovador -- ~/.cargo/bin/trovador serve
+```
 
 ## Coming from spike
 
@@ -300,6 +345,15 @@ Measured on 5,366 local sessions (12.4 GB of JSONL) on 2026-10-07, release build
 | A search with nothing new to index | 94 to 107 ms |
 | A search that picks up two appended sessions | 234 ms |
 | `sessions list` over every session, index present | 0.09 s (8.8 s without) |
+
+
+When the index cannot be updated, because its directory is not writable (an agent sandbox,
+a read-only filesystem), search reads the index as it is. `exhaustive` is false and `note`
+says why, since sessions written after the last refresh are not covered. With no index, or
+one built by another version, search fails and says to run `trovador index` where it can
+write, or to use the MCP server. The read-only path takes no locks when there is no WAL, so
+it checks after its last read that the file did not change under it and fails with a
+request to retry if it did. On a 482 MB index it took 0.10 s and 17 MB of memory.
 
 ## Session text
 

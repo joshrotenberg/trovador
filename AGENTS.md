@@ -26,7 +26,14 @@ behaviour, not afterwards.
 
 **Seamless in and out.** trovador reads what the CLIs already write and never writes to
 `~/.claude` or `~/.codex`. Everything it owns lives under `~/.trovador`, so removing that
-directory removes trovador and leaves the user's sessions untouched.
+directory removes trovador and leaves the user's sessions untouched. The plugin source is
+`plugin/trovador/`, embedded in the binary, and a test checks that the skill names only
+tools, actions, and parameters the server offers.
+
+**Installing goes through the hosts.** `trovador init` writes only under `~/.trovador`
+and changes host state only through the hosts' own commands (`claude plugin ...`,
+`codex plugin ...`). It may read a host's files to report on them, as it reads
+`~/.codex/hooks.json`, but never writes them.
 
 **Both doors agree.** `src/lib.rs` is the library. `trovador <command>` and
 `trovador serve` (MCP over stdio) are thin adapters over it. spike had four separate bugs
