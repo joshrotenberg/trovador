@@ -42,6 +42,10 @@ pub struct Limits {
     pub search_default: usize,
     /// Default number of matching records shown per session.
     pub per_session_default: usize,
+    /// Largest `offset` a list or search accepts. Paging past the end is an empty page,
+    /// not an error, so this only rejects values that cannot be a position in any real
+    /// archive and keeps a mistyped number from turning into a scan of everything.
+    pub offset_max: usize,
     /// Seconds within which a session counts as active and is left out of search by
     /// default. The session doing the search is always active, and its own transcript
     /// contains the words it searches for. Zero turns the default off.
@@ -69,6 +73,7 @@ impl Default for Limits {
             index_budget_ms: 15_000,
             search_default: 20,
             per_session_default: 3,
+            offset_max: 1_000_000,
             active_window_s: 600,
             index_reasoning: true,
             redact: true,
@@ -117,6 +122,7 @@ impl Limits {
             index_budget_ms: num("TROVADOR_INDEX_BUDGET_MS", d.index_budget_ms),
             search_default: num("TROVADOR_SEARCH_DEFAULT", d.search_default).max(1),
             per_session_default: num("TROVADOR_PER_SESSION", d.per_session_default).max(1),
+            offset_max: num("TROVADOR_OFFSET_MAX", d.offset_max),
             active_window_s: num("TROVADOR_ACTIVE_WINDOW_S", d.active_window_s),
             index_reasoning: get("TROVADOR_INDEX_REASONING")
                 .map(|v| !matches!(v.trim(), "0" | "false" | "no" | "off"))
@@ -144,6 +150,13 @@ mod tests {
     fn an_unparseable_override_keeps_the_default_instead_of_becoming_zero() {
         let l = Limits::from_lookup(lookup(&[("TROVADOR_PAGE_SIZE", "lots")]));
         assert_eq!(l.page_size, 200);
+    }
+
+    #[test]
+    fn the_offset_ceiling_can_be_overridden() {
+        assert_eq!(Limits::default().offset_max, 1_000_000);
+        let l = Limits::from_lookup(lookup(&[("TROVADOR_OFFSET_MAX", "50")]));
+        assert_eq!(l.offset_max, 50);
     }
 
     #[test]

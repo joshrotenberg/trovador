@@ -230,6 +230,9 @@ pub struct Visibility {
     pub exclude_session: Option<String>,
     /// Leave out automated sessions, except these `backend/id` keys.
     pub automated_except: Option<Vec<String>>,
+    /// The Codex archived root, used with `SearchOpts::archived` to tell archived sessions
+    /// from the rest. Like the caller's other filters it is not counted as hidden.
+    pub archived_root: Option<String>,
 }
 
 /// Matching sessions each default left out. They overlap: one session can be both
@@ -1356,8 +1359,15 @@ pub struct SearchOpts {
     pub since: Option<String>,
     /// Only sessions last written before this, in the same forms as `since`.
     pub until: Option<String>,
+    /// Only Codex sessions read from the archived root (true), or only sessions not
+    /// read from it (false). Both when omitted.
+    pub archived: Option<bool>,
     /// Sessions to return.
     pub limit: Option<usize>,
+    /// Matching sessions to skip, in the order of the results. Follow `next_offset` from
+    /// the previous page. Results are grouped by session, so the unit is a session.
+    #[serde(default)]
+    pub offset: usize,
     /// Matching records to show per session.
     pub per_session: Option<usize>,
     #[serde(default)]
@@ -1596,6 +1606,14 @@ impl Index {
             args.push(o.to_string().into());
             filters.push(format!("s.origin = ?{}", args.len()));
         }
+        if let (Some(archived), Some(root)) = (opts.archived, &vis.archived_root) {
+            args.push(root.clone().into());
+            filters.push(format!(
+                "{}under_archive_root(s.file, ?{})",
+                if archived { "" } else { "NOT " },
+                args.len()
+            ));
+        }
         if let Some(t) = vis.since_ns {
             args.push(t.into());
             filters.push(format!("s.mtime_ns >= ?{}", args.len()));
@@ -1651,9 +1669,11 @@ impl Index {
                  SELECT records.rowid >> 32 AS sid, {score} AS score FROM records WHERE {matcher})"
         );
         let matched = "m JOIN sessions s ON s.id = m.sid";
+        // The last key makes the order total. Offset paging re-runs the query for each page,
+        // so two sessions that tie on score and time must not swap between pages.
         let order = match (opts.order, opts.regex) {
-            (Order::Relevance, false) => "best ASC, s.mtime_ns DESC",
-            _ => "s.mtime_ns DESC",
+            (Order::Relevance, false) => "best ASC, s.mtime_ns DESC, s.id ASC",
+            _ => "s.mtime_ns DESC, s.id ASC",
         };
 
         let sessions_matched: i64 = self.conn.query_row(
@@ -1681,10 +1701,11 @@ impl Index {
             }
         }
 
+        let offset = opts.offset;
         let mut top = self.conn.prepare(&format!(
             "{cte} SELECT s.id, s.backend, s.session_id, s.meta, count(*) AS n, min(m.score) AS best
              FROM {matched} WHERE {where_s}
-             GROUP BY s.id ORDER BY {order} LIMIT {limit}"
+             GROUP BY s.id ORDER BY {order} LIMIT {limit} OFFSET {offset}"
         ))?;
         let rows: Vec<(i64, String, String, String, i64)> = top
             .query_map(rusqlite::params_from_iter(args.iter()), |r| {

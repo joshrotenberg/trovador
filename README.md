@@ -141,11 +141,14 @@ trovador sessions list --project trovador    # project path contains this text (
 trovador sessions list --origin cli          # how it was started
 trovador sessions list --include-subagents   # also sessions started by other sessions
 trovador sessions list --since 1d            # last written in the past day (also 36h, 1w, 2026-10-01)
+trovador sessions list --offset 20           # the next page, from next_offset of the last
+trovador sessions list --archived true       # only Codex threads in archived_sessions (false: only the rest)
 trovador sessions show 27d1f434              # id or unambiguous prefix
 trovador sessions transcript 27d1f434 --offset 200 --limit 50
 trovador sessions text 27d1f434              # the whole session as plain text, in parts
 trovador search idempotency_key              # words and "quoted phrases", all required
 trovador search "redact" --since 1w          # only sessions written in the last week
+trovador search redact --offset 20           # the next page of sessions, from next_offset
 trovador search 'redact NOT summary' --fts   # FTS5 syntax
 trovador search 'retry_after:\s*\d+' --regex # regular expression, newest first
 trovador index                               # bring the index fully up to date
@@ -163,6 +166,38 @@ Every command prints one JSON document. The MCP `sessions` tool takes the same i
 `trovador search`; both return the same JSON as the CLI. Resources
 `session://{backend}/{id}` and `session://{backend}/{id}/transcript` return `show` and the
 first transcript page.
+
+### Paging
+
+`sessions list` and `search` return one page: `--limit` sessions (`TROVADOR_LIST_DEFAULT`,
+`TROVADOR_SEARCH_DEFAULT`), starting `--offset` sessions in. A result that has more after it
+carries `next_offset`; pass it as `offset`, with the same other inputs, for the next page.
+The last page has no `next_offset`. The MCP `sessions` tool (for `action: list`) and `search`
+take `offset` too, and the library computes both, so the doors return the same page.
+
+- **The unit is a session.** A search groups its matching records by session, and `offset`
+  counts sessions in that order: best match first, or newest first with `--recent` and for
+  `--regex`. Ties on score and time break by the index's session number, so the order is
+  total and two pages never split a tie differently. A list counts sessions that pass every
+  filter, so `--offset 20` means the same thing whatever the filters hide.
+- **Coverage is for the whole result.** `sessions_matched`, `hidden`, `exhaustive` and
+  `coverage` describe the query, not the page, and are the same on every page. A list's
+  `truncated` is true exactly when `next_offset` is present. `absence_is_proof` appears
+  only on an empty page and is false for any `offset` above zero: an empty later page only
+  means the offset is past the matches, and its note says how many matched.
+- **No snapshot between pages.** Each page is a fresh query. Sessions written while paging
+  can shift later pages, so an item can repeat or be skipped, most visibly in a list, which
+  puts new sessions first. For a steady walk, pass the same `--until` (an RFC 3339 time
+  taken before the first page) on every page; sessions written afterwards are then outside
+  the window. A search that brings the index up to date between pages can also change bm25
+  scores, so a relevance order can move between pages where `--recent` does not.
+- **Bounds.** An offset above `TROVADOR_OFFSET_MAX` (1,000,000) is rejected with `invalid
+  offset`; a negative or non-numeric offset is rejected as an invalid number by both doors.
+  An offset past the last result is not an error: it returns an empty page.
+- **Archived threads.** `--archived true` keeps only Codex threads read from
+  `archived_sessions`, `--archived false` keeps only sessions not read from it (all Claude
+  sessions and Codex threads that are not archived), and leaving it out includes both, as
+  before. It is a filter you ask for, so what it excludes is not counted in `hidden`.
 
 ## Examples
 

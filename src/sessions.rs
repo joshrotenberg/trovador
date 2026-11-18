@@ -40,6 +40,8 @@ pub enum Error {
     Index(#[from] IndexError),
     #[error("invalid query: {0}")]
     Query(String),
+    #[error("invalid offset: {0}")]
+    Offset(String),
     #[error("reading {path}: {source}")]
     Io {
         path: String,
@@ -93,6 +95,12 @@ pub struct ListOpts {
     pub project: Option<String>,
     /// How many to return, newest first.
     pub limit: Option<usize>,
+    /// Matching sessions to skip. Follow `next_offset` from the previous page.
+    #[serde(default)]
+    pub offset: usize,
+    /// Only Codex sessions read from the archived root (true), or only sessions not read
+    /// from it (false). Both when omitted.
+    pub archived: Option<bool>,
     /// Only sessions with this origin (`cli`, `claude-desktop`, `sdk-cli`, `exec`, ...).
     pub origin: Option<String>,
     /// Include sessions started by another session. Off by default: approval reviewers and
@@ -108,6 +116,19 @@ pub struct ListOpts {
     pub since: Option<String>,
     /// Only sessions last written before this, in the same forms as `since`.
     pub until: Option<String>,
+}
+
+/// An offset within `limits.offset_max`, or the error to return for one beyond it. A
+/// negative or non-numeric offset never gets this far: both doors parse it as an unsigned
+/// integer and refuse it there.
+pub(crate) fn check_offset(offset: usize, limits: &Limits) -> Result<usize, Error> {
+    if offset > limits.offset_max {
+        return Err(Error::Offset(format!(
+            "{offset} is above the largest accepted offset, {} (TROVADOR_OFFSET_MAX)",
+            limits.offset_max
+        )));
+    }
+    Ok(offset)
 }
 
 /// `since` and `until` as times, or the error to return for a value that does not parse.
@@ -128,14 +149,21 @@ pub(crate) fn window(
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ListResult {
-    /// Sessions in the archives searched, before any filter.
+    /// Sessions in the archives searched, after the backend and archived filters and
+    /// before any other.
     pub total_sessions: usize,
-    /// Sessions whose metadata was read to answer this list.
+    /// Sessions whose metadata was read to answer this list, including those skipped by
+    /// `offset` and the one that showed another page exists.
     pub examined: usize,
     pub returned: usize,
-    /// More matching sessions may exist beyond this list. With a project filter that is a
-    /// possibility rather than a count: the list stops reading once it has enough.
+    /// The `offset` this page started at.
+    pub offset: usize,
+    /// Another matching session exists after this page. The list stops reading as soon as
+    /// it has found one, so this is exact but `examined` is not a count of the archive.
     pub truncated: bool,
+    /// Pass as `offset` to get the next page. Absent on the last page.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub next_offset: Option<usize>,
     /// Automated sessions trovador did not start, left out among those examined.
     pub hidden_automated: usize,
     pub sessions: Vec<SessionRow>,
@@ -150,11 +178,19 @@ fn automated_hidden(meta: &SessionMeta) -> bool {
 
 /// Newest first. Metadata is read only for sessions that might be returned, and the scan
 /// stops once the list is full (spike#90: the list loop once read every head regardless).
+///
+/// `offset` counts sessions that pass every filter, so a page is the same whatever the
+/// filters leave out. Sessions the offset skips still have their metadata read, because
+/// the project, origin and subagent filters need it to know whether they count. Each page
+/// is read from the archives as they are at that moment; there is no snapshot between
+/// pages (see the README for how to page steadily while sessions are being written).
 pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
+    let offset = check_offset(opts.offset, &ctx.limits)?;
     let (since, until) = window(opts.since.as_deref(), opts.until.as_deref())?;
     let all: Vec<ArchiveEntry> = archive::scan_all(&ctx.paths)
         .into_iter()
         .filter(|e| opts.backend.is_none_or(|b| e.backend == b))
+        .filter(|e| opts.archived.is_none_or(|a| e.archived == a))
         .collect();
     let limit = opts.limit.unwrap_or(ctx.limits.list_default).max(1);
     // Metadata from the index where the file has not changed since it was indexed. The
@@ -175,11 +211,9 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
     let mut sessions = Vec::new();
     let mut examined = 0;
     let mut truncated = false;
+    // Sessions that passed every filter so far, returned or skipped by the offset.
+    let mut passed = 0usize;
     for e in &all {
-        if sessions.len() == limit {
-            truncated = true;
-            break;
-        }
         // Newest first, so everything after this is older still.
         if since.is_some_and(|s| e.mtime < s) {
             break;
@@ -216,12 +250,25 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
                 continue;
             }
         }
+        if passed < offset {
+            passed += 1;
+            continue;
+        }
+        // A matching session past a full page: stopping on the page boundary alone would
+        // report a next page that turns out to be empty.
+        if sessions.len() == limit {
+            truncated = true;
+            break;
+        }
+        passed += 1;
         sessions.push(row(e, meta, &ctx.limits));
     }
     Ok(ListResult {
         total_sessions: all.len(),
         examined,
         returned: sessions.len(),
+        offset,
+        next_offset: truncated.then_some(offset + sessions.len()),
         truncated,
         hidden_automated,
         sessions,
@@ -337,9 +384,15 @@ pub struct SearchResult {
     pub mode: String,
     /// The FTS5 expression or regular expression that ran.
     pub expression: String,
-    /// Sessions with at least one match, before `limit`.
+    /// Sessions with at least one match, before `offset` and `limit`. The same on every
+    /// page of one query.
     pub sessions_matched: usize,
     pub returned: usize,
+    /// The `offset` this page started at, in sessions.
+    pub offset: usize,
+    /// Pass as `offset` to get the next page. Absent on the last page.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub next_offset: Option<usize>,
     pub hits: Vec<SearchHit>,
     /// Matching sessions the defaults left out, by reason.
     pub hidden: Hidden,
@@ -347,6 +400,8 @@ pub struct SearchResult {
     /// query ran. A search that is not exhaustive proves nothing by finding nothing.
     pub exhaustive: bool,
     /// Present when there are no hits: whether that absence means the text is not there.
+    /// Always false past the first page, where an empty page only means the offset is
+    /// beyond the matches.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub absence_is_proof: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -359,6 +414,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
     if opts.query.trim().is_empty() {
         return Err(Error::Query("query is empty".into()));
     }
+    let offset = check_offset(opts.offset, &ctx.limits)?;
     if opts.regex && opts.fts {
         return Err(Error::Query("choose regex or fts, not both".into()));
     }
@@ -424,6 +480,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         }),
         exclude_session: opts.exclude_session.clone().filter(|s| !s.is_empty()),
         automated_except: (!opts.include_automated && opts.origin.is_none()).then(Vec::new),
+        archived_root: Some(ctx.paths.codex_archived.display().to_string()),
     };
     let raw = idx
         .search(opts, &vis, limit, per_session, ctx.limits.redact)
@@ -506,6 +563,13 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
             parts.join(", ")
         )
     });
+    let past_the_end = offset > 0 && hits.is_empty();
+    let page_note = past_the_end.then(|| {
+        format!(
+            "no sessions at offset {offset}; {} matched, so this says nothing about absence",
+            raw.sessions_matched
+        )
+    });
     let query_note = if opts.fts && hits.is_empty() {
         crate::index::fts_absence_note(&opts.query)?
     } else {
@@ -518,6 +582,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         unavailable_note,
         excluded_note,
         hidden_note,
+        page_note,
         query_note,
     ]
     .into_iter()
@@ -538,9 +603,15 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         expression: raw.expression,
         sessions_matched: raw.sessions_matched,
         returned: hits.len(),
+        offset,
+        // Rows consumed from the ordered matches, not hits returned: a match whose file
+        // is gone is dropped from `hits` but still holds its place in the order.
+        next_offset: (offset + found < raw.sessions_matched).then_some(offset + found),
+        // Proof of absence is a claim about the whole result, which only the first page
+        // can make. Counterpart restricts `absence_is_proof` to offset zero the same way.
         absence_is_proof: hits
             .is_empty()
-            .then_some(exhaustive && !hidden.any() && query_is_proof),
+            .then_some(exhaustive && !hidden.any() && query_is_proof && offset == 0),
         hidden,
         hits,
         exhaustive,
