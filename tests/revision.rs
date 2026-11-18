@@ -564,3 +564,199 @@ async fn the_transcript_resource_reports_the_revision_the_tool_reports() {
     let json: Value = serde_json::from_str(read.first_text().unwrap()).unwrap();
     assert_eq!(json["revision"], tool);
 }
+
+// --- review fixes: fork boundary, moved files, end-to-end read checks -------------
+
+fn fork_header(start_ordinal: u64) -> Value {
+    let mut child = codex_meta("/child", json!({"subagent": {"thread_spawn": {}}}));
+    child["payload"]["forked_from_id"] = json!(ID_A);
+    child["payload"]["subagent_history_start_ordinal"] = json!(start_ordinal);
+    child
+}
+
+#[test]
+fn moving_a_forked_codex_rollout_to_the_archived_root_changes_its_revision() {
+    // With an unreached start ordinal and a non-terminal tail, the active file hides
+    // everything after the header as forked_history and the archived file shows it. A move
+    // keeps size, mtime and bytes, so the revision has to name the root and the path.
+    let f = Fixture::new();
+    let path = f.codex(
+        ID_B,
+        &[
+            fork_header(999),
+            codex_user_item("forked question"),
+            codex_agent_item("forked answer"),
+        ],
+        60,
+    );
+    let ctx = f.ctx();
+    let t = sessions::transcript(&ctx, ID_B, None, 0, None).unwrap();
+    let x = sessions::text(&ctx, ID_B, None, 0).unwrap();
+    assert_eq!(t.revision, x.revision);
+    fs::create_dir_all(&f.paths.codex_archived).unwrap();
+    fs::rename(
+        &path,
+        f.paths.codex_archived.join(path.file_name().unwrap()),
+    )
+    .unwrap();
+    let now = sessions::transcript(&ctx, ID_B, None, 0, None).unwrap();
+    assert_ne!(
+        now.page.records, t.page.records,
+        "the fixture no longer projects differently after the move"
+    );
+    assert_ne!(now.revision, t.revision, "a moved file kept its revision");
+    assert_stale(
+        sessions::transcript_at(&ctx, ID_B, None, 0, None, Some(&t.revision)),
+        &t.revision,
+        &now.revision,
+    );
+    assert_stale(
+        sessions::text_at(&ctx, ID_B, None, 0, Some(&x.revision)),
+        &x.revision,
+        &now.revision,
+    );
+}
+
+fn forked_fixture_with_unreached_boundary() -> (Fixture, std::path::PathBuf) {
+    let f = Fixture::new();
+    let path = f.codex(
+        ID_B,
+        &[
+            fork_header(10),
+            codex_user_item("parent question"),
+            codex_agent_item("parent answer"),
+            json!({"type": "event_msg", "payload": {"type": "task_complete"}}),
+        ],
+        60,
+    );
+    (f, path)
+}
+
+#[test]
+fn a_read_never_resolves_a_fork_boundary_from_bytes_appended_after_the_scan() {
+    let (f, path) = forked_fixture_with_unreached_boundary();
+    let entry = archive::find_session(&f.paths, ID_B, None).unwrap();
+    let before = trovador::transcript::page(&entry, 0, Some(200), &limits()).unwrap();
+    let text_before = trovador::text::render(&entry, &limits()).unwrap();
+    let mut line = codex_user_item("child question");
+    line["ordinal"] = json!(10);
+    append(&path, &line);
+
+    let during = trovador::transcript::page(&entry, 0, Some(200), &limits()).unwrap();
+    assert_eq!(
+        during.records, before.records,
+        "an appended ordinal resolved the boundary under the old revision"
+    );
+    assert_eq!(
+        trovador::text::render(&entry, &limits()).unwrap(),
+        text_before
+    );
+    // The fixture must be sensitive to the append, or the assertions above prove nothing.
+    let rescanned = archive::find_session(&f.paths, ID_B, None).unwrap();
+    let after = trovador::transcript::page(&rescanned, 0, Some(200), &limits()).unwrap();
+    assert_ne!(after.records, before.records);
+}
+
+#[test]
+fn a_rewrite_during_a_library_read_fails_both_kinds_of_read_and_an_append_does_not() {
+    let (f, path) = claude_fixture();
+    let ctx = f.ctx();
+    let id = sessions::transcript(&ctx, ID_A, None, 0, None)
+        .unwrap()
+        .revision;
+
+    let r = sessions::transcript_at_hooked(&ctx, ID_A, None, 0, None, Some(&id), || {
+        rewrite_keeping_mtime(&path, &same_size_rewrite())
+    });
+    assert!(matches!(r, Err(Error::ChangedWhileReading { .. })), "{r:?}");
+
+    // Restore the original content, then do the same through text.
+    let (f, path) = claude_fixture();
+    let ctx = f.ctx();
+    let r = sessions::text_at_hooked(&ctx, ID_A, None, 0, None, || {
+        rewrite_keeping_mtime(&path, &same_size_rewrite())
+    });
+    assert!(matches!(r, Err(Error::ChangedWhileReading { .. })), "{r:?}");
+
+    let (f, path) = claude_fixture();
+    let ctx = f.ctx();
+    let t = sessions::transcript_at_hooked(&ctx, ID_A, None, 0, None, None, || {
+        append(&path, &claude_assistant("appended during the read"))
+    })
+    .unwrap();
+    assert!(
+        t.page
+            .records
+            .iter()
+            .all(|r| r.text.as_deref() != Some("appended during the read"))
+    );
+    let x = sessions::text_at_hooked(&ctx, ID_A, None, 0, None, || {
+        append(&path, &claude_assistant("appended again"))
+    })
+    .unwrap();
+    assert!(!x.text.contains("appended again"));
+}
+
+#[test]
+fn a_torn_final_line_at_the_scanned_size_projects_the_same_on_every_read_at_that_size() {
+    let (f, path) = claude_fixture();
+    let whole = serde_json::to_string(&claude_assistant("completed later")).unwrap();
+    let (head, tail) = whole.split_at(whole.len() / 2);
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(head.as_bytes())
+        .unwrap();
+    let entry = archive::find_session(&f.paths, ID_A, None).unwrap();
+    let first = trovador::transcript::page(&entry, 0, Some(200), &limits()).unwrap();
+    let text = trovador::text::render(&entry, &limits()).unwrap();
+    assert_eq!(
+        trovador::transcript::page(&entry, 0, Some(200), &limits())
+            .unwrap()
+            .records,
+        first.records
+    );
+    // Completing the line after the scan must not change a read at the scanned size.
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(format!("{tail}\n").as_bytes())
+        .unwrap();
+    assert_eq!(
+        trovador::transcript::page(&entry, 0, Some(200), &limits())
+            .unwrap()
+            .records,
+        first.records,
+        "a line completed after the scan reached a read at the old size"
+    );
+    assert_eq!(trovador::text::render(&entry, &limits()).unwrap(), text);
+}
+
+#[test]
+fn the_tool_cap_and_the_redact_setting_each_change_the_revision() {
+    let (f, _) = claude_fixture();
+    let base = sessions::text(&f.ctx(), ID_A, None, 0).unwrap().revision;
+    for (what, limits) in [
+        (
+            "tool_chars",
+            trovador::Limits {
+                tool_chars: 7,
+                ..limits()
+            },
+        ),
+        (
+            "redact",
+            trovador::Limits {
+                redact: false,
+                ..limits()
+            },
+        ),
+    ] {
+        let rev = sessions::text(&f.ctx_with(limits), ID_A, None, 0)
+            .unwrap()
+            .revision;
+        assert_ne!(rev, base, "{what} did not change the revision");
+    }
+}

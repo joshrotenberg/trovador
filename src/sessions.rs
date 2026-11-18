@@ -43,7 +43,7 @@ pub enum Error {
     Query(String),
     /// The caller's continuation names a revision the session no longer has.
     #[error(
-        "session {backend}/{session_id} changed since revision {expected}; it is now at revision {current}. Offsets from the earlier read may not address the same records: restart from offset 0 without expected_revision"
+        "session {backend}/{session_id} is not at revision {expected}; it is now at revision {current}. Offsets from the earlier read may not address the same records: restart from offset 0 without expected_revision"
     )]
     StaleRevision {
         backend: Backend,
@@ -347,12 +347,29 @@ pub fn transcript_at(
     limit: Option<usize>,
     expected_revision: Option<&str>,
 ) -> Result<TranscriptResult, Error> {
+    transcript_at_hooked(ctx, id, backend, offset, limit, expected_revision, || {})
+}
+
+/// [`transcript_at`] that runs `after_read` between the read and the final check. Only
+/// tests use it, to change the file at the one moment a rewrite during a read matters;
+/// nothing else can place a change there deterministically.
+#[doc(hidden)]
+pub fn transcript_at_hooked(
+    ctx: &Ctx,
+    id: &str,
+    backend: Option<Backend>,
+    offset: usize,
+    limit: Option<usize>,
+    expected_revision: Option<&str>,
+    after_read: impl FnOnce(),
+) -> Result<TranscriptResult, Error> {
     let e = archive::find_session(&ctx.paths, id, backend)?;
     let rev = begin_read(ctx, &e, expected_revision)?;
     let page = transcript::page(&e, offset, limit, &ctx.limits).map_err(|source| Error::Io {
         path: e.file.display().to_string(),
         source,
     })?;
+    after_read();
     end_read(&e, &rev)?;
     Ok(TranscriptResult {
         backend: e.backend,
@@ -382,12 +399,26 @@ pub fn text_at(
     offset: usize,
     expected_revision: Option<&str>,
 ) -> Result<crate::text::SessionText, Error> {
+    text_at_hooked(ctx, id, backend, offset, expected_revision, || {})
+}
+
+/// [`text_at`] with the same test hook as [`transcript_at_hooked`].
+#[doc(hidden)]
+pub fn text_at_hooked(
+    ctx: &Ctx,
+    id: &str,
+    backend: Option<Backend>,
+    offset: usize,
+    expected_revision: Option<&str>,
+    after_read: impl FnOnce(),
+) -> Result<crate::text::SessionText, Error> {
     let e = archive::find_session(&ctx.paths, id, backend)?;
     let rev = begin_read(ctx, &e, expected_revision)?;
     let part = crate::text::part(&e, offset, &rev.id, &ctx.limits).map_err(|source| Error::Io {
         path: e.file.display().to_string(),
         source,
     })?;
+    after_read();
     end_read(&e, &rev)?;
     Ok(part)
 }

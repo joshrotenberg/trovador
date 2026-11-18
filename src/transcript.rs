@@ -840,22 +840,26 @@ pub struct Projection {
 }
 
 impl Projection {
-    /// A full read from the start, as a transcript page wants it.
+    /// A full read from the start to the end of the file as it is now. It has no revision
+    /// to stay consistent with; pages and text use [`Projection::open_snapshot`]. It stays
+    /// for callers that compare a projection with other reads of the whole file, such as
+    /// the live-archive tests.
     pub fn open(e: &ArchiveEntry, limits: &Limits) -> std::io::Result<Self> {
-        Self::start(e, limits, None, false)
+        Self::start(e, limits, None, false, None)
     }
 
-    /// A full read of the file as it was when `e` was scanned: a plain file is read only
-    /// up to `e.size_bytes`, so bytes appended after the scan never reach a page that is
-    /// labelled with the revision of the scan (trovador#83). A compressed rollout is
-    /// immutable and is read whole.
+    /// A full read of a plain file as it was when `e` was scanned: both the fork-boundary
+    /// scan and the projection stop at `e.size_bytes`, so bytes appended after the scan
+    /// reach neither a page nor the boundary that decides which earlier records are shown
+    /// as `forked_history`. Either would otherwise put a newer state under the revision of
+    /// the scan (trovador#83).
+    ///
+    /// A compressed rollout is read whole: its size is the compressed size and cannot
+    /// bound the decoded stream. The revision of such a file names its size and mtime, and
+    /// a replacement with the same size and mtime would go unnoticed, as the README says.
     pub fn open_snapshot(e: &ArchiveEntry, limits: &Limits) -> std::io::Result<Self> {
-        let mut p = Self::start(e, limits, None, false)?;
-        if !is_compressed(&e.file) {
-            let reader = std::mem::replace(&mut p.reader, Box::new(std::io::empty()));
-            p.reader = Box::new(std::io::Read::take(reader, e.size_bytes));
-        }
-        Ok(p)
+        let bound = (!is_compressed(&e.file)).then_some(e.size_bytes);
+        Self::start(e, limits, None, false, bound)
     }
 
     /// A read for the index: from `resume` when given, whole lines only, with the final
@@ -865,7 +869,7 @@ impl Projection {
         limits: &Limits,
         resume: Option<ProjectionState>,
     ) -> std::io::Result<Self> {
-        Self::start(e, limits, resume, true)
+        Self::start(e, limits, resume, true, None)
     }
 
     fn start(
@@ -873,7 +877,14 @@ impl Projection {
         limits: &Limits,
         resume: Option<ProjectionState>,
         for_index: bool,
+        bound: Option<u64>,
     ) -> std::io::Result<Self> {
+        let bounded = |reader: Box<dyn BufRead + Send>| -> Box<dyn BufRead + Send> {
+            match bound {
+                Some(n) => Box::new(std::io::Read::take(reader, n)),
+                None => reader,
+            }
+        };
         // Every file starts in the oldest stream and moves forward only as newer
         // stream records appear, in order. A pre-scan that started in the newest stream
         // it could find dropped the older-format turns of a session continued by a newer
@@ -885,7 +896,7 @@ impl Projection {
             if let Some(end) = state.codex_inherited_end {
                 end
             } else {
-                let mut reader = open_archive(&e.file, 0)?;
+                let mut reader = bounded(open_archive(&e.file, 0)?);
                 let boundary = crate::codex::fork_boundary(&mut reader, e.archived, true)?;
                 // Issue #35: terminal events before the start ordinal belong to
                 // copied history. Display may fall back, but indexing must wait
@@ -903,7 +914,7 @@ impl Projection {
             0
         };
         Ok(Self {
-            reader: open_archive(&e.file, state.offset)?,
+            reader: bounded(open_archive(&e.file, state.offset)?),
             backend: e.backend,
             inherited_end,
             scan_limit,

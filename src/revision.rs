@@ -11,11 +11,19 @@
 //! hashes of the first and last 4 KB that the index uses to tell an append from a rewrite
 //! (#25). Computing it reads two 4 KB regions, never the session.
 //!
-//! Any append changes it, including one that leaves every earlier record alone. A later
-//! record can merge into an omitted run that is still open at the end of the file, and a
-//! Codex stream switch can drop a record as a duplicate of the last turn, so appended
-//! bytes can change records that were already paged. Telling those cases apart would take
-//! a read of the session, and a caller that is told to restart loses one page.
+//! Any append changes it, including one that leaves every earlier record alone. The case
+//! that needs this is a forked Codex child: its boundary between copied parent history and
+//! its own records is found from a later line, so an appended line can turn records that
+//! were already shown into `forked_history`. The other append effects are small (a final
+//! `omitted` run's count grows, a duplicate-suppressed turn is dropped from the appended
+//! part only). Telling the fork case apart needs a read of the session, so the rule stays
+//! simple: a caller that is told to restart loses one page. A live session therefore fails
+//! a continuation whenever it was written in between.
+//!
+//! The descriptor also holds `archived` and the file path. Whether a Codex file is in the
+//! archived root changes how `fork_boundary` treats an unreached start ordinal, and a
+//! rename keeps size, mtime and bytes, so without them a moved file kept its revision and
+//! projected differently.
 //!
 //! A compressed rollout is revised by the compressed file's size and mtime only. Decoding
 //! the tail to hash it would read the whole session, and Codex does not rewrite a `.zst`
@@ -63,9 +71,11 @@ pub fn of(e: &ArchiveEntry, limits: &Limits) -> std::io::Result<Revision> {
     // text, which changes when any of them does. Another server with different limits
     // would otherwise accept a continuation and cut the text somewhere else.
     let descriptor = format!(
-        "{}/{}|projection={PROJECTION_VERSION}|record_chars={}|tool_chars={}|redact={}|{}|size={}|mtime_ns={}|regions={regions:?}",
+        "{}/{}|file={}|archived={}|projection={PROJECTION_VERSION}|record_chars={}|tool_chars={}|redact={}|{}|size={}|mtime_ns={}|regions={regions:?}",
         e.backend,
         e.session_id,
+        e.file.display(),
+        e.archived,
         limits.record_chars,
         limits.tool_chars,
         limits.redact,

@@ -289,23 +289,37 @@ the rendered, redacted text, so a session that grows or is rewritten between two
 make the second skip or repeat content. Every transcript page and text part therefore
 reports a `revision`, an opaque string for the state of the session it was read from. Pass
 it as `expected_revision` (`--expected-revision` on the CLI) when continuing. If the session
-no longer has that revision, the call fails with a message naming both revisions and
+is not at that revision, the call fails with a message naming both revisions and
 telling the caller to restart from offset 0 without `expected_revision`; it is an error on
 both doors, like a lookup that finds nothing. Without `expected_revision` the call behaves
 as before and only reports the revision. The text `truncated.continue_with` already
 carries it.
 
-The revision comes from the file's size, mtime, hashes of its first and last 4 KB, the
-projection version, and the record and tool caps and redaction setting that shape the
-text, so computing it reads two 4 KB regions and not the session. Any append changes it,
-including one that leaves earlier records alone: a record appended after an open `omitted`
-run merges into it, and a Codex stream switch can drop a record as a duplicate, so
-earlier records can change. A `touch` with no content change also changes it. A compressed
-rollout is revised by the compressed file's size and mtime, so compressing a plain rollout
-changes the revision even though the records do not; the continuation is told to restart.
-Reads of a plain file stop at the size the revision names, so bytes appended during a read
-are never returned under the older revision; if the file is rewritten during a read, the
-call fails with a message to retry.
+The revision comes from the file's path, whether Codex has archived it, its size, its
+mtime, hashes of its first and last 4 KB, the projection version, and the record and tool
+character limits and the redact setting that shape the text. Computing it reads two 4 KB
+regions and not the session. The limits are part of it, so a CLI run and an MCP server
+started with different `TROVADOR_*` limits or `--no-redact` never share a revision, and a
+continuation passed from one to the other fails.
+
+Any append changes the revision, even one that leaves earlier records alone. The case that
+needs this is a forked Codex child: its boundary between copied parent history and its own
+records is found from a later line, so an appended line can turn records already shown into
+`forked_history`. A live session therefore fails a continuation whenever it was written
+since the page, and the caller restarts from offset 0. A `touch` with no content change
+also changes it. A Codex file moved between the active and archived roots changes it,
+because the two can project a fork differently.
+
+A compressed rollout is revised by the compressed file's size and mtime, so compressing a
+plain rollout changes the revision even though the records do not; the continuation is told
+to restart.
+
+Limits of the check: a rewrite that keeps the size and mtime and changes only bytes outside
+the first and last 4 KB is not detected, and neither is a compressed rollout replaced in
+place with the same size and mtime. Reads of a plain file stop at the size the revision
+names, for the fork-boundary scan as well as the records, so bytes appended during a read
+are never returned under the older revision. If a plain file is rewritten during a read,
+the call fails with a message to retry.
 
 Offsets into a compressed rollout count decompressed bytes. A zstd stream has no random
 access, so a page or index pass that starts partway through decodes from the beginning and
