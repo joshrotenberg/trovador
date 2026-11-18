@@ -749,6 +749,8 @@ fn stable(mut v: Value, since: SystemTime) -> Value {
             "total_sessions",
             "examined",
             "returned",
+            "offset",
+            "next_offset",
             "truncated",
             "sessions_matched",
             "hidden",

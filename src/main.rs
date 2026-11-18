@@ -67,6 +67,12 @@ enum Command {
         until: Option<String>,
         #[arg(long)]
         limit: Option<usize>,
+        /// Matching sessions to skip, from `next_offset` of the previous page.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// true: only Codex sessions from the archived root. false: only sessions not from it.
+        #[arg(long)]
+        archived: Option<bool>,
         /// Matching records shown per session.
         #[arg(long)]
         per_session: Option<usize>,
@@ -139,6 +145,12 @@ enum SessionsCmd {
         project: Option<String>,
         #[arg(long)]
         limit: Option<usize>,
+        /// Matching sessions to skip, from `next_offset` of the previous page.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// true: only Codex sessions from the archived root. false: only sessions not from it.
+        #[arg(long)]
+        archived: Option<bool>,
         /// Only sessions with this origin (cli, claude-desktop, sdk-cli, exec, vscode).
         #[arg(long)]
         origin: Option<String>,
@@ -241,6 +253,8 @@ fn main() -> ExitCode {
                 backend,
                 project,
                 limit,
+                offset,
+                archived,
                 origin,
                 include_subagents,
                 include_automated,
@@ -252,6 +266,8 @@ fn main() -> ExitCode {
                     backend,
                     project,
                     limit,
+                    offset,
+                    archived,
                     origin,
                     include_subagents,
                     include_automated,
@@ -298,6 +314,8 @@ fn main() -> ExitCode {
             since,
             until,
             limit,
+            offset,
+            archived,
             per_session,
             recent,
         } => {
@@ -315,6 +333,8 @@ fn main() -> ExitCode {
                 since,
                 until,
                 limit,
+                offset,
+                archived,
                 per_session,
                 order: if recent {
                     Order::Recent
