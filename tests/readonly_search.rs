@@ -490,3 +490,168 @@ fn writable_search_refreshes_new_sessions_and_remains_exhaustive() {
     assert!(result.note.is_none());
     assert_eq!(result.coverage.refresh.reindexed, 1);
 }
+
+fn many(n: u32) -> Fixture {
+    let f = Fixture::new();
+    for i in 1..=n {
+        f.claude(
+            "-w",
+            &format!("{i:08x}-0000-4000-8000-000000000000"),
+            &[claude_user("/w", "pagedneedle")],
+            u64::from(i) * 100,
+        );
+    }
+    sessions::reindex(&f.ctx(), false).unwrap();
+    f
+}
+
+fn sid(i: u32) -> String {
+    format!("{i:08x}-0000-4000-8000-000000000000")
+}
+
+fn recent(offset: usize) -> SearchOpts {
+    SearchOpts {
+        offset,
+        limit: Some(2),
+        order: trovador::index::Order::Recent,
+        ..opts("pagedneedle")
+    }
+}
+
+#[test]
+fn paging_visits_every_remaining_session_once_when_a_matched_file_is_gone() {
+    let f = many(5);
+    // Removed after indexing. Read-only, the refresh cannot drop it, so the index still
+    // matches it but the archive scan cannot return it.
+    fs::remove_file(
+        f.paths
+            .claude_archive
+            .join("-w")
+            .join(format!("{}.jsonl", sid(1))),
+    )
+    .unwrap();
+    let _readonly = ReadOnly::new(&f.paths.home);
+    let mut seen = Vec::new();
+    let mut nexts = Vec::new();
+    let mut offset = 0;
+    let mut unavailable = 0;
+    loop {
+        let page = sessions::search(&f.ctx(), &recent(offset)).unwrap();
+        seen.extend(page.hits.iter().map(|h| h.row.session_id.clone()));
+        nexts.push(page.next_offset);
+        unavailable += page.hidden.unavailable;
+        match page.next_offset {
+            Some(n) => offset = n,
+            None => break,
+        }
+    }
+    assert_eq!(seen, (2..=5).map(sid).collect::<Vec<_>>());
+    assert_eq!(nexts, vec![Some(2), Some(4), None]);
+    assert_eq!(unavailable, 1, "counted on the page that held it");
+}
+
+#[test]
+fn a_page_whose_matches_are_all_unavailable_is_not_reported_as_past_the_end() {
+    let f = many(5);
+    for i in [1, 2] {
+        fs::remove_file(
+            f.paths
+                .claude_archive
+                .join("-w")
+                .join(format!("{}.jsonl", sid(i))),
+        )
+        .unwrap();
+    }
+    let _readonly = ReadOnly::new(&f.paths.home);
+    let page = sessions::search(&f.ctx(), &recent(0)).unwrap();
+    assert!(page.hits.is_empty());
+    assert_eq!(page.hidden.unavailable, 2);
+    assert_eq!(page.next_offset, Some(2), "more follow");
+    assert_eq!(page.absence_is_proof, Some(false));
+    let note = page.note.unwrap();
+    assert!(note.contains("could not be shown"), "{note}");
+    assert!(!note.contains("no sessions at offset"), "{note}");
+}
+
+#[test]
+fn a_row_under_an_unknown_backend_is_counted_and_next_offset_still_advances() {
+    let f = many(3);
+    // An index written by a build that knew another backend.
+    let conn = Connection::open(db_path(&f.paths)).unwrap();
+    let changed = conn
+        .execute(
+            "UPDATE sessions SET backend = 'mystery' WHERE session_id = ?1",
+            [sid(1)],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+    drop(conn);
+    let _readonly = ReadOnly::new(&f.paths.home);
+    // The unknown row is newest, so it fills the whole first page of one.
+    let first = sessions::search(
+        &f.ctx(),
+        &SearchOpts {
+            limit: Some(1),
+            ..recent(0)
+        },
+    )
+    .unwrap();
+    assert!(first.hits.is_empty());
+    assert_eq!(first.hidden.unrecognized, 1);
+    assert_eq!(
+        first.next_offset,
+        Some(1),
+        "advances by the row it consumed"
+    );
+    assert_eq!(first.absence_is_proof, Some(false));
+    assert!(
+        first
+            .note
+            .unwrap()
+            .contains("backend this version does not know")
+    );
+    let second = sessions::search(
+        &f.ctx(),
+        &SearchOpts {
+            limit: Some(1),
+            ..recent(1)
+        },
+    )
+    .unwrap();
+    assert_eq!(second.hits.len(), 1);
+    assert_eq!(second.hidden.unrecognized, 0);
+}
+
+#[test]
+fn the_archived_filter_works_on_the_read_only_fallback() {
+    let f = Fixture::new();
+    f.claude("-w", ID_A, &[claude_user("/w", "archneedle")], 100);
+    f.codex_archived(
+        ID_B,
+        &[
+            codex_meta("/w", json!("cli")),
+            codex_user_item("archneedle"),
+        ],
+        50,
+    );
+    sessions::reindex(&f.ctx(), false).unwrap();
+    let _readonly = ReadOnly::new(&f.paths.home);
+    for (archived, expected) in [
+        (Some(true), vec![ID_B]),
+        (Some(false), vec![ID_A]),
+        (None, vec![ID_B, ID_A]),
+    ] {
+        let r = sessions::search(
+            &f.ctx(),
+            &SearchOpts {
+                archived,
+                order: trovador::index::Order::Recent,
+                ..opts("archneedle")
+            },
+        )
+        .unwrap();
+        assert_stale(&f, &r);
+        let ids: Vec<_> = r.hits.iter().map(|h| h.row.session_id.as_str()).collect();
+        assert_eq!(ids, expected, "{archived:?}");
+    }
+}

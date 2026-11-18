@@ -763,6 +763,13 @@ async fn an_invalid_offset_is_refused_by_both_doors_with_a_readable_error() {
         "{}",
         r.all_text()
     );
+    let out = cli_output(&f, &["search", "pager", "--offset", &too_big]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("invalid offset"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let r = client
         .call_tool(
             "search",

@@ -42,6 +42,11 @@ pub struct Limits {
     pub search_default: usize,
     /// Default number of matching records shown per session.
     pub per_session_default: usize,
+    /// Sessions a list reads past a full page while it looks for one more match. It decides
+    /// whether `next_offset` is present, and with a selective `project` or `origin` filter
+    /// each one read costs a metadata read. When it runs out first, the list reports that
+    /// more may follow and `next_offset` continues from there.
+    pub list_lookahead: usize,
     /// Largest `offset` a list or search accepts. Paging past the end is an empty page,
     /// not an error, so this only rejects values that cannot be a position in any real
     /// archive and keeps a mistyped number from turning into a scan of everything.
@@ -73,6 +78,7 @@ impl Default for Limits {
             index_budget_ms: 15_000,
             search_default: 20,
             per_session_default: 3,
+            list_lookahead: 500,
             offset_max: 1_000_000,
             active_window_s: 600,
             index_reasoning: true,
@@ -122,6 +128,7 @@ impl Limits {
             index_budget_ms: num("TROVADOR_INDEX_BUDGET_MS", d.index_budget_ms),
             search_default: num("TROVADOR_SEARCH_DEFAULT", d.search_default).max(1),
             per_session_default: num("TROVADOR_PER_SESSION", d.per_session_default).max(1),
+            list_lookahead: num("TROVADOR_LIST_LOOKAHEAD", d.list_lookahead),
             offset_max: num("TROVADOR_OFFSET_MAX", d.offset_max),
             active_window_s: num("TROVADOR_ACTIVE_WINDOW_S", d.active_window_s),
             index_reasoning: get("TROVADOR_INDEX_REASONING")
@@ -157,6 +164,8 @@ mod tests {
         assert_eq!(Limits::default().offset_max, 1_000_000);
         let l = Limits::from_lookup(lookup(&[("TROVADOR_OFFSET_MAX", "50")]));
         assert_eq!(l.offset_max, 50);
+        let l = Limits::from_lookup(lookup(&[("TROVADOR_LIST_LOOKAHEAD", "7")]));
+        assert_eq!(l.list_lookahead, 7);
     }
 
     #[test]

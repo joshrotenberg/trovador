@@ -249,14 +249,30 @@ pub struct Hidden {
     /// The session named by `exclude_session`.
     pub excluded: usize,
     /// Matched in the index but in an archive root that could not be read, so not
-    /// returned. See `coverage.refresh.unavailable_roots`.
+    /// returned. See `coverage.refresh.unavailable_roots`. Counted among the sessions of
+    /// this page only, not the whole result.
     #[serde(default)]
     pub unavailable: usize,
+    /// Matched in the index under a backend this build does not know, so not returned.
+    /// Counted among the sessions of this page only. Left out of the output when zero, so
+    /// the shape of `hidden` is unchanged until it applies.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unrecognized: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 impl Hidden {
     pub fn any(&self) -> bool {
-        self.active + self.automated + self.subagents + self.excluded + self.unavailable > 0
+        self.active
+            + self.automated
+            + self.subagents
+            + self.excluded
+            + self.unavailable
+            + self.unrecognized
+            > 0
     }
 }
 
@@ -1399,6 +1415,10 @@ pub struct RawSearch {
     pub sessions_matched: usize,
     pub hidden: Hidden,
     pub hits: Vec<SessionHits>,
+    /// Sessions the SQL page returned, including any in `hidden.unrecognized`. `next_offset`
+    /// advances by this, not by `hits.len()`, so a row that is not shown still holds its
+    /// place in the order.
+    pub rows: usize,
 }
 
 /// Turns words and "quoted phrases" into an FTS5 expression where each is a quoted phrase
@@ -1575,6 +1595,7 @@ impl Index {
                 sessions_matched: 0,
                 hidden: Hidden::default(),
                 hits: Vec::new(),
+                rows: 0,
             });
         }
 
@@ -1729,8 +1750,10 @@ impl Index {
         };
 
         let mut hits = Vec::new();
+        let row_count = rows.len();
         for (id, backend, session_id, meta, n) in rows {
             let Ok(backend) = backend.parse::<Backend>() else {
+                hidden.unrecognized += 1;
                 continue;
             };
             let matches = excerpts
@@ -1760,6 +1783,7 @@ impl Index {
             sessions_matched: sessions_matched as usize,
             hidden,
             hits,
+            rows: row_count,
         })
     }
 

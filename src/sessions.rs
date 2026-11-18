@@ -153,15 +153,18 @@ pub struct ListResult {
     /// before any other.
     pub total_sessions: usize,
     /// Sessions whose metadata was read to answer this list, including those skipped by
-    /// `offset` and the one that showed another page exists.
+    /// `offset` and those read past the page while looking for another match.
     pub examined: usize,
     pub returned: usize,
     /// The `offset` this page started at.
     pub offset: usize,
-    /// Another matching session exists after this page. The list stops reading as soon as
-    /// it has found one, so this is exact but `examined` is not a count of the archive.
+    /// More sessions may follow this page. True when a matching session was found after
+    /// it, or when `TROVADOR_LIST_LOOKAHEAD` sessions were read past the page without
+    /// finding one and older sessions remain unread; the next page can then be empty.
+    /// False means the list reached its end, so there is nothing more.
     pub truncated: bool,
-    /// Pass as `offset` to get the next page. Absent on the last page.
+    /// Pass as `offset` to get the next page. Present exactly when `truncated` is.
+    /// Absent on the last page.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub next_offset: Option<usize>,
     /// Automated sessions trovador did not start, left out among those examined.
@@ -176,8 +179,11 @@ fn automated_hidden(meta: &SessionMeta) -> bool {
         .is_some_and(|o| AUTOMATED_ORIGINS.contains(&o))
 }
 
-/// Newest first. Metadata is read only for sessions that might be returned, and the scan
-/// stops once the list is full (spike#90: the list loop once read every head regardless).
+/// Newest first. Metadata is read only for sessions that might be returned, and once the
+/// list is full the scan reads at most `limits.list_lookahead` more sessions looking for
+/// another match (spike#90: the list loop once read every head regardless). Without that
+/// bound a selective `project` or `origin` filter read every remaining head to learn
+/// whether a next page exists.
 ///
 /// `offset` counts sessions that pass every filter, so a page is the same whatever the
 /// filters leave out. Sessions the offset skips still have their metadata read, because
@@ -213,6 +219,7 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
     let mut truncated = false;
     // Sessions that passed every filter so far, returned or skipped by the offset.
     let mut passed = 0usize;
+    let mut looked_ahead = 0usize;
     for e in &all {
         // Newest first, so everything after this is older still.
         if since.is_some_and(|s| e.mtime < s) {
@@ -220,6 +227,17 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
         }
         if until.is_some_and(|u| e.mtime >= u) {
             continue;
+        }
+        // Past a full page the only question is whether another match exists. When the
+        // bound ends the search, report that more may follow and let `next_offset` resume
+        // at the first unreturned session; the next page fills before it looks ahead, so
+        // it always makes progress.
+        if sessions.len() == limit {
+            if looked_ahead == ctx.limits.list_lookahead {
+                truncated = true;
+                break;
+            }
+            looked_ahead += 1;
         }
         examined += 1;
         let meta = cached_meta(&cached, e)
@@ -493,7 +511,8 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
     if readonly_note.is_some() {
         refresh.sessions = entries.len();
     }
-    let found = raw.hits.len();
+    let found = raw.rows;
+    let recognized = raw.hits.len();
     let hits: Vec<SearchHit> = raw
         .hits
         .into_iter()
@@ -513,7 +532,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
     let mut hidden = raw.hidden.clone();
     // Matches whose file the scan could not see: in an unreadable root, or removed since
     // the index was last refreshed.
-    hidden.unavailable = found - hits.len();
+    hidden.unavailable = recognized - hits.len();
     let text_excluded = idx.text_excluded()?;
     let exhaustive = readonly_note.is_none()
         && refresh.pending == 0
@@ -540,6 +559,12 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
             hidden.unavailable
         )
     });
+    let unrecognized_note = (hidden.unrecognized > 0).then(|| {
+        format!(
+            "{} matching sessions are indexed under a backend this version does not know and were not returned; run `trovador index --rebuild`",
+            hidden.unrecognized
+        )
+    });
     let h = &hidden;
     let hidden_note = (h.active + h.automated + h.subagents + h.excluded > 0).then(|| {
         let mut parts = Vec::new();
@@ -563,13 +588,26 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
             parts.join(", ")
         )
     });
-    let past_the_end = offset > 0 && hits.is_empty();
-    let page_note = past_the_end.then(|| {
-        format!(
-            "no sessions at offset {offset}; {} matched, so this says nothing about absence",
-            raw.sessions_matched
-        )
-    });
+    // Decided by rows consumed, not hits shown: a page whose rows could all not be shown
+    // is not past the end, and next_offset says more follow.
+    let page_note = if hits.is_empty() && offset > 0 && found == 0 {
+        Some(if raw.sessions_matched == 0 {
+            format!(
+                "nothing matched, but offset {offset} is not 0; retry at offset 0 before concluding anything"
+            )
+        } else {
+            format!(
+                "offset {offset} is past the last of {} matching sessions; this page says nothing about absence",
+                raw.sessions_matched
+            )
+        })
+    } else if hits.is_empty() && found > 0 {
+        Some(format!(
+            "{found} matching sessions on this page could not be shown (see hidden); follow next_offset for the rest"
+        ))
+    } else {
+        None
+    };
     let query_note = if opts.fts && hits.is_empty() {
         crate::index::fts_absence_note(&opts.query)?
     } else {
@@ -580,6 +618,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         readonly_note,
         stale_note,
         unavailable_note,
+        unrecognized_note,
         excluded_note,
         hidden_note,
         page_note,
@@ -611,7 +650,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         // can make. Counterpart restricts `absence_is_proof` to offset zero the same way.
         absence_is_proof: hits
             .is_empty()
-            .then_some(exhaustive && !hidden.any() && query_is_proof && offset == 0),
+            .then_some(exhaustive && !hidden.any() && query_is_proof && offset == 0 && found == 0),
         hidden,
         hits,
         exhaustive,

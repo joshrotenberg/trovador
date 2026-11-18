@@ -220,19 +220,31 @@ fn relevance_order_differs_from_recent_order_in_the_paging_fixture() {
 }
 
 #[test]
-fn search_sessions_with_equal_scores_keep_one_order_across_pages() {
+fn search_sessions_with_equal_scores_and_times_keep_one_order_across_pages() {
     let f = Fixture::new();
-    for n in 1..=4u32 {
-        // Identical text, so score ties and only the time and id keys decide.
-        f.claude("-w", &id(n), &[claude_user("/w", "needle")], u64::from(n));
+    let same = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    for n in 1..=6u32 {
+        // Identical text and an identical mtime, so score and time tie and only the row id
+        // tiebreaker decides the order.
+        let path = f.claude("-w", &id(n), &[claude_user("/w", "needle")], 0);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(same)
+            .unwrap();
     }
     let ctx = f.ctx();
-    let whole = hit_ids(&search_page(&ctx, &needle(), 0, 100));
-    let mut seen = Vec::new();
-    for offset in 0..4 {
-        seen.extend(hit_ids(&search_page(&ctx, &needle(), offset, 1)));
+    for order in [Order::Relevance, Order::Recent] {
+        let opts = SearchOpts { order, ..needle() };
+        let whole = hit_ids(&search_page(&ctx, &opts, 0, 100));
+        assert_eq!(whole.len(), 6);
+        let mut seen = Vec::new();
+        for offset in 0..6 {
+            seen.extend(hit_ids(&search_page(&ctx, &opts, offset, 1)));
+        }
+        assert_eq!(seen, whole, "{order:?}");
     }
-    assert_eq!(seen, whole);
 }
 
 #[test]
@@ -269,7 +281,7 @@ fn an_empty_later_page_does_not_claim_proof_of_absence() {
     assert!(!past.hidden.any());
     assert_eq!(past.absence_is_proof, Some(false));
     assert_eq!(past.next_offset, None);
-    assert!(past.note.unwrap().contains("5 matched"));
+    assert!(past.note.unwrap().contains("past the last of 5"));
 
     let nothing = SearchOpts {
         query: "absentword".into(),
@@ -283,6 +295,7 @@ fn an_empty_later_page_does_not_claim_proof_of_absence() {
     );
     let later = search_page(&ctx, &nothing, 1, 2);
     assert_eq!(later.absence_is_proof, Some(false));
+    assert!(later.note.unwrap().contains("retry at offset 0"));
 }
 
 fn archived_fixture() -> Fixture {
@@ -433,4 +446,141 @@ fn an_offset_above_the_limit_is_rejected_with_a_message_that_names_it() {
     )
     .unwrap();
     assert_eq!(ok.returned, 0);
+}
+
+fn project_fixture() -> Fixture {
+    let f = Fixture::new();
+    // Matches of /w/a are interleaved with sessions of /w/b, newest first by number.
+    for (n, project) in [(1, "a"), (2, "b"), (3, "a"), (4, "b"), (5, "b"), (6, "a")] {
+        f.claude(
+            &format!("-w-{project}"),
+            &id(n),
+            &[claude_user(&format!("/w/{project}"), "words")],
+            u64::from(n) * 100,
+        );
+    }
+    f
+}
+
+fn walk(ctx: &Ctx, base: &ListOpts, limit: usize) -> (Vec<String>, Vec<Option<usize>>) {
+    let mut seen = Vec::new();
+    let mut nexts = Vec::new();
+    let mut offset = 0;
+    loop {
+        let page = sessions::list(
+            ctx,
+            &ListOpts {
+                offset,
+                limit: Some(limit),
+                ..base.clone()
+            },
+        )
+        .unwrap();
+        seen.extend(list_ids(&page));
+        nexts.push(page.next_offset);
+        match page.next_offset {
+            Some(n) => offset = n,
+            None => return (seen, nexts),
+        }
+    }
+}
+
+#[test]
+fn a_list_offset_with_a_project_filter_counts_only_matching_sessions() {
+    let f = project_fixture();
+    let ctx = f.ctx();
+    let base = ListOpts {
+        project: Some("/w/a".into()),
+        ..Default::default()
+    };
+    let (seen, nexts) = walk(&ctx, &base, 2);
+    assert_eq!(seen, vec![id(1), id(3), id(6)]);
+    assert_eq!(nexts, vec![Some(2), None]);
+    let page = sessions::list(
+        &ctx,
+        &ListOpts {
+            offset: 1,
+            limit: Some(1),
+            ..base
+        },
+    )
+    .unwrap();
+    assert_eq!(list_ids(&page), vec![id(3)]);
+    assert_eq!(page.next_offset, Some(2));
+}
+
+#[test]
+fn a_list_offset_with_an_origin_filter_counts_only_matching_sessions() {
+    let f = Fixture::new();
+    for n in 1..=4u32 {
+        let source = if n % 2 == 0 { "vscode" } else { "cli" };
+        f.codex(
+            &id(n),
+            &[codex_meta("/w", json!(source)), codex_user_item("words")],
+            u64::from(n) * 100,
+        );
+    }
+    let ctx = f.ctx();
+    let base = ListOpts {
+        origin: Some("vscode".into()),
+        ..Default::default()
+    };
+    let (seen, nexts) = walk(&ctx, &base, 1);
+    assert_eq!(seen, vec![id(2), id(4)]);
+    assert_eq!(nexts, vec![Some(1), None]);
+}
+
+#[test]
+fn the_list_lookahead_bound_keeps_paging_correct_when_it_ends_the_search_early() {
+    let f = project_fixture();
+    let bounded = f.ctx_with(Limits {
+        list_lookahead: 1,
+        ..limits()
+    });
+    let base = ListOpts {
+        project: Some("/w/a".into()),
+        ..Default::default()
+    };
+    // After id 1 fills the page, one look-ahead read (id 2) finds no match and the bound
+    // ends the search with older sessions unread: more may follow.
+    let first = sessions::list(
+        &bounded,
+        &ListOpts {
+            limit: Some(1),
+            ..base.clone()
+        },
+    )
+    .unwrap();
+    assert_eq!(list_ids(&first), vec![id(1)]);
+    assert!(first.truncated);
+    assert_eq!(first.next_offset, Some(1));
+    assert_eq!(first.examined, 2, "the page and one look-ahead read");
+    // Resuming from that offset visits each match once and ends cleanly.
+    let (seen, nexts) = walk(&bounded, &base, 1);
+    assert_eq!(seen, vec![id(1), id(3), id(6)]);
+    assert_eq!(nexts.last(), Some(&None));
+    let unbounded = walk(&f.ctx(), &base, 1);
+    assert_eq!(unbounded.0, seen);
+}
+
+#[test]
+fn a_list_that_reaches_its_end_inside_the_lookahead_says_nothing_follows() {
+    let f = project_fixture();
+    let bounded = f.ctx_with(Limits {
+        list_lookahead: 1,
+        ..limits()
+    });
+    let page = sessions::list(
+        &bounded,
+        &ListOpts {
+            project: Some("/w/a".into()),
+            offset: 2,
+            limit: Some(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(list_ids(&page), vec![id(6)]);
+    assert!(!page.truncated);
+    assert_eq!(page.next_offset, None);
 }

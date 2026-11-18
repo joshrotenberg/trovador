@@ -180,11 +180,22 @@ take `offset` too, and the library computes both, so the doors return the same p
   `--regex`. Ties on score and time break by the index's session number, so the order is
   total and two pages never split a tie differently. A list counts sessions that pass every
   filter, so `--offset 20` means the same thing whatever the filters hide.
-- **Coverage is for the whole result.** `sessions_matched`, `hidden`, `exhaustive` and
-  `coverage` describe the query, not the page, and are the same on every page. A list's
-  `truncated` is true exactly when `next_offset` is present. `absence_is_proof` appears
-  only on an empty page and is false for any `offset` above zero: an empty later page only
-  means the offset is past the matches, and its note says how many matched.
+- **Coverage is for the whole result.** `sessions_matched`, `exhaustive`, `coverage` and
+  the `hidden` counts for the defaults (`active`, `automated`, `subagents`, `excluded`)
+  describe the query, not the page, and are the same on every page. Two `hidden` counts
+  are for the page only: `unavailable` (a match whose file or archive root could not be
+  read) and `unrecognized` (shown only when above zero: a match indexed under a backend this version does not know;
+  `trovador index --rebuild` fixes it). `absence_is_proof` appears only on an empty page
+  and is false for any `offset` above zero, or when the page consumed matches it could not
+  show. A page past the last match says how many matched; a page with matches but nothing
+  showable says so and keeps `next_offset`. With zero matches and an offset above zero,
+  the note says to retry at offset 0.
+- **Look-ahead.** A list learns whether another page exists by reading past a full page
+  until it finds one more matching session, at most `TROVADOR_LIST_LOOKAHEAD` sessions
+  (500) so a selective `--project` or `--origin` filter does not read every remaining
+  session. A list's `truncated` is true when it found one, or when it stopped at that bound
+  with older sessions unread; `next_offset` is present exactly when `truncated` is, and the
+  next page can then be empty. `truncated` false means the list reached its end.
 - **No snapshot between pages.** Each page is a fresh query. Sessions written while paging
   can shift later pages, so an item can repeat or be skipped, most visibly in a list, which
   puts new sessions first. For a steady walk, pass the same `--until` (an RFC 3339 time
