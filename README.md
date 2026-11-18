@@ -144,6 +144,7 @@ trovador sessions list --since 1d            # last written in the past day (als
 trovador sessions show 27d1f434              # id or unambiguous prefix
 trovador sessions transcript 27d1f434 --offset 200 --limit 50
 trovador sessions text 27d1f434              # the whole session as plain text, in parts
+trovador sessions text 27d1f434 --offset 100000 --expected-revision 3f9a1c0b7d2e4a58  # fails if the session changed
 trovador search idempotency_key              # words and "quoted phrases", all required
 trovador search "redact" --since 1w          # only sessions written in the last week
 trovador search 'redact NOT summary' --fts   # FTS5 syntax
@@ -282,6 +283,29 @@ fallback in an unarchived file is for display only; indexing waits for a known b
 Consecutive omitted records of one category collapse into one
 with a `count`. Text is capped per record (4,000 chars, 600 for tool calls and results) and
 per page (100,000 chars); a page says when it stopped early and where to continue.
+
+**Revisions.** A transcript offset is a record index and a text offset is a character of
+the rendered, redacted text, so a session that grows or is rewritten between two pages can
+make the second skip or repeat content. Every transcript page and text part therefore
+reports a `revision`, an opaque string for the state of the session it was read from. Pass
+it as `expected_revision` (`--expected-revision` on the CLI) when continuing. If the session
+no longer has that revision, the call fails with a message naming both revisions and
+telling the caller to restart from offset 0 without `expected_revision`; it is an error on
+both doors, like a lookup that finds nothing. Without `expected_revision` the call behaves
+as before and only reports the revision. The text `truncated.continue_with` already
+carries it.
+
+The revision comes from the file's size, mtime, hashes of its first and last 4 KB, the
+projection version, and the record and tool caps and redaction setting that shape the
+text, so computing it reads two 4 KB regions and not the session. Any append changes it,
+including one that leaves earlier records alone: a record appended after an open `omitted`
+run merges into it, and a Codex stream switch can drop a record as a duplicate, so
+earlier records can change. A `touch` with no content change also changes it. A compressed
+rollout is revised by the compressed file's size and mtime, so compressing a plain rollout
+changes the revision even though the records do not; the continuation is told to restart.
+Reads of a plain file stop at the size the revision names, so bytes appended during a read
+are never returned under the older revision; if the file is rewritten during a read, the
+call fails with a message to retry.
 
 Offsets into a compressed rollout count decompressed bytes. A zstd stream has no random
 access, so a page or index pass that starts partway through decodes from the beginning and

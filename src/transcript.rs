@@ -18,7 +18,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::archive::{ArchiveEntry, Backend, block_text, open_archive};
+use crate::archive::{ArchiveEntry, Backend, block_text, is_compressed, open_archive};
 use crate::limits::Limits;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -845,6 +845,19 @@ impl Projection {
         Self::start(e, limits, None, false)
     }
 
+    /// A full read of the file as it was when `e` was scanned: a plain file is read only
+    /// up to `e.size_bytes`, so bytes appended after the scan never reach a page that is
+    /// labelled with the revision of the scan (trovador#83). A compressed rollout is
+    /// immutable and is read whole.
+    pub fn open_snapshot(e: &ArchiveEntry, limits: &Limits) -> std::io::Result<Self> {
+        let mut p = Self::start(e, limits, None, false)?;
+        if !is_compressed(&e.file) {
+            let reader = std::mem::replace(&mut p.reader, Box::new(std::io::empty()));
+            p.reader = Box::new(std::io::Read::take(reader, e.size_bytes));
+        }
+        Ok(p)
+    }
+
     /// A read for the index: from `resume` when given, whole lines only, with the final
     /// state available from [`Projection::state`] once the iterator is exhausted.
     pub fn for_index(
@@ -1130,7 +1143,7 @@ pub fn page(
     let mut records = Vec::new();
     let mut chars = 0usize;
     let mut seen = 0usize;
-    let mut projection = Projection::open(e, limits)?;
+    let mut projection = Projection::open_snapshot(e, limits)?;
     for r in projection.by_ref() {
         seen += 1;
         if r.index < offset {

@@ -45,8 +45,13 @@ fn refresh(ctx: &Ctx) -> trovador::index::RefreshReport {
 }
 
 fn page(ctx: &Ctx, offset: usize, limit: usize) -> Value {
-    serde_json::to_value(sessions::transcript(ctx, ID_A, None, offset, Some(limit)).unwrap())
-        .unwrap()
+    let mut page =
+        serde_json::to_value(sessions::transcript(ctx, ID_A, None, offset, Some(limit)).unwrap())
+            .unwrap();
+    // The revision names the stored file, which differs between a plain and a compressed
+    // rollout with the same records (tests/revision.rs checks that it does).
+    page.as_object_mut().unwrap().remove("revision");
+    page
 }
 
 fn logical_output(value: impl Serialize) -> Value {

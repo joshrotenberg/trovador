@@ -14,6 +14,7 @@ use crate::index::{
 };
 use crate::limits::Limits;
 use crate::paths::Paths;
+use crate::revision;
 use crate::transcript::{self, TranscriptPage};
 
 /// What every operation needs: where things are and how much to return.
@@ -40,6 +41,23 @@ pub enum Error {
     Index(#[from] IndexError),
     #[error("invalid query: {0}")]
     Query(String),
+    /// The caller's continuation names a revision the session no longer has.
+    #[error(
+        "session {backend}/{session_id} changed since revision {expected}; it is now at revision {current}. Offsets from the earlier read may not address the same records: restart from offset 0 without expected_revision"
+    )]
+    StaleRevision {
+        backend: Backend,
+        session_id: String,
+        expected: String,
+        current: String,
+    },
+    /// The file was rewritten while a page was being read, so the page could mix two
+    /// versions. Nothing is returned for it.
+    #[error("session {backend}/{session_id} was rewritten while it was being read; retry the call")]
+    ChangedWhileReading {
+        backend: Backend,
+        session_id: String,
+    },
     #[error("reading {path}: {source}")]
     Io {
         path: String,
@@ -259,10 +277,55 @@ pub fn show(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<SessionDeta
 pub struct TranscriptResult {
     pub backend: Backend,
     pub session_id: String,
+    /// The revision of the session this page was read from. Pass it as
+    /// `expected_revision` when reading the next page.
+    pub revision: String,
     #[serde(flatten)]
     pub page: TranscriptPage,
 }
 
+/// Names the revision a read will cover and refuses it when the caller expected another.
+/// Done before the read so a stale continuation costs no projection.
+fn begin_read(
+    ctx: &Ctx,
+    e: &ArchiveEntry,
+    expected: Option<&str>,
+) -> Result<revision::Revision, Error> {
+    let io = |source| Error::Io {
+        path: e.file.display().to_string(),
+        source,
+    };
+    let rev = revision::of(e, &ctx.limits).map_err(io)?;
+    match expected {
+        Some(expected) if expected != rev.id => Err(Error::StaleRevision {
+            backend: e.backend,
+            session_id: e.session_id.clone(),
+            expected: expected.to_string(),
+            current: rev.id,
+        }),
+        _ => Ok(rev),
+    }
+}
+
+/// Run after the read. The read is cut at the size the revision names, so an append during
+/// it is harmless and the next call reports it; a rewrite is not, and fails the call
+/// instead of labelling a mixed page with the old revision.
+fn end_read(e: &ArchiveEntry, rev: &revision::Revision) -> Result<(), Error> {
+    let holds = rev.still_holds(e).map_err(|source| Error::Io {
+        path: e.file.display().to_string(),
+        source,
+    })?;
+    if holds {
+        Ok(())
+    } else {
+        Err(Error::ChangedWhileReading {
+            backend: e.backend,
+            session_id: e.session_id.clone(),
+        })
+    }
+}
+
+/// [`transcript_at`] without a revision check.
 pub fn transcript(
     ctx: &Ctx,
     id: &str,
@@ -270,31 +333,63 @@ pub fn transcript(
     offset: usize,
     limit: Option<usize>,
 ) -> Result<TranscriptResult, Error> {
+    transcript_at(ctx, id, backend, offset, limit, None)
+}
+
+/// One page of a transcript. With `expected_revision`, the page is read only if the
+/// session is still at that revision; otherwise [`Error::StaleRevision`] carries the
+/// current one.
+pub fn transcript_at(
+    ctx: &Ctx,
+    id: &str,
+    backend: Option<Backend>,
+    offset: usize,
+    limit: Option<usize>,
+    expected_revision: Option<&str>,
+) -> Result<TranscriptResult, Error> {
     let e = archive::find_session(&ctx.paths, id, backend)?;
+    let rev = begin_read(ctx, &e, expected_revision)?;
     let page = transcript::page(&e, offset, limit, &ctx.limits).map_err(|source| Error::Io {
         path: e.file.display().to_string(),
         source,
     })?;
+    end_read(&e, &rev)?;
     Ok(TranscriptResult {
         backend: e.backend,
         session_id: e.session_id,
+        revision: rev.id,
         page,
     })
 }
 
-/// One part of a session as plain text, for the caller to read or summarize. See
-/// [`crate::text`].
+/// [`text_at`] without a revision check.
 pub fn text(
     ctx: &Ctx,
     id: &str,
     backend: Option<Backend>,
     offset: usize,
 ) -> Result<crate::text::SessionText, Error> {
+    text_at(ctx, id, backend, offset, None)
+}
+
+/// One part of a session as plain text, for the caller to read or summarize. See
+/// [`crate::text`]. With `expected_revision` it is read only if the session is still at
+/// that revision, as for [`transcript_at`].
+pub fn text_at(
+    ctx: &Ctx,
+    id: &str,
+    backend: Option<Backend>,
+    offset: usize,
+    expected_revision: Option<&str>,
+) -> Result<crate::text::SessionText, Error> {
     let e = archive::find_session(&ctx.paths, id, backend)?;
-    crate::text::part(&e, offset, &ctx.limits).map_err(|source| Error::Io {
+    let rev = begin_read(ctx, &e, expected_revision)?;
+    let part = crate::text::part(&e, offset, &rev.id, &ctx.limits).map_err(|source| Error::Io {
         path: e.file.display().to_string(),
         source,
-    })
+    })?;
+    end_read(&e, &rev)?;
+    Ok(part)
 }
 
 type MetaCache = HashMap<(Backend, String), (u64, i64, SessionMeta)>;

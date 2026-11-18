@@ -171,6 +171,9 @@ enum SessionsCmd {
         offset: usize,
         #[arg(long)]
         limit: Option<usize>,
+        /// The `revision` the previous page reported. Fails if the session has changed.
+        #[arg(long)]
+        expected_revision: Option<String>,
     },
     /// The whole session as plain text, in parts of TROVADOR_RESPONSE_MAX_CHARS, for
     /// reading or summarizing.
@@ -181,6 +184,9 @@ enum SessionsCmd {
         /// The character to start from, for the next part (truncated.next_offset).
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// The `revision` the previous part reported. Fails if the session has changed.
+        #[arg(long)]
+        expected_revision: Option<String>,
     },
 }
 
@@ -271,7 +277,15 @@ fn main() -> ExitCode {
                 backend,
                 offset,
                 limit,
-            } => match sessions::transcript(&ctx, &id, backend, offset, limit) {
+                expected_revision,
+            } => match sessions::transcript_at(
+                &ctx,
+                &id,
+                backend,
+                offset,
+                limit,
+                expected_revision.as_deref(),
+            ) {
                 Ok(t) => print(&t),
                 Err(e) => fail(e),
             },
@@ -279,10 +293,13 @@ fn main() -> ExitCode {
                 id,
                 backend,
                 offset,
-            } => match sessions::text(&ctx, &id, backend, offset) {
-                Ok(t) => print(&t),
-                Err(e) => fail(e),
-            },
+                expected_revision,
+            } => {
+                match sessions::text_at(&ctx, &id, backend, offset, expected_revision.as_deref()) {
+                    Ok(t) => print(&t),
+                    Err(e) => fail(e),
+                }
+            }
         },
         Command::Search {
             query,

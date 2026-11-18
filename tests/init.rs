@@ -406,6 +406,9 @@ async fn the_skill_names_only_tools_and_actions_the_server_offers() {
         assert!(skill.contains(&format!("action={action}")), "{action}");
         assert!(schema.contains(&format!("\"{action}\"")), "{action}");
     }
+    let session_params = sessions["inputSchema"]["properties"].as_object().unwrap();
+    assert!(session_params.contains_key("expected_revision"));
+    assert!(skill.contains("`expected_revision`"));
     let search = tools.iter().find(|t| t["name"] == "search").unwrap();
     let params = search["inputSchema"]["properties"].as_object().unwrap();
     for p in [
