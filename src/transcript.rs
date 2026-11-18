@@ -21,7 +21,7 @@ use std::io::BufRead;
 /// A change to the redaction rules in `redact.rs` must bump it too: the revision of a
 /// session (`revision.rs`) holds this number and not the rules, so two builds with
 /// different rules would otherwise share a revision for `text`.
-pub const PROJECTION_VERSION: i64 = 11;
+pub const PROJECTION_VERSION: i64 = 12;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -205,9 +205,11 @@ const CLAUDE_ENVELOPE: &[&str] = &[
 /// Claude record types that carry nothing to read beyond what other records show, from
 /// every local Claude file on 2026-11-18 (5,623 files) and Counterpart's list. Titles,
 /// cwd moves and PR links feed session metadata; the rest is client state, request
-/// bookkeeping and cost accounting. `queue-operation` and `last-prompt` hold text the user
-/// typed that is not always in a user record; they are known types, and showing that text
-/// once is trovador#89, not a fallback.
+/// bookkeeping and cost accounting. `queue-operation` records a prompt typed during a turn
+/// being queued; what the model received is the ordinary user record or the
+/// `queued_command` attachment that follows, and a prompt removed from the queue before
+/// delivery was never sent (1,355 of 15,331 locally). `last-prompt` is a UI copy, most often
+/// a shortened prefix of a user record (trovador#89).
 const CLAUDE_BOOKKEEPING: &[&str] = &[
     "agent-name",
     "agent-setting",
@@ -248,8 +250,8 @@ const CLAUDE_BOOKKEEPING: &[&str] = &[
 /// 5,623 local Claude files on 2026-11-18. `file` and `structured_output` are listed for
 /// the records of theirs that have no content to project. A subtype not
 /// listed is unrecognized rather than assumed to be more of the same: Claude Code adds
-/// them often, and one could carry text a person wrote. `queued_command` holds prompts
-/// typed during a turn and is trovador#89.
+/// them often, and one could carry text a person wrote. `queued_command` is listed for its
+/// task notifications; its prompts are projected above.
 const CLAUDE_ATTACHMENTS: &[&str] = &[
     "agent_listing_delta",
     "auto_mode",
@@ -449,6 +451,38 @@ fn project_claude(r: &Value, limits: &Limits, out: &mut Vec<Draft>) {
                     "structured_output",
                     cap(&a["data"].to_string(), rc),
                 )),
+                // Issue #89: a prompt typed while a turn ran, delivered into that turn. 3,067
+                // of 15,331 local queued prompts reached the model only this way, so showing
+                // the attachment as omitted lost what the user said. No case of the same
+                // delivery also written as a user record was found; the later user records
+                // that contain such a prompt are compact summaries quoting it. Task
+                // notifications use the same attachment and stay omitted.
+                Some("queued_command") if str_at(a, "commandMode") == Some("prompt") => {
+                    match a.get("prompt") {
+                        Some(Value::String(s)) if !s.trim().is_empty() => {
+                            out.push(Draft::named(RecordKind::User, "queued", cap(s, rc)))
+                        }
+                        Some(Value::Array(blocks)) => {
+                            for b in blocks {
+                                match str_at(b, "type") {
+                                    Some("text") => {
+                                        if let Some(t) =
+                                            str_at(b, "text").filter(|t| !t.trim().is_empty())
+                                        {
+                                            out.push(Draft::named(
+                                                RecordKind::User,
+                                                "queued",
+                                                cap(t, rc),
+                                            ));
+                                        }
+                                    }
+                                    other => claude_block_fallback(other, b, limits, out),
+                                }
+                            }
+                        }
+                        _ => out.push(Draft::omitted("attachment")),
+                    }
+                }
                 Some(k) if CLAUDE_ATTACHMENTS.contains(&k) => {
                     out.push(Draft::omitted("attachment"))
                 }
