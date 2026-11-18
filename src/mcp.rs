@@ -52,10 +52,11 @@ search finds text across every session: words and \"quoted phrases\" by default,
 for FTS5 syntax, regex=true for a regular expression. Each hit gives match indexes to pass \
 as the transcript offset. When next_offset is present, pass it as offset for the next \
 sessions; an empty later page does not prove absence. If exhaustive is false, finding nothing proves nothing; the note \
-says what was not covered. By default search leaves out sessions written in the last few \
-minutes, which always includes your own, automated sessions (claude -p, codex exec), and \
-subagent sessions; hidden counts them, and include_active, include_automated, and \
-include_subagents bring them back.
+says what was not covered. Unless configured otherwise, search leaves out sessions written \
+in the last few minutes, which always includes your own, automated sessions (claude -p, \
+codex exec), and subagent sessions, and list leaves out the last two; hidden counts them. \
+include_active, include_automated, and include_subagents set to true bring a group back, \
+set to false hide it, and left out use the configured default.
 
 trovador only reads: it runs no model and costs no tokens. Past sessions are history, not \
 something to continue; to go back into one, a person resumes it with the open_with command \
@@ -86,12 +87,12 @@ struct SessionsInput {
     project: Option<String>,
     /// For list: only sessions with this origin (cli, claude-desktop, sdk-cli, exec, vscode).
     origin: Option<String>,
-    /// For list: include sessions started by another session (hidden by default).
-    #[serde(default)]
-    include_subagents: bool,
-    /// For list: include claude -p and codex exec sessions (hidden by default).
-    #[serde(default)]
-    include_automated: bool,
+    /// For list: include (true) or hide (false) sessions started by another session.
+    /// Omitted: the configured default, hidden unless TROVADOR_INCLUDE_SUBAGENTS is set.
+    include_subagents: Option<bool>,
+    /// For list: include (true) or hide (false) claude -p and codex exec sessions.
+    /// Omitted: the configured default, hidden unless TROVADOR_INCLUDE_AUTOMATED is set.
+    include_automated: Option<bool>,
     /// For list: only sessions last written at or after this, as an RFC 3339 time, a date,
     /// or a duration back from now such as 2d.
     since: Option<String>,

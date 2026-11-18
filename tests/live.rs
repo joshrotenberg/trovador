@@ -92,8 +92,8 @@ fn live() -> &'static Live {
         let listed = sessions::list(
             &ctx,
             &ListOpts {
-                include_subagents: true,
-                include_automated: true,
+                include_subagents: Some(true),
+                include_automated: Some(true),
                 limit: Some(usize::MAX),
                 ..Default::default()
             },
@@ -568,10 +568,10 @@ fn a_phrase_from_any_indexed_record_finds_its_session() {
                 &SearchOpts {
                     query: query.clone(),
                     regex,
-                    include_subagents: true,
+                    include_subagents: Some(true),
                     // Recall, not the defaults: the probed session may be recent or automated.
-                    include_active: true,
-                    include_automated: true,
+                    include_active: Some(true),
+                    include_automated: Some(true),
                     limit: Some(100_000),
                     per_session: Some(1),
                     ..Default::default()
@@ -596,9 +596,9 @@ fn a_phrase_from_any_indexed_record_finds_its_session() {
         &l.ctx,
         &SearchOpts {
             query: nonce,
-            include_subagents: true,
-            include_active: true,
-            include_automated: true,
+            include_subagents: Some(true),
+            include_active: Some(true),
+            include_automated: Some(true),
             ..Default::default()
         },
     )
@@ -678,8 +678,8 @@ fn listing_is_the_same_with_and_without_the_index() {
         limits: l.ctx.limits.clone(),
     };
     let opts = ListOpts {
-        include_subagents: true,
-        include_automated: true,
+        include_subagents: Some(true),
+        include_automated: Some(true),
         limit: Some(usize::MAX),
         ..Default::default()
     };

@@ -52,7 +52,7 @@ fn the_session_doing_the_search_is_left_out_while_it_is_active() {
     let all = search(
         &ctx,
         SearchOpts {
-            include_active: true,
+            include_active: Some(true),
             ..q("fix the parser")
         },
     );
@@ -131,7 +131,7 @@ fn automated_sessions_are_left_out_unless_asked_for() {
     let all = search(
         &ctx,
         SearchOpts {
-            include_automated: true,
+            include_automated: Some(true),
             ..q("deploy script")
         },
     );
@@ -160,7 +160,7 @@ fn automated_sessions_are_left_out_unless_asked_for() {
     let listed_all = sessions::list(
         &ctx,
         &ListOpts {
-            include_automated: true,
+            include_automated: Some(true),
             ..Default::default()
         },
     )

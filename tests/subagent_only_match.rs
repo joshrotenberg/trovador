@@ -47,7 +47,7 @@ fn a_match_only_in_a_subagent_does_not_prove_absence_for_terms_fts_or_regex() {
         let included = sessions::search(
             &f.ctx(),
             &SearchOpts {
-                include_subagents: true,
+                include_subagents: Some(true),
                 ..opts
             },
         )

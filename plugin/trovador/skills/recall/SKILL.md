@@ -23,7 +23,8 @@ conversation and keeps other sessions running right now, which are often the one
 user means. Without the id, search hides every session written in the last 10
 minutes; `hidden` and `note` in the result say what was left out. Automated sessions
 (`claude -p`, `codex exec`) and subagents are hidden too; `include_automated` and
-`include_subagents` bring them back.
+`include_subagents` bring them back. The user may have changed these defaults, so read
+`hidden` rather than assuming; passing `false` hides a group whatever the default.
 
 `exhaustive=false` means the index was not fully current, so finding nothing proves
 nothing. Say so rather than concluding the work never happened.

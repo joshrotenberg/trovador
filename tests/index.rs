@@ -630,7 +630,7 @@ fn guardian_text_is_not_indexed_and_search_says_so() {
         &ctx,
         &SearchOpts {
             query: "zebra".into(),
-            include_subagents: true,
+            include_subagents: Some(true),
             ..Default::default()
         },
     )

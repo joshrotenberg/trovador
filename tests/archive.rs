@@ -383,7 +383,7 @@ fn list_is_newest_first_and_hides_subagents_unless_asked() {
     let all = sessions::list(
         &f.ctx(),
         &ListOpts {
-            include_subagents: true,
+            include_subagents: Some(true),
             ..Default::default()
         },
     )
@@ -974,7 +974,7 @@ fn claude_subagent_transcripts_are_not_listed_as_sessions() {
     let r = sessions::list(
         &f.ctx(),
         &ListOpts {
-            include_subagents: true,
+            include_subagents: Some(true),
             ..Default::default()
         },
     )
