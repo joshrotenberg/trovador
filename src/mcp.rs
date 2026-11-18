@@ -39,8 +39,14 @@ follow next_offset, passed as offset, for the next page. \
 sessions(action=show) gives one session's metadata, resumability, and the command to resume \
 it in a terminal. sessions(action=transcript) pages through a projected transcript; follow \
 next_offset while has_more is true. sessions(action=text) returns the whole session as plain \
-text in parts, for reading or summarizing it yourself; follow truncated.next_offset. The \
-session:// resources return the same data.
+text in parts, for reading or summarizing it yourself; follow truncated.next_offset. Each \
+page reports a revision of the session; pass it back as expected_revision when continuing, \
+and every page of one walk reports the same revision. A session that has only been appended \
+to since is still read as it was, and the end of that walk is the end of the session as it \
+was then, with `grown` saying more exists and giving the current revision to start a fresh \
+read from; a session that was rewritten, moved or compressed, read with different \
+settings, or is a Codex fork whose history boundary is still open, is refused with the \
+current revision, and the caller restarts from offset 0 without expected_revision. The session:// resources return the same data.
 
 search finds text across every session: words and \"quoted phrases\" by default, fts=true \
 for FTS5 syntax, regex=true for a regular expression. Each hit gives match indexes to pass \
@@ -100,6 +106,12 @@ struct SessionsInput {
     /// record index to start from. For text: the character to start from (follow
     /// truncated.next_offset).
     offset: Option<usize>,
+    /// For transcript and text continuations: the `revision` the previous page reported.
+    /// Pass it unchanged on every page. If the session was only appended to, the page is
+    /// of the session as it was and `grown` says so. If it is not at that revision in any
+    /// other way, the call fails and names the current one; restart from offset 0 without
+    /// it. Omit it on the first page.
+    expected_revision: Option<String>,
 }
 
 /// Serializes a response the way the CLI does, so both doors return the same JSON.
@@ -163,20 +175,27 @@ fn sessions_call(
                 .map_err(|e| e.to_string())
         }),
         SessionsAction::Transcript => need_id().and_then(|id| {
-            sessions::transcript(
+            sessions::transcript_at(
                 ctx,
                 id,
                 input.backend,
                 input.offset.unwrap_or(0),
                 input.limit,
+                input.expected_revision.as_deref(),
             )
             .map(|t| json_result(&t, opts))
             .map_err(|e| e.to_string())
         }),
         SessionsAction::Text => need_id().and_then(|id| {
-            sessions::text(ctx, id, input.backend, input.offset.unwrap_or(0))
-                .map(|t| json_result(&t, opts))
-                .map_err(|e| e.to_string())
+            sessions::text_at(
+                ctx,
+                id,
+                input.backend,
+                input.offset.unwrap_or(0),
+                input.expected_revision.as_deref(),
+            )
+            .map(|t| json_result(&t, opts))
+            .map_err(|e| e.to_string())
         }),
     };
     // A lookup miss is the caller's to fix, so it comes back as a tool error they can read

@@ -20,6 +20,14 @@ pub struct SessionText {
     pub session_id: String,
     /// One part of the session's text: one line block per record, oldest first.
     pub text: String,
+    /// The revision of the session this part was read from. Pass it as
+    /// `expected_revision` when reading the next part; a changed session is then reported
+    /// instead of read.
+    pub revision: String,
+    /// Present when the session has grown since `revision`: this part is of the session as
+    /// it was then, and `grown.current_revision` reads it as it is now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grown: Option<crate::revision::Grown>,
     /// Set when `text` is not the whole session. Read the rest from `next_offset`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncated: Option<Truncated>,
@@ -30,7 +38,7 @@ pub struct SessionText {
 /// longer.
 pub fn render(e: &ArchiveEntry, limits: &Limits) -> std::io::Result<String> {
     let mut out = String::new();
-    let mut projection = Projection::open(e, limits)?;
+    let mut projection = Projection::open_snapshot(e, limits)?;
     for r in projection.by_ref() {
         if matches!(r.kind, RecordKind::Omitted | RecordKind::Reasoning) {
             continue;
@@ -50,20 +58,27 @@ pub fn render(e: &ArchiveEntry, limits: &Limits) -> std::io::Result<String> {
 /// renders the whole session again, so a caller that reads them all pays for the file once
 /// per part; the alternative was a cache of rendered text that would hold transcript
 /// content, secrets included, outside the provider's archive.
-pub fn part(e: &ArchiveEntry, offset: usize, limits: &Limits) -> std::io::Result<SessionText> {
+pub fn part(
+    e: &ArchiveEntry,
+    offset: usize,
+    revision: &str,
+    limits: &Limits,
+) -> std::io::Result<SessionText> {
     let whole = render(e, limits)?;
     let source = output::source(&whole, limits);
     let id = e.session_id.clone();
     let backend = e.backend;
     let (text, truncated) = output::part(&source, offset, limits.response_max_chars, |n| {
         format!(
-            "sessions action=text session_id={id} backend={backend} offset={n}; CLI: trovador sessions text {id} --backend {backend} --offset {n}"
+            "sessions action=text session_id={id} backend={backend} offset={n} expected_revision={revision}; CLI: trovador sessions text {id} --backend {backend} --offset {n} --expected-revision {revision}"
         )
     });
     Ok(SessionText {
         backend,
         session_id: e.session_id.clone(),
         text,
+        revision: revision.to_string(),
+        grown: None,
         truncated,
     })
 }

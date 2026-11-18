@@ -107,7 +107,7 @@ fn built_with(limits: &Limits) -> (i64, i64, i64) {
 }
 
 /// FNV-1a over bytes: stable across builds, which matters because it is stored.
-fn bytes_hash(bytes: &[u8]) -> u64 {
+pub(crate) fn bytes_hash(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in bytes {
         h ^= *b as u64;
@@ -121,7 +121,7 @@ const REGION: u64 = 4096;
 /// Hashes of the first 4 KB of JSONL and of the 4 KB before its decompressed `offset`. An append leaves
 /// both alone; a rewrite of the indexed part, even one that keeps or grows the size,
 /// changes at least one of them (#25).
-fn region_hashes(path: &std::path::Path, offset: u64) -> Option<(i64, i64)> {
+pub(crate) fn region_hashes(path: &std::path::Path, offset: u64) -> Option<(i64, i64)> {
     use std::io::Read;
     let read = |from: u64, len: u64| -> Option<i64> {
         let mut buf = Vec::with_capacity(len as usize);

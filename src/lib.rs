@@ -15,6 +15,7 @@ pub mod output;
 pub mod paths;
 mod private;
 pub mod redact;
+pub mod revision;
 pub mod sessions;
 pub mod text;
 pub mod timespec;

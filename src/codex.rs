@@ -32,6 +32,11 @@ pub(crate) struct ForkBoundary {
     // Issue #35: a copied parent's terminal event cannot prove the child finished,
     // so its readable fallback must never become an index checkpoint.
     pub display_fallback: bool,
+    /// A forked child whose start ordinal was not reached in what was read, so a line
+    /// written later could still resolve the boundary and reclassify records already
+    /// shown. Also set for a header that is still being written. The revision uses it to
+    /// decide whether an append can be tolerated (trovador#83).
+    pub unresolved: bool,
 }
 
 // Issue #35: rollout ordinals count all records from zero, including the child's
@@ -99,6 +104,7 @@ pub(crate) fn fork_boundary(
             end: None,
             scanned: 0,
             display_fallback: false,
+            unresolved: true,
         });
     }
     let header = serde_json::from_slice::<Header>(&line).unwrap_or_default();
@@ -111,6 +117,7 @@ pub(crate) fn fork_boundary(
             end: Some(0),
             scanned: line.len() as u64,
             display_fallback: false,
+            unresolved: false,
         });
     };
     let mut scanned = line.len() as u64;
@@ -129,6 +136,7 @@ pub(crate) fn fork_boundary(
                 end: Some(scanned),
                 scanned,
                 display_fallback: false,
+                unresolved: false,
             });
         }
         scanned += line.len() as u64;
@@ -163,5 +171,6 @@ pub(crate) fn fork_boundary(
         end: (complete && (archived || terminal_tail)).then_some(0),
         scanned,
         display_fallback,
+        unresolved: true,
     })
 }

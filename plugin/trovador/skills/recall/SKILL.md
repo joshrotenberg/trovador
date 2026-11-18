@@ -43,10 +43,20 @@ take it, and leaving it out includes both.
 Each hit has `matches[].index`. Open the transcript there: `sessions` with
 `action=transcript`, `session_id`, and `offset` set a few records before the index.
 Follow `next_offset` only as far as you need.
+Every transcript page and text part reports a `revision` of the session it was read
+from. Pass the same string back as `expected_revision` on each continuation. A session that
+was only appended to since is still read as it was, so a walk through a live session
+stays consistent; the page then carries `grown` with the `current_revision`, and the end
+of that walk is the end of the session as it was at that revision, not of the session. A
+fresh read without `expected_revision` shows the newer content. If the session is not
+at that revision in any other way (rewritten, moved, compressed, or a Codex fork
+whose history boundary is still open), the call fails and names the current revision
+instead of returning a page from a different state; start again from offset 0 without
+`expected_revision`.
 
 For the gist of a whole session, `sessions` with `action=text` returns it as plain
-text, in parts. Read the first part, follow `truncated.next_offset` for more, and
-summarize it yourself. A long session can run to many parts; read what the question
+text, in parts. Read the first part, follow `truncated.next_offset` for more (with the
+same `expected_revision` rule), and summarize it yourself. A long session can run to many parts; read what the question
 needs.
 
 ## Report
