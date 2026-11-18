@@ -106,7 +106,7 @@ fn an_unchanged_session_pages_exactly_as_before_under_one_stable_revision() {
         again.revision, whole.revision,
         "reading changed the revision"
     );
-    assert_eq!(whole.revision.len(), 16);
+    assert!(!whole.revision.is_empty());
 }
 
 #[test]
@@ -143,16 +143,16 @@ fn text_parts_of_an_unchanged_session_share_one_revision_and_continue_with_it() 
 }
 
 #[test]
-fn an_append_that_leaves_earlier_records_alone_still_invalidates_a_transcript_continuation() {
+fn a_rewrite_after_an_append_still_invalidates_a_transcript_continuation() {
     let (f, path) = claude_fixture();
     let ctx = f.ctx();
     let first = sessions::transcript(&ctx, ID_A, None, 0, Some(2)).unwrap();
     append(&path, &claude_assistant("third answer"));
+    // Same size as before the append plus the appended line: the first bytes differ.
+    let mut rewritten = same_size_rewrite();
+    rewritten.push(claude_assistant("third answer"));
+    rewrite_keeping_mtime(&path, &rewritten);
     let now = sessions::transcript(&ctx, ID_A, None, 0, Some(2)).unwrap();
-    assert_ne!(
-        now.revision, first.revision,
-        "an append left the revision alone"
-    );
     assert_stale(
         sessions::transcript_at(&ctx, ID_A, None, 2, Some(2), Some(&first.revision)),
         &first.revision,
@@ -161,11 +161,14 @@ fn an_append_that_leaves_earlier_records_alone_still_invalidates_a_transcript_co
 }
 
 #[test]
-fn an_append_invalidates_a_text_continuation() {
+fn a_rewrite_after_an_append_still_invalidates_a_text_continuation() {
     let (f, path) = claude_fixture();
     let ctx = f.ctx();
     let first = sessions::text(&ctx, ID_A, None, 0).unwrap();
     append(&path, &claude_assistant("third answer"));
+    let mut rewritten = same_size_rewrite();
+    rewritten.push(claude_assistant("third answer"));
+    rewrite_keeping_mtime(&path, &rewritten);
     let now = sessions::text(&ctx, ID_A, None, 0).unwrap();
     assert_stale(
         sessions::text_at(&ctx, ID_A, None, 10, Some(&first.revision)),
@@ -503,7 +506,7 @@ async fn both_doors_refuse_a_stale_continuation_with_the_same_message_naming_bot
     let old = sessions::transcript(&ctx, ID_A, None, 0, Some(2))
         .unwrap()
         .revision;
-    append(&path, &claude_assistant("third answer"));
+    rewrite_keeping_mtime(&path, &same_size_rewrite());
     let now = sessions::transcript(&ctx, ID_A, None, 0, Some(2))
         .unwrap()
         .revision;
@@ -759,4 +762,296 @@ fn the_tool_cap_and_the_redact_setting_each_change_the_revision() {
             .revision;
         assert_ne!(rev, base, "{what} did not change the revision");
     }
+}
+
+// --- a session that has only grown is read as it was --------------------------------
+
+/// Every transcript page of a walk, one record each, passing the first revision back.
+/// `between` runs after the first page, when a live session would be written to.
+fn walk_transcript(
+    ctx: &trovador::Ctx,
+    id: &str,
+    between: impl FnOnce(),
+) -> Vec<sessions::TranscriptResult> {
+    let mut pages = vec![sessions::transcript(ctx, id, None, 0, Some(1)).unwrap()];
+    let rev = pages[0].revision.clone();
+    between();
+    while let Some(next) = pages.last().unwrap().page.next_offset {
+        pages.push(sessions::transcript_at(ctx, id, None, next, Some(1), Some(&rev)).unwrap());
+    }
+    pages
+}
+
+fn assert_walk_is_the_state_at_s(
+    pages: &[sessions::TranscriptResult],
+    before: &sessions::TranscriptResult,
+    now_revision: &str,
+    bytes_added: u64,
+) {
+    let records: Vec<_> = pages.iter().flat_map(|p| p.page.records.clone()).collect();
+    assert_eq!(
+        records, before.page.records,
+        "the walk was not the state at S"
+    );
+    assert!(
+        pages.iter().all(|p| p.revision == before.revision),
+        "R moved during the walk"
+    );
+    assert_eq!(
+        pages[0].grown, None,
+        "the first page was read before the append"
+    );
+    for p in &pages[1..] {
+        let grown = p
+            .grown
+            .as_ref()
+            .expect("a page read after the append says the session grew");
+        assert_eq!(grown.current_revision, now_revision);
+        assert_eq!(grown.bytes_added, bytes_added);
+    }
+    let last = pages.last().unwrap();
+    assert!(!last.page.has_more);
+    assert_eq!(
+        last.page.total,
+        Some(before.page.records.len()),
+        "total is that of the state at S"
+    );
+}
+
+#[test]
+fn a_claude_session_appended_between_pages_continues_under_r_and_returns_the_state_at_s() {
+    let (f, path) = claude_fixture();
+    let ctx = f.ctx();
+    let before = sessions::transcript(&ctx, ID_A, None, 0, Some(200)).unwrap();
+    let size = fs::metadata(&path).unwrap().len();
+    let pages = walk_transcript(&ctx, ID_A, || {
+        append(&path, &claude_assistant("written during the walk"));
+    });
+    assert!(pages.len() > 1);
+    let added = fs::metadata(&path).unwrap().len() - size;
+    let now = sessions::transcript(&ctx, ID_A, None, 0, Some(200)).unwrap();
+    assert_ne!(now.revision, before.revision);
+    assert_walk_is_the_state_at_s(&pages, &before, &now.revision, added);
+    assert_eq!(now.page.records.len(), before.page.records.len() + 1);
+}
+
+#[test]
+fn claude_text_appended_between_parts_continues_under_r_and_returns_the_text_at_s() {
+    let (f, path) = claude_fixture();
+    let ctx = f.ctx_with(trovador::Limits {
+        response_max_chars: 40,
+        ..limits()
+    });
+    let whole = sessions::text(&f.ctx(), ID_A, None, 0).unwrap().text;
+    let first = sessions::text(&ctx, ID_A, None, 0).unwrap();
+    let mut offset = first.truncated.as_ref().unwrap().next_offset.unwrap();
+    let mut joined = first.text.clone();
+    append(&path, &claude_assistant("written during the walk"));
+    let now = sessions::text(&ctx, ID_A, None, 0).unwrap().revision;
+    loop {
+        let part = sessions::text_at(&ctx, ID_A, None, offset, Some(&first.revision)).unwrap();
+        assert_eq!(part.revision, first.revision);
+        let grown = part.grown.as_ref().expect("the part says the session grew");
+        assert_eq!(grown.current_revision, now);
+        joined.push_str(&part.text);
+        match part.truncated.and_then(|t| t.next_offset) {
+            Some(n) => offset = n,
+            None => break,
+        }
+    }
+    assert_eq!(joined, whole, "the walk was not the text at S");
+    assert!(!joined.contains("written during the walk"));
+    assert_eq!(first.grown, None);
+}
+
+#[test]
+fn an_unforked_codex_session_appended_between_pages_continues_under_r() {
+    let f = Fixture::new();
+    let path = f.codex(ID_B, &codex_records(), 60);
+    let ctx = f.ctx();
+    let before = sessions::transcript(&ctx, ID_B, None, 0, Some(200)).unwrap();
+    let text_before = sessions::text(&ctx, ID_B, None, 0).unwrap();
+    assert!(before.page.records.len() > 1);
+    let size = fs::metadata(&path).unwrap().len();
+    let pages = walk_transcript(&ctx, ID_B, || {
+        append(&path, &codex_agent_item("written during the walk"));
+    });
+    let added = fs::metadata(&path).unwrap().len() - size;
+    let now = sessions::transcript(&ctx, ID_B, None, 0, Some(200)).unwrap();
+    assert_walk_is_the_state_at_s(&pages, &before, &now.revision, added);
+    let text = sessions::text_at(&ctx, ID_B, None, 0, Some(&text_before.revision)).unwrap();
+    assert_eq!(text.text, text_before.text);
+    assert_eq!(text.revision, text_before.revision);
+    assert_eq!(text.grown.unwrap().current_revision, now.revision);
+}
+
+#[test]
+fn a_forked_codex_session_with_a_resolved_boundary_tolerates_an_append() {
+    let f = Fixture::new();
+    // Start ordinal 1 is reached by the first line after the header.
+    let path = f.codex(
+        ID_B,
+        &[
+            fork_header(1),
+            codex_user_item("child question"),
+            codex_agent_item("child answer"),
+        ],
+        60,
+    );
+    let ctx = f.ctx();
+    let before = sessions::transcript(&ctx, ID_B, None, 0, None).unwrap();
+    append(&path, &codex_agent_item("later answer"));
+    let again = sessions::transcript_at(&ctx, ID_B, None, 0, None, Some(&before.revision)).unwrap();
+    assert_eq!(again.page.records, before.page.records);
+    assert!(again.grown.is_some());
+}
+
+#[test]
+fn a_forked_codex_session_with_an_unresolved_boundary_refuses_any_append() {
+    let (f, path) = forked_fixture_with_unreached_boundary();
+    let ctx = f.ctx();
+    let t = sessions::transcript(&ctx, ID_B, None, 0, None).unwrap();
+    let x = sessions::text(&ctx, ID_B, None, 0).unwrap();
+    // An append that does not even resolve the boundary is still refused.
+    append(&path, &codex_agent_item("not an ordinal line"));
+    let now = sessions::transcript(&ctx, ID_B, None, 0, None).unwrap();
+    assert_stale(
+        sessions::transcript_at(&ctx, ID_B, None, 0, None, Some(&t.revision)),
+        &t.revision,
+        &now.revision,
+    );
+    assert_stale(
+        sessions::text_at(&ctx, ID_B, None, 0, Some(&x.revision)),
+        &x.revision,
+        &now.revision,
+    );
+}
+
+#[test]
+fn a_malformed_revision_is_refused_like_a_stale_one() {
+    let (f, _) = claude_fixture();
+    let ctx = f.ctx();
+    let good = sessions::transcript(&ctx, ID_A, None, 0, None)
+        .unwrap()
+        .revision;
+    let parts: Vec<&str> = good.split('.').collect();
+    let padded = format!("0{good}");
+    let extra = format!("{good}.0");
+    let upper = good.to_uppercase();
+    let bad_kind = good.replacen(".p.", ".q.", 1);
+    let dropped = parts[..5].join(".");
+    let signed = format!("-{good}");
+    let blank_field = good.replacen(&format!("{}.", parts[0]), ".", 1);
+    for bad in [
+        "",
+        "0",
+        "garbage",
+        &padded,
+        &extra,
+        &upper,
+        &bad_kind,
+        &dropped,
+        &signed,
+        &blank_field,
+    ] {
+        assert_stale(
+            sessions::transcript_at(&ctx, ID_A, None, 0, None, Some(bad)),
+            bad,
+            &good,
+        );
+        assert_stale(
+            sessions::text_at(&ctx, ID_A, None, 0, Some(bad)),
+            bad,
+            &good,
+        );
+    }
+}
+
+#[tokio::test]
+async fn both_doors_return_the_same_grown_page_for_an_appended_session() {
+    let (f, path) = claude_fixture();
+    let ctx = f.ctx();
+    let t = sessions::transcript(&ctx, ID_A, None, 0, Some(2)).unwrap();
+    let x = sessions::text(&ctx, ID_A, None, 0).unwrap();
+    append(&path, &claude_assistant("written later"));
+    let lib_t = serde_json::to_value(
+        sessions::transcript_at(&ctx, ID_A, None, 2, Some(2), Some(&t.revision)).unwrap(),
+    )
+    .unwrap();
+    let lib_x =
+        serde_json::to_value(sessions::text_at(&ctx, ID_A, None, 0, Some(&x.revision)).unwrap())
+            .unwrap();
+    assert!(lib_t["grown"]["current_revision"].is_string());
+    assert!(lib_x["grown"]["bytes_added"].as_u64().unwrap() > 0);
+    assert_eq!(lib_t["revision"], t.revision);
+
+    assert_eq!(
+        cli(
+            &f,
+            &[
+                "sessions",
+                "transcript",
+                ID_A,
+                "--offset",
+                "2",
+                "--limit",
+                "2",
+                "--expected-revision",
+                &t.revision
+            ]
+        ),
+        lib_t
+    );
+    let (err, text) = mcp_sessions(
+        &f,
+        json!({"action": "transcript", "session_id": ID_A, "offset": 2, "limit": 2, "expected_revision": t.revision}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), lib_t);
+
+    assert_eq!(
+        cli(
+            &f,
+            &["sessions", "text", ID_A, "--expected-revision", &x.revision]
+        ),
+        lib_x
+    );
+    let (err, text) = mcp_sessions(
+        &f,
+        json!({"action": "text", "session_id": ID_A, "expected_revision": x.revision}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), lib_x);
+}
+
+#[tokio::test]
+async fn both_doors_refuse_a_malformed_revision_with_the_same_message() {
+    let (f, _) = claude_fixture();
+    let lib = sessions::transcript_at(&f.ctx(), ID_A, None, 0, None, Some("not-a-token"))
+        .unwrap_err()
+        .to_string();
+    let out = cli_output(
+        &f,
+        &[
+            "sessions",
+            "transcript",
+            ID_A,
+            "--expected-revision",
+            "not-a-token",
+        ],
+    );
+    assert!(!out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr).trim(),
+        format!("trovador: {lib}")
+    );
+    let (err, text) = mcp_sessions(
+        &f,
+        json!({"action": "transcript", "session_id": ID_A, "expected_revision": "not-a-token"}),
+    )
+    .await;
+    assert!(err);
+    assert_eq!(text, lib);
 }

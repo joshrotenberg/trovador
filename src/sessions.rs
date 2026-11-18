@@ -280,38 +280,63 @@ pub struct TranscriptResult {
     /// The revision of the session this page was read from. Pass it as
     /// `expected_revision` when reading the next page.
     pub revision: String,
+    /// Present when the session has grown since `revision`: this page is of the session as
+    /// it was then, and `grown.current_revision` reads it as it is now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grown: Option<revision::Grown>,
     #[serde(flatten)]
     pub page: TranscriptPage,
 }
 
-/// Names the revision a read will cover and refuses it when the caller expected another.
-/// Done before the read so a stale continuation costs no projection.
-fn begin_read(
-    ctx: &Ctx,
-    e: &ArchiveEntry,
-    expected: Option<&str>,
-) -> Result<revision::Revision, Error> {
+/// What a read covers: the entry cut at the revision's size, the revision, and whether the
+/// session has grown past it.
+struct Read {
+    entry: ArchiveEntry,
+    rev: revision::Revision,
+    grown: Option<revision::Grown>,
+}
+
+/// Names the revision a read will cover and refuses it when the caller expected a state the
+/// session is not in. Done before the read so a stale continuation costs no projection.
+/// A session that has only grown since the expected revision is read as it was.
+fn begin_read(ctx: &Ctx, e: &ArchiveEntry, expected: Option<&str>) -> Result<Read, Error> {
     let io = |source| Error::Io {
         path: e.file.display().to_string(),
         source,
     };
-    let rev = revision::of(e, &ctx.limits).map_err(io)?;
-    match expected {
-        Some(expected) if expected != rev.id => Err(Error::StaleRevision {
-            backend: e.backend,
-            session_id: e.session_id.clone(),
-            expected: expected.to_string(),
-            current: rev.id,
-        }),
-        _ => Ok(rev),
-    }
+    let (rev, grown) = match revision::check(e, &ctx.limits, expected).map_err(io)? {
+        revision::Check::Current(rev) => (rev, None),
+        revision::Check::Pinned {
+            rev,
+            current,
+            bytes_added,
+        } => (
+            rev,
+            Some(revision::Grown {
+                current_revision: current.id,
+                bytes_added,
+            }),
+        ),
+        revision::Check::Stale { current } => {
+            return Err(Error::StaleRevision {
+                backend: e.backend,
+                session_id: e.session_id.clone(),
+                expected: expected.unwrap_or_default().to_string(),
+                current: current.id,
+            });
+        }
+    };
+    let mut entry = e.clone();
+    entry.size_bytes = rev.size;
+    Ok(Read { entry, rev, grown })
 }
 
 /// Run after the read. The read is cut at the size the revision names, so an append during
-/// it is harmless and the next call reports it; a rewrite is not, and fails the call
-/// instead of labelling a mixed page with the old revision.
-fn end_read(e: &ArchiveEntry, rev: &revision::Revision) -> Result<(), Error> {
-    let holds = rev.still_holds(e).map_err(|source| Error::Io {
+/// it is harmless; a rewrite is not, and fails the call instead of labelling a mixed page
+/// with the old revision.
+fn end_read(read: &Read) -> Result<(), Error> {
+    let e = &read.entry;
+    let holds = read.rev.still_holds(e).map_err(|source| Error::Io {
         path: e.file.display().to_string(),
         source,
     })?;
@@ -365,17 +390,19 @@ pub fn transcript_at_hooked(
     after_read: impl FnOnce(),
 ) -> Result<TranscriptResult, Error> {
     let e = archive::find_session(&ctx.paths, id, backend)?;
-    let rev = begin_read(ctx, &e, expected_revision)?;
-    let page = transcript::page(&e, offset, limit, &ctx.limits).map_err(|source| Error::Io {
-        path: e.file.display().to_string(),
-        source,
-    })?;
+    let read = begin_read(ctx, &e, expected_revision)?;
+    let page =
+        transcript::page(&read.entry, offset, limit, &ctx.limits).map_err(|source| Error::Io {
+            path: e.file.display().to_string(),
+            source,
+        })?;
     after_read();
-    end_read(&e, &rev)?;
+    end_read(&read)?;
     Ok(TranscriptResult {
         backend: e.backend,
         session_id: e.session_id,
-        revision: rev.id,
+        revision: read.rev.id,
+        grown: read.grown,
         page,
     })
 }
@@ -415,13 +442,17 @@ pub fn text_at_hooked(
     after_read: impl FnOnce(),
 ) -> Result<crate::text::SessionText, Error> {
     let e = archive::find_session(&ctx.paths, id, backend)?;
-    let rev = begin_read(ctx, &e, expected_revision)?;
-    let part = crate::text::part(&e, offset, &rev.id, &ctx.limits).map_err(|source| Error::Io {
-        path: e.file.display().to_string(),
-        source,
-    })?;
+    let read = begin_read(ctx, &e, expected_revision)?;
+    let mut part =
+        crate::text::part(&read.entry, offset, &read.rev.id, &ctx.limits).map_err(|source| {
+            Error::Io {
+                path: e.file.display().to_string(),
+                source,
+            }
+        })?;
     after_read();
-    end_read(&e, &rev)?;
+    end_read(&read)?;
+    part.grown = read.grown;
     Ok(part)
 }
 

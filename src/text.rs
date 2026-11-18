@@ -24,6 +24,10 @@ pub struct SessionText {
     /// `expected_revision` when reading the next part; a changed session is then reported
     /// instead of read.
     pub revision: String,
+    /// Present when the session has grown since `revision`: this part is of the session as
+    /// it was then, and `grown.current_revision` reads it as it is now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grown: Option<crate::revision::Grown>,
     /// Set when `text` is not the whole session. Read the rest from `next_offset`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncated: Option<Truncated>,
@@ -74,6 +78,7 @@ pub fn part(
         session_id: e.session_id.clone(),
         text,
         revision: revision.to_string(),
+        grown: None,
         truncated,
     })
 }
