@@ -2,10 +2,11 @@
 //!
 //! Transcripts hold whatever was pasted into a session or printed by a tool: API keys,
 //! tokens, private keys. Both doors pass their output through [`redact_value`] by default,
-//! so the CLI and the MCP server still return identical JSON. The index itself is not
-//! redacted, so a search for a token still finds the session; the excerpt it returns says
-//! `[redacted:<kind>]`. The only way to turn this off is a flag given when the process
-//! starts, never an argument a connected client can pass.
+//! so the CLI and the MCP server still return identical JSON. By default the index itself
+//! is not redacted, so a search for a token still finds the session; the excerpt it returns
+//! says `[redacted:<kind>]`. `TROVADOR_INDEX_REDACT` applies the same rules before writing
+//! the index too (`index::redact_for_index`). The only way to turn output redaction off is
+//! a flag given when the process starts, never an argument a connected client can pass.
 
 use std::borrow::Cow;
 use std::sync::OnceLock;
