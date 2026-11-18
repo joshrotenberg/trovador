@@ -238,7 +238,17 @@ fn search_sessions_with_equal_scores_and_times_keep_one_order_across_pages() {
     for order in [Order::Relevance, Order::Recent] {
         let opts = SearchOpts { order, ..needle() };
         let whole = hit_ids(&search_page(&ctx, &opts, 0, 100));
-        assert_eq!(whole.len(), 6);
+        // The documented tie order is ascending index row id. Row ids are read from the
+        // index file the search just built, not from library internals.
+        let conn = rusqlite::Connection::open(trovador::index::db_path(&ctx.paths)).unwrap();
+        let by_row_id: Vec<String> = conn
+            .prepare("SELECT session_id FROM sessions ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(whole, by_row_id, "{order:?}");
         let mut seen = Vec::new();
         for offset in 0..6 {
             seen.extend(hit_ids(&search_page(&ctx, &opts, offset, 1)));
@@ -563,11 +573,27 @@ fn the_list_lookahead_bound_keeps_paging_correct_when_it_ends_the_search_early()
     assert_eq!(unbounded.0, seen);
 }
 
+/// `project_fixture` plus two older sessions of another project after the last match.
+fn trailing_fixture() -> Fixture {
+    let f = project_fixture();
+    for n in [7, 8] {
+        f.claude(
+            "-w-b",
+            &id(n),
+            &[claude_user("/w/b", "words")],
+            u64::from(n) * 100,
+        );
+    }
+    f
+}
+
 #[test]
 fn a_list_that_reaches_its_end_inside_the_lookahead_says_nothing_follows() {
-    let f = project_fixture();
+    let f = trailing_fixture();
+    // Two non-matching sessions follow the last match, fewer than the bound of 3, so the
+    // look-ahead runs, reaches the end, and finds nothing.
     let bounded = f.ctx_with(Limits {
-        list_lookahead: 1,
+        list_lookahead: 3,
         ..limits()
     });
     let page = sessions::list(
@@ -581,6 +607,40 @@ fn a_list_that_reaches_its_end_inside_the_lookahead_says_nothing_follows() {
     )
     .unwrap();
     assert_eq!(list_ids(&page), vec![id(6)]);
+    assert_eq!(
+        page.examined, 8,
+        "all eight sessions, two of them look-ahead reads"
+    );
     assert!(!page.truncated);
     assert_eq!(page.next_offset, None);
+}
+
+#[test]
+fn a_lookahead_bound_reached_with_no_match_after_it_ends_on_an_empty_page() {
+    let f = trailing_fixture();
+    let bounded = f.ctx_with(Limits {
+        list_lookahead: 1,
+        ..limits()
+    });
+    let base = ListOpts {
+        project: Some("/w/a".into()),
+        limit: Some(1),
+        ..Default::default()
+    };
+    // id 6 fills the page, id 7 uses the one look-ahead read, and id 8 is past the bound.
+    let last = sessions::list(
+        &bounded,
+        &ListOpts {
+            offset: 2,
+            ..base.clone()
+        },
+    )
+    .unwrap();
+    assert_eq!(list_ids(&last), vec![id(6)]);
+    assert!(last.truncated);
+    assert_eq!(last.next_offset, Some(3));
+    let empty = sessions::list(&bounded, &ListOpts { offset: 3, ..base }).unwrap();
+    assert_eq!(empty.returned, 0);
+    assert!(!empty.truncated);
+    assert_eq!(empty.next_offset, None);
 }

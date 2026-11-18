@@ -655,3 +655,23 @@ fn the_archived_filter_works_on_the_read_only_fallback() {
         assert_eq!(ids, expected, "{archived:?}");
     }
 }
+
+#[test]
+fn a_last_page_of_unshowable_matches_does_not_point_at_a_next_offset() {
+    let f = many(3);
+    fs::remove_file(
+        f.paths
+            .claude_archive
+            .join("-w")
+            .join(format!("{}.jsonl", sid(3))),
+    )
+    .unwrap();
+    let _readonly = ReadOnly::new(&f.paths.home);
+    // Recent order, so the removed oldest session is the only row on the second page.
+    let page = sessions::search(&f.ctx(), &recent(2)).unwrap();
+    assert!(page.hits.is_empty());
+    assert_eq!(page.next_offset, None);
+    let note = page.note.unwrap();
+    assert!(note.contains("these were the last matches"), "{note}");
+    assert!(!note.contains("follow next_offset"), "{note}");
+}

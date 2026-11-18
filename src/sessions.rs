@@ -603,7 +603,12 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         })
     } else if hits.is_empty() && found > 0 {
         Some(format!(
-            "{found} matching sessions on this page could not be shown (see hidden); follow next_offset for the rest"
+            "{found} matching sessions on this page could not be shown (see hidden); {}",
+            if offset + found < raw.sessions_matched {
+                "follow next_offset for the rest"
+            } else {
+                "these were the last matches"
+            }
         ))
     } else {
         None
