@@ -96,12 +96,13 @@ pub fn db_path(paths: &Paths) -> PathBuf {
 /// rows built with one record cap were otherwise served after it changed (#26).
 fn built_with(limits: &Limits) -> (i64, i64, i64) {
     let settings = format!(
-        "record_chars={} tool_chars={} unrecognized_chars={} head_steps={:?} reasoning={}",
+        "record_chars={} tool_chars={} unrecognized_chars={} head_steps={:?} reasoning={} redact={}",
         limits.record_chars,
         limits.tool_chars,
         limits.unrecognized_chars,
         limits.head_steps,
-        limits.index_reasoning
+        limits.index_reasoning,
+        limits.index_redact
     );
     (
         SCHEMA_VERSION,
@@ -827,6 +828,38 @@ struct Done {
     hashes: (i64, i64),
 }
 
+/// With `index_redact`, everything a person or a tool wrote that the index would store:
+/// record text and the free-text metadata (first prompt, titles, agent name). Record
+/// indexes, kinds and names are left as they are, so a match still points at the right
+/// transcript record. The turn hashes in `state` stay hashes of the unredacted text: they
+/// must equal the hash of the same text read again on the next pass, and a 64-bit hash of
+/// a whole message does not give the message back.
+fn redact_for_index(
+    meta: &mut SessionMeta,
+    state: &mut ProjectionState,
+    records: &mut [(usize, RecordKind, Option<String>, String)],
+) {
+    fn redact(s: &mut String) {
+        if let std::borrow::Cow::Owned(r) = crate::redact::redact_str(s) {
+            *s = r;
+        }
+    }
+    for (_, _, _, text) in records.iter_mut() {
+        redact(text);
+    }
+    for s in [
+        &mut meta.snippet,
+        &mut meta.title,
+        &mut meta.agent_name,
+        &mut state.custom_title,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        redact(s);
+    }
+}
+
 fn text_eligible(meta: &SessionMeta) -> bool {
     !meta
         .origin
@@ -907,6 +940,10 @@ fn project(job: Job, limits: &Limits) -> Option<Done> {
         }
     };
     archive::apply_custom_title(&mut meta, state.custom_title.clone());
+    let mut state = state;
+    if limits.index_redact {
+        redact_for_index(&mut meta, &mut state, &mut records);
+    }
     let hashes = region_hashes(&job.entry.file, state.offset)?;
     Some(Done {
         entry: job.entry,

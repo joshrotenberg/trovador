@@ -520,6 +520,15 @@ overridable with `TROVADOR_*` variables (see `src/limits.rs`). `TROVADOR_INDEX_R
 leaves reasoning records out of the index (416 MB to 290 MB on the development machine);
 transcripts still show them.
 
+By default the index holds transcript text as written, secrets included, so a search for a
+token finds its session; what is returned is redacted. `TROVADOR_INDEX_REDACT=1` applies
+the same redaction before writing, to record text, first prompts and titles, so no file
+under `~/.trovador` holds a secret the rules recognise. A search for a secret then finds
+nothing, and with `--no-redact` excerpts and indexed titles still show `[redacted:<kind>]`;
+transcripts and session text read the provider files and are unaffected. Changing the
+setting starts a fresh index file. On the development machine on 2026-11-18 it redacted
+about 2,300 of 1,078,470 records, and a full build took 16.2 s against 15.4 s.
+
 ## Testing on a new machine
 
 `cargo test` runs fixture archives only. `tests/live.rs` checks properties that must hold for

@@ -76,6 +76,13 @@ pub struct Limits {
     /// another session. Hidden by default: on the development machine 2,950 of 5,292
     /// sessions were subagents, 1,694 of them Codex approval reviewers.
     pub include_subagents: bool,
+    /// Redact secrets before they are written to the index, as well as on output. Off by
+    /// default: the index is private to the user (0700 directory, 0600 files) and output
+    /// is redacted either way, and an unredacted index lets a search for a token still find
+    /// the session. On, `~/.trovador` holds no secret the redaction rules recognise, at the
+    /// cost of those searches, and of `--no-redact` excerpts and indexed titles staying
+    /// redacted. Changing it starts a fresh index file.
+    pub index_redact: bool,
     /// Redact secrets in what is returned, including search excerpts, which are built
     /// after redaction. Turned off only by `--no-redact` when the process starts.
     pub redact: bool,
@@ -103,6 +110,7 @@ impl Default for Limits {
             include_active: false,
             include_automated: false,
             include_subagents: false,
+            index_redact: false,
             redact: true,
         }
     }
@@ -166,6 +174,7 @@ impl Limits {
             include_active: flag("TROVADOR_INCLUDE_ACTIVE", d.include_active),
             include_automated: flag("TROVADOR_INCLUDE_AUTOMATED", d.include_automated),
             include_subagents: flag("TROVADOR_INCLUDE_SUBAGENTS", d.include_subagents),
+            index_redact: flag("TROVADOR_INDEX_REDACT", d.index_redact),
             // Deliberately not read from the environment: only the command line turns it off.
             redact: d.redact,
         }
@@ -221,6 +230,13 @@ mod tests {
         assert!(l.include_active && l.include_automated && l.include_subagents);
         let l = Limits::from_lookup(lookup(&[("TROVADOR_INCLUDE_SUBAGENTS", "sure")]));
         assert!(!l.include_subagents, "a typo must not widen results");
+    }
+
+    #[test]
+    fn index_redaction_is_off_unless_clearly_turned_on() {
+        assert!(!Limits::default().index_redact);
+        assert!(Limits::from_lookup(lookup(&[("TROVADOR_INDEX_REDACT", "on")])).index_redact);
+        assert!(!Limits::from_lookup(lookup(&[("TROVADOR_INDEX_REDACT", "please")])).index_redact);
     }
 
     #[test]
