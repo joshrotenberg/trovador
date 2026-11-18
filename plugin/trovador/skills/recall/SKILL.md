@@ -43,6 +43,9 @@ take it, and leaving it out includes both.
 Each hit has `matches[].index`. Open the transcript there: `sessions` with
 `action=transcript`, `session_id`, and `offset` set a few records before the index.
 Follow `next_offset` only as far as you need.
+A record of type `omitted` is something known with nothing to read. A record of type
+`unrecognized` is a shape trovador has not learned: its `name` is the provider's type and
+its `text` a shortened copy of the raw JSON. Read it as raw data; it may be partial.
 Every transcript page and text part reports a `revision` of the session it was read
 from. Pass the same string back as `expected_revision` on each continuation. A session that
 was only appended to since is still read as it was, so a walk through a live session

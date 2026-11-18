@@ -427,7 +427,11 @@ fn sampled_transcripts_are_contiguous_capped_and_not_duplicated() {
         for (i, r) in recs.iter().enumerate() {
             assert_eq!(r.index, i, "{}: index gap at {i}", who(e));
             if let Some(t) = &r.text {
-                let cap = limits.record_chars.max(limits.tool_chars) + truncation;
+                let cap = limits
+                    .record_chars
+                    .max(limits.tool_chars)
+                    .max(limits.unrecognized_chars)
+                    + truncation;
                 assert!(
                     t.chars().count() <= cap,
                     "{}: record {i} is {} chars",
@@ -893,6 +897,7 @@ fn archive_files_idle_before_the_run_are_untouched() {
 fn report_record_categories_and_snippet_coverage() {
     let l = live();
     let mut omitted: BTreeMap<String, usize> = BTreeMap::new();
+    let mut unrecognized: BTreeMap<String, usize> = BTreeMap::new();
     let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
     for e in &l.sample {
         for r in projection(e, &l.ctx.limits) {
@@ -903,8 +908,21 @@ fn report_record_categories_and_snippet_coverage() {
                 .to_string();
             if r.kind == RecordKind::Omitted {
                 *omitted
-                    .entry(format!("{}:{}", e.backend, r.name.unwrap_or_default()))
+                    .entry(format!(
+                        "{}:{}",
+                        e.backend,
+                        r.name.clone().unwrap_or_default()
+                    ))
                     .or_default() += r.count.unwrap_or(1);
+            }
+            if r.kind == RecordKind::Unrecognized {
+                *unrecognized
+                    .entry(format!(
+                        "{}:{}",
+                        e.backend,
+                        r.name.clone().unwrap_or_default()
+                    ))
+                    .or_default() += 1;
             }
             *kinds.entry(format!("{}:{kind}", e.backend)).or_default() += 1;
         }
@@ -925,6 +943,11 @@ fn report_record_categories_and_snippet_coverage() {
     eprintln!("  record kinds over the sample: {kinds:?}");
     eprintln!("  omitted categories over the sample, by source records:");
     for (k, n) in &omitted {
+        eprintln!("    {k}: {n}");
+    }
+    // A type a newer CLI introduced shows up here: the projection has not been taught it.
+    eprintln!("  unrecognized types over the sample:");
+    for (k, n) in &unrecognized {
         eprintln!("    {k}: {n}");
     }
     eprintln!("  sessions with a snippet, by backend and origin:");

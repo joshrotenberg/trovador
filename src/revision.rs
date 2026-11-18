@@ -173,13 +173,14 @@ fn settings_hash(e: &ArchiveEntry, limits: &Limits, compressed: bool) -> u64 {
     // would otherwise accept a continuation and cut the text somewhere else.
     bytes_hash(
         format!(
-            "{}/{}|file={}|archived={}|projection={PROJECTION_VERSION}|record_chars={}|tool_chars={}|redact={}|compressed={compressed}",
+            "{}/{}|file={}|archived={}|projection={PROJECTION_VERSION}|record_chars={}|tool_chars={}|unrecognized_chars={}|redact={}|compressed={compressed}",
             e.backend,
             e.session_id,
             e.file.display(),
             e.archived,
             limits.record_chars,
             limits.tool_chars,
+            limits.unrecognized_chars,
             limits.redact,
         )
         .as_bytes(),

@@ -321,7 +321,19 @@ sessions were subagents, 1,694 of them Codex `guardian` approval reviewers.
 ## Transcripts
 
 Records are `user`, `assistant`, `tool_call`, `tool_result`, `attachment`, `system`, `reasoning`,
-or `omitted` with a category. `reasoning` appears only when the provider kept readable text.
+`unrecognized`, or `omitted` with a category. `reasoning` appears only when the provider kept
+readable text.
+
+`omitted` is for a known type with nothing to read: client bookkeeping, context injected for
+the model, binary images and documents, encrypted content. `unrecognized` is for a record,
+content block, attachment subtype or Codex item of a type trovador has not been taught. Its
+`name` is the type (`attachment:<subtype>` for an attachment), and its `text` is the
+record's JSON without the envelope fields, with binary and encrypted values replaced by
+`"[binary]"`, cut to `TROVADOR_UNRECOGNIZED_CHARS` (1,000) characters. Search indexes that
+text, so words in a shape the providers introduced after this release can still be found;
+the text is shown as data, not interpreted. Each unrecognized record stands alone and is
+never collapsed. `TROVADOR_UNRECOGNIZED_CHARS=0` shows them as `omitted` instead and keeps
+them out of the index.
 Forked Codex children collapse copied parent history into an `omitted` record named
 `forked_history`; it does not contribute turns, indexed text, or session text. An
 impossible boundary in an archived file preserves the original transcript. A terminal-event
@@ -461,7 +473,8 @@ request to retry if it did. On a 482 MB index it took 0.10 s and 17 MB of memory
 
 `sessions text` (MCP: `sessions` with `action: text`) renders a session the way a summary
 needs it: user and assistant turns, tool calls and results, attachments, and system
-records, without omitted records or reasoning headings. The text is redacted as a whole
+records, without omitted records, reasoning headings, or unrecognized records (which are
+raw JSON; transcripts and search still show them). The text is redacted as a whole
 and then cut into parts of `TROVADOR_RESPONSE_MAX_CHARS` (100,000) characters, so no part
 can begin or end inside a secret. `offset` counts characters of the redacted text. A
 forked Codex child's text leaves out the parent history it copied.
@@ -496,8 +509,8 @@ cargo test --release --test live -- --ignored --nocapture
 ```
 
 No live test sends anything to a provider. Sampling is seeded and the seed is printed (`TROVADOR_LIVE_SEED` repeats a run). The
-output ends with a drift report of record kinds and omitted categories, where a record type
-a newer CLI introduced shows up as a new category.
+output ends with a drift report of record kinds, omitted categories, and unrecognized types,
+where a record type a newer CLI introduced shows up as an unrecognized type.
 
 ## License
 
