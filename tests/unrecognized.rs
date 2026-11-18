@@ -226,13 +226,13 @@ fn an_unknown_codex_item_is_unrecognized_and_searchable() {
     let f = Fixture::new();
     codex(
         &f,
-        vec![codex_item(json!({"type": "DynamicToolCall", "id": "dt-1",
+        vec![codex_item(json!({"type": "HologramCall", "id": "dt-1",
                                "tool": "lookup", "arguments": {"q": "zqdynamicneedle"}}))],
     );
     let ctx = f.ctx();
     let u = of_kind(&ctx, ID_A, RecordKind::Unrecognized);
     assert_eq!(u.len(), 1, "{u:?}");
-    assert_eq!(u[0].name.as_deref(), Some("DynamicToolCall"));
+    assert_eq!(u[0].name.as_deref(), Some("HologramCall"));
     assert!(u[0].text.as_deref().unwrap().contains("zqdynamicneedle"));
     assert_eq!(
         match_kind(&ctx, "zqdynamicneedle").as_deref(),
@@ -429,5 +429,94 @@ fn session_text_leaves_unrecognized_records_out_and_render_labels_them() {
         rendered[0].starts_with("UNRECOGNIZED (hologram-note): {"),
         "{}",
         rendered[0]
+    );
+}
+
+// --- shapes the fallback surfaced on the development machine ----------------------
+
+#[test]
+fn a_bare_codex_reasoning_record_from_the_oldest_rollouts_is_reasoning() {
+    // The oldest rollouts have no envelope. Bare reasoning records produced nothing at all
+    // until unrecognized records showed 583 of them in 6 local sessions.
+    let f = Fixture::new();
+    f.codex(
+        ID_A,
+        &[
+            json!({"id": ID_A, "timestamp": "2025-09-01T00:00:00Z", "instructions": null}),
+            json!({"record_type": "state"}),
+            json!({"type": "message", "role": "user",
+                   "content": [{"type": "input_text", "text": "inspect the repo"}]}),
+            json!({"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAAA",
+                   "summary": [{"type": "summary_text", "text": "**Inspecting zqbarereasoning**"}]}),
+            json!({"type": "message", "role": "assistant",
+                   "content": [{"type": "output_text", "text": "looked"}]}),
+        ],
+        100,
+    );
+    let ctx = f.ctx();
+    let recs = records(&ctx, ID_A);
+    let kinds: Vec<_> = recs.iter().map(|r| r.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            RecordKind::User,
+            RecordKind::Reasoning,
+            RecordKind::Assistant
+        ],
+        "{recs:?}"
+    );
+    assert_eq!(
+        recs[1].text.as_deref(),
+        Some("**Inspecting zqbarereasoning**")
+    );
+    assert_eq!(
+        match_kind(&ctx, "zqbarereasoning").as_deref(),
+        Some("reasoning")
+    );
+}
+
+#[test]
+fn a_codex_dynamic_tool_call_is_a_tool_call_and_its_result() {
+    let f = Fixture::new();
+    codex(
+        &f,
+        vec![codex_item(json!({
+            "type": "DynamicToolCall", "id": "dt-1", "namespace": "codex_app",
+            "tool": "read_thread_terminal", "arguments": {"threadId": "t-1"},
+            "status": "failed",
+            "content_items": [{"type": "inputText", "text": "zqnoterminal attached yet"}],
+            "success": false
+        }))],
+    );
+    let ctx = f.ctx();
+    let recs: Vec<_> = records(&ctx, ID_A)
+        .into_iter()
+        .filter(|r| matches!(r.kind, RecordKind::ToolCall | RecordKind::ToolResult))
+        .map(|r| {
+            (
+                r.kind,
+                r.name.unwrap_or_default(),
+                r.text.unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        recs,
+        [
+            (
+                RecordKind::ToolCall,
+                "codex_app/read_thread_terminal".to_string(),
+                r#"{"threadId":"t-1"}"#.to_string()
+            ),
+            (
+                RecordKind::ToolResult,
+                "codex_app/read_thread_terminal".to_string(),
+                "zqnoterminal attached yet".to_string()
+            ),
+        ]
+    );
+    assert_eq!(
+        match_kind(&ctx, "zqnoterminal").as_deref(),
+        Some("tool_result")
     );
 }

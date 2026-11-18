@@ -534,12 +534,14 @@ pub(crate) fn codex_mode_signal(r: &Value) -> Option<CodexMode> {
 pub(crate) fn project_codex(r: &Value, mode: CodexMode, limits: &Limits, out: &mut Vec<Draft>) {
     let (rc, tc) = (limits.record_chars, limits.tool_chars);
     let outer = str_at(r, "type");
-    // The oldest files have no envelope: the record is its own payload.
+    // The oldest files have no envelope: the record is its own payload. Bare `reasoning`
+    // records were dropped without a trace until unrecognized records surfaced 583 of them
+    // in 6 local sessions (trovador#84).
     let p = match r.get("payload") {
         Some(p) => p,
         None if matches!(
             outer,
-            Some("message" | "function_call" | "function_call_output")
+            Some("message" | "function_call" | "function_call_output" | "reasoning")
         ) =>
         {
             r
@@ -636,7 +638,7 @@ pub(crate) fn project_codex(r: &Value, mode: CodexMode, limits: &Limits, out: &m
         }
         // Reasoning, as summary headings. The full reasoning is encrypted; about four in
         // five records have no summary at all and project to nothing.
-        (Some("response_item"), Some("reasoning")) => {
+        (Some("response_item" | "reasoning"), Some("reasoning")) => {
             if mode != CodexMode::Items {
                 let text = p
                     .get("summary")
@@ -912,6 +914,29 @@ fn project_codex_item(item: &Value, limits: &Limits, out: &mut Vec<Draft>) {
             "view_image",
             cap(str_at(item, "path").unwrap_or(""), tc),
         )),
+        // A call to a tool the Codex app registers at run time (`codex_app/read_thread`,
+        // `codex_app/open_in_codex`), with its result in `content_items`. All 9 local
+        // instances were unrecognized records when that kind arrived (trovador#84).
+        Some("DynamicToolCall") => {
+            let name = match (str_at(item, "namespace"), str_at(item, "tool")) {
+                (Some(ns), Some(t)) => format!("{ns}/{t}"),
+                (None, Some(t)) => t.to_string(),
+                _ => "dynamic_tool".to_string(),
+            };
+            let args = item
+                .get("arguments")
+                .map(Value::to_string)
+                .unwrap_or_default();
+            out.push(Draft::named(
+                RecordKind::ToolCall,
+                name.clone(),
+                cap(&args, tc),
+            ));
+            let result = block_text(item.get("content_items").unwrap_or(&Value::Null));
+            if !result.is_empty() {
+                out.push(Draft::named(RecordKind::ToolResult, name, cap(&result, tc)));
+            }
+        }
         // Every one seen was the parent waiting on its subagents with none named; one that
         // names agents says who it was waiting for.
         Some("CollabAgentToolCall") => {
