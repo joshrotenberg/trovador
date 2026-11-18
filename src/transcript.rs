@@ -1,10 +1,16 @@
 //! Transcript projection: raw provider JSONL into bounded, allowlisted records.
 //!
-//! Anything not recognised becomes an `omitted` record with a category rather than being
-//! dropped, so a reader can tell "nothing happened" from "something happened that this
-//! projection does not show". Consecutive omitted records of one category collapse into one
-//! with a count: a Claude session carries hundreds of `total_tokens_reminder` attachments,
-//! and one record each would fill a page with noise.
+//! Nothing is dropped. A record of a known type with nothing worth reading (bookkeeping,
+//! injected context, binary data) becomes an `omitted` record with a category, so a reader
+//! can tell "nothing happened" from "something happened that this projection does not
+//! show". Consecutive omitted records of one category collapse into one with a count: a
+//! Claude session carries hundreds of `total_tokens_reminder` attachments, and one record
+//! each would fill a page with noise.
+//!
+//! A record, content block or item of a type this projection has never seen becomes an
+//! `unrecognized` record instead, carrying a bounded copy of its JSON. Providers add types
+//! without notice, and text in a new shape was otherwise unsearchable until the projection
+//! learned it (trovador#84). The bookkeeping lists below decide which is which.
 //!
 //! Files are streamed line by line. Codex sessions over 370 MB exist, so nothing here reads
 //! a whole file into memory, and a page stops reading once it is full.
@@ -15,7 +21,7 @@ use std::io::BufRead;
 /// A change to the redaction rules in `redact.rs` must bump it too: the revision of a
 /// session (`revision.rs`) holds this number and not the rules, so two builds with
 /// different rules would otherwise share a revision for `text`.
-pub const PROJECTION_VERSION: i64 = 10;
+pub const PROJECTION_VERSION: i64 = 11;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -36,6 +42,10 @@ pub enum RecordKind {
     /// What the model said about its own reasoning: Claude thinking text, Codex reasoning
     /// summaries. Only present when the provider kept readable text.
     Reasoning,
+    /// A record, content block or item of a type this projection does not know. `name` is
+    /// its type and `text` its JSON, with binary and encrypted values replaced, cut to
+    /// `unrecognized_chars`. Searchable, but not interpreted.
+    Unrecognized,
     Omitted,
 }
 
@@ -85,7 +95,260 @@ impl Draft {
             name: Some(category.into()),
         }
     }
+    /// `v` as an unrecognized record. With `unrecognized_chars` at zero it is an omitted
+    /// record of the same category instead, which is how the projection behaved before
+    /// unrecognized records existed.
+    fn unrecognized(
+        category: impl Into<String>,
+        v: &Value,
+        skip: &[&str],
+        limits: &Limits,
+    ) -> Self {
+        let n = limits.unrecognized_chars;
+        if n == 0 {
+            return Self::omitted(category);
+        }
+        Self::named(
+            RecordKind::Unrecognized,
+            category,
+            cap(&opaque_json(v, skip, n), n),
+        )
+    }
 }
+
+/// Keys whose values are binary or encrypted wherever they appear: base64 image and file
+/// data (`data`, `bytes`), Codex's encrypted reasoning and compactions
+/// (`encrypted_content`, 32,588 chars in one sampled compaction), and Claude's thinking
+/// signatures. None of them is searchable text, and one would fill the whole budget.
+const OPAQUE_KEYS: &[&str] = &["data", "bytes", "encrypted_content", "signature"];
+
+/// Compact JSON of `v` with values under [`OPAQUE_KEYS`] and `data:` URLs replaced by
+/// `"[binary]"`, and the top-level keys in `skip` left out. It stops writing once the output
+/// is longer than `max` characters can be (4 bytes each), so a record of many megabytes is
+/// not serialized whole to keep a few hundred characters of it; [`cap`] then cuts it to
+/// `max` and marks the cut.
+fn opaque_json(v: &Value, skip: &[&str], max: usize) -> String {
+    let budget = max.saturating_mul(4);
+    let mut out = String::new();
+    fn string(s: &str, out: &mut String, max: usize) {
+        let head: String = s.chars().take(max + 1).collect();
+        out.push_str(&serde_json::to_string(&head).unwrap_or_default());
+    }
+    fn walk(v: &Value, skip: &[&str], out: &mut String, max: usize, budget: usize) {
+        match v {
+            Value::Object(m) => {
+                out.push('{');
+                let mut first = true;
+                for (k, x) in m {
+                    if skip.contains(&k.as_str()) {
+                        continue;
+                    }
+                    if out.len() > budget {
+                        return;
+                    }
+                    if !first {
+                        out.push(',');
+                    }
+                    first = false;
+                    string(k, out, max);
+                    out.push(':');
+                    if OPAQUE_KEYS.contains(&k.as_str()) && !x.is_null() {
+                        out.push_str("\"[binary]\"");
+                    } else {
+                        walk(x, &[], out, max, budget);
+                    }
+                }
+                out.push('}');
+            }
+            Value::Array(a) => {
+                out.push('[');
+                for (i, x) in a.iter().enumerate() {
+                    if out.len() > budget {
+                        return;
+                    }
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    walk(x, &[], out, max, budget);
+                }
+                out.push(']');
+            }
+            Value::String(s) if s.starts_with("data:") => out.push_str("\"[binary]\""),
+            Value::String(s) => string(s, out, max),
+            other => out.push_str(&other.to_string()),
+        }
+    }
+    walk(v, skip, &mut out, max, budget);
+    out
+}
+
+/// Fields every Claude record carries that say where it sits, not what it is. Left out of
+/// an unrecognized record's text so its budget goes to the part that is new.
+const CLAUDE_ENVELOPE: &[&str] = &[
+    "type",
+    "uuid",
+    "parentUuid",
+    "logicalParentUuid",
+    "sessionId",
+    "session_id",
+    "timestamp",
+    "cwd",
+    "version",
+    "gitBranch",
+    "userType",
+    "isSidechain",
+    "entrypoint",
+    "slug",
+    "requestId",
+];
+
+/// Claude record types that carry nothing to read beyond what other records show, from
+/// every local Claude file on 2026-11-18 (5,623 files) and Counterpart's list. Titles,
+/// cwd moves and PR links feed session metadata; the rest is client state, request
+/// bookkeeping and cost accounting. `queue-operation` and `last-prompt` hold text the user
+/// typed that is not always in a user record; they are known types, and showing that text
+/// once is trovador#89, not a fallback.
+const CLAUDE_BOOKKEEPING: &[&str] = &[
+    "agent-name",
+    "agent-setting",
+    "ai-title",
+    "api-request",
+    "api-request-blob",
+    "api-request-shape",
+    "artifact-autoreact-ledger",
+    "artifact-comment-monitor",
+    "atis-latch",
+    "bridge-session",
+    "continued-in",
+    "cost-state",
+    "custom-title",
+    "failed",
+    "file-history-delta",
+    "file-history-snapshot",
+    "fork-context-ref",
+    "frame-link",
+    "last-prompt",
+    "launched",
+    "mode",
+    "permission-mode",
+    "pr-link",
+    "progress",
+    "queue-operation",
+    "relocated",
+    "result",
+    "session-owner",
+    "started",
+    "summary",
+    "tools-used",
+    "worktree-state",
+];
+
+/// Claude attachment subtypes known to be client bookkeeping or context injected for the
+/// model (reminders, CLAUDE.md contents, skill and tool listings): all 50 subtypes in the
+/// 5,623 local Claude files on 2026-11-18. `file` and `structured_output` are listed for
+/// the records of theirs that have no content to project. A subtype not
+/// listed is unrecognized rather than assumed to be more of the same: Claude Code adds
+/// them often, and one could carry text a person wrote. `queued_command` holds prompts
+/// typed during a turn and is trovador#89.
+const CLAUDE_ATTACHMENTS: &[&str] = &[
+    "agent_listing_delta",
+    "auto_mode",
+    "batching_reminder_sent",
+    "budget_usd",
+    "command_permissions",
+    "compact_file_reference",
+    "context_sections",
+    "credential_org",
+    "date",
+    "date_change",
+    "deferred_tools_delta",
+    "deferred_tools_record",
+    "directory",
+    "dynamic_skill",
+    "edited_text_file",
+    "environment",
+    "file",
+    "hook_additional_context",
+    "hook_blocking_error",
+    "hook_non_blocking_error",
+    "hook_success",
+    "hook_system_message",
+    "inlined_image_paths",
+    "instructions",
+    "invoked_skills",
+    "max_turns_reached",
+    "mcp_instructions_delta",
+    "model",
+    "nested_memory",
+    "pdf_reference",
+    "plan_mode",
+    "prompt_snapshot",
+    "queued_command",
+    "read_truncation_notice",
+    "remote_session_change",
+    "sandbox_instructions",
+    "session_context",
+    "session_cron_carry",
+    "silent_turn_reminder",
+    "skill_listing",
+    "structured_output",
+    "task_reminder",
+    "task_status",
+    "thinking_drop",
+    "total_tokens_reminder",
+    "ultra_effort_enter",
+    "ultra_effort_exit",
+    "ultrathink_effort",
+    "unknown_command_fallback",
+    "workflow_keyword_request",
+];
+
+/// Claude content blocks known to hold nothing searchable: binary images and documents,
+/// and thinking whose text the provider withheld.
+const CLAUDE_OPAQUE_BLOCKS: &[&str] = &["image", "document", "redacted_thinking"];
+
+/// Codex record and payload types that carry nothing to read beyond what other records
+/// show, from 791 local rollouts on 2026-11-18 and Counterpart's list. Most are settings,
+/// token accounting and task boundaries. The `event_msg` mirrors of tool calls, reasoning
+/// and messages repeat what the response or item stream already shows, and are listed so
+/// an older rollout does not show every call twice.
+const CODEX_BOOKKEEPING: &[&str] = &[
+    // Top-level records.
+    "session_meta",
+    "turn_context",
+    "token_usage_record",
+    "world_state",
+    "inter_agent_communication_metadata",
+    // response_item payloads.
+    "additional_tools",
+    "compaction",
+    "configuration_update",
+    "ghost_snapshot",
+    // event_msg payloads.
+    "token_count",
+    "task_started",
+    "task_complete",
+    "turn_started",
+    "turn_complete",
+    "turn_aborted",
+    "thread_settings_applied",
+    "context_compacted",
+    "agent_reasoning",
+    "agent_reasoning_raw_content",
+    "agent_reasoning_section_break",
+    "exec_command_begin",
+    "exec_command_end",
+    "mcp_tool_call_begin",
+    "mcp_tool_call_end",
+    "patch_apply_begin",
+    "patch_apply_end",
+    "web_search_begin",
+    "web_search_end",
+    "item_started",
+];
+
+/// Fields of a Codex record envelope that say where it sits, not what it is.
+const CODEX_ENVELOPE: &[&str] = &["type", "timestamp", "ordinal", "metadata"];
 
 fn cap(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
@@ -133,7 +396,7 @@ fn project_claude(r: &Value, limits: &Limits, out: &mut Vec<Draft>) {
                             RecordKind::ToolResult,
                             cap(&block_text(b.get("content").unwrap_or(&Value::Null)), tc),
                         )),
-                        _ => {}
+                        other => claude_block_fallback(other, b, limits, out),
                     }
                 }
             }
@@ -163,7 +426,7 @@ fn project_claude(r: &Value, limits: &Limits, out: &mut Vec<Draft>) {
                             out.push(Draft::new(RecordKind::Reasoning, cap(t, rc)));
                         }
                     }
-                    _ => {}
+                    other => claude_block_fallback(other, b, limits, out),
                 }
             }
         }
@@ -186,7 +449,18 @@ fn project_claude(r: &Value, limits: &Limits, out: &mut Vec<Draft>) {
                     "structured_output",
                     cap(&a["data"].to_string(), rc),
                 )),
-                _ => out.push(Draft::omitted("attachment")),
+                Some(k) if CLAUDE_ATTACHMENTS.contains(&k) => {
+                    out.push(Draft::omitted("attachment"))
+                }
+                // Only the attachment itself: its `rendered` copy is the system reminder the
+                // model saw, which repeats it inside injected boilerplate.
+                Some(k) => out.push(Draft::unrecognized(
+                    format!("attachment:{k}"),
+                    a,
+                    &["type"],
+                    limits,
+                )),
+                None => out.push(Draft::unrecognized("attachment", a, &[], limits)),
             }
         }
         // An away summary is a recap sent to the user; other system subtypes are noise.
@@ -194,8 +468,21 @@ fn project_claude(r: &Value, limits: &Limits, out: &mut Vec<Draft>) {
             (Some("away_summary"), Some(c)) => out.push(Draft::new(RecordKind::System, cap(c, rc))),
             _ => out.push(Draft::omitted("system")),
         },
-        Some(other) => out.push(Draft::omitted(other)),
-        None => {}
+        Some(other) if CLAUDE_BOOKKEEPING.contains(&other) => out.push(Draft::omitted(other)),
+        Some(other) => out.push(Draft::unrecognized(other, r, CLAUDE_ENVELOPE, limits)),
+        // No Claude file on the development machine has a record without a type.
+        None => out.push(Draft::unrecognized("untyped", r, CLAUDE_ENVELOPE, limits)),
+    }
+}
+
+/// A Claude content block that no arm above projects: a known opaque one is omitted, any
+/// other is unrecognized. Before trovador#84 these produced nothing at all, so an assistant
+/// turn made only of an unknown block looked like no turn.
+fn claude_block_fallback(kind: Option<&str>, b: &Value, limits: &Limits, out: &mut Vec<Draft>) {
+    match kind {
+        Some(k) if CLAUDE_OPAQUE_BLOCKS.contains(&k) => out.push(Draft::omitted(k)),
+        Some(k) => out.push(Draft::unrecognized(k, b, &["type"], limits)),
+        None => out.push(Draft::unrecognized("block", b, &[], limits)),
     }
 }
 
@@ -257,7 +544,14 @@ pub(crate) fn project_codex(r: &Value, mode: CodexMode, limits: &Limits, out: &m
         {
             r
         }
-        None => return,
+        // The oldest rollouts also hold untyped header lines and `record_type: state`
+        // lines; neither has a `type`, and neither carries anything a session shows.
+        None => {
+            if let Some(kind) = outer.filter(|k| !CODEX_BOOKKEEPING.contains(k)) {
+                out.push(Draft::unrecognized(kind, r, CODEX_ENVELOPE, limits));
+            }
+            return;
+        }
     };
     let inner = str_at(p, "type");
     match (outer, inner) {
@@ -420,8 +714,15 @@ pub(crate) fn project_codex(r: &Value, mode: CodexMode, limits: &Limits, out: &m
                 cap(&block_text(p.get("content").unwrap_or(&Value::Null)), rc),
             ));
         }
-        (_, Some(kind)) => out.push(Draft::omitted(kind)),
-        (Some(kind), None) => out.push(Draft::omitted(kind)),
+        // `developer` and `system` role messages are recognised above and omitted there; what
+        // reaches here is a payload or record type the projection has not been taught.
+        (_, Some(kind)) | (Some(kind), None) => {
+            if CODEX_BOOKKEEPING.contains(&kind) {
+                out.push(Draft::omitted(kind));
+            } else {
+                out.push(Draft::unrecognized(kind, p, &["type"], limits));
+            }
+        }
         (None, None) => {}
     }
 }
@@ -639,8 +940,8 @@ fn project_codex_item(item: &Value, limits: &Limits, out: &mut Vec<Draft>) {
                 ));
             }
         }
-        Some(other) => out.push(Draft::omitted(other)),
-        None => out.push(Draft::omitted("item")),
+        Some(other) => out.push(Draft::unrecognized(other, item, &["type", "id"], limits)),
+        None => out.push(Draft::unrecognized("item", item, &[], limits)),
     }
 }
 
@@ -1234,5 +1535,11 @@ pub fn render(r: &Record) -> String {
             None => format!("SYSTEM: {text}"),
         },
         RecordKind::Reasoning => format!("REASONING: {text}"),
+        RecordKind::Unrecognized => {
+            format!(
+                "UNRECOGNIZED ({}): {text}",
+                r.name.as_deref().unwrap_or("?")
+            )
+        }
     }
 }

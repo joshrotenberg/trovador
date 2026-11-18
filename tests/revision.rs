@@ -738,7 +738,7 @@ fn a_torn_final_line_at_the_scanned_size_projects_the_same_on_every_read_at_that
 }
 
 #[test]
-fn the_tool_cap_and_the_redact_setting_each_change_the_revision() {
+fn the_tool_cap_the_unrecognized_cap_and_the_redact_setting_each_change_the_revision() {
     let (f, _) = claude_fixture();
     let base = sessions::text(&f.ctx(), ID_A, None, 0).unwrap().revision;
     for (what, limits) in [
@@ -746,6 +746,13 @@ fn the_tool_cap_and_the_redact_setting_each_change_the_revision() {
             "tool_chars",
             trovador::Limits {
                 tool_chars: 7,
+                ..limits()
+            },
+        ),
+        (
+            "unrecognized_chars",
+            trovador::Limits {
+                unrecognized_chars: 7,
                 ..limits()
             },
         ),

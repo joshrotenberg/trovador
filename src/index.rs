@@ -96,8 +96,12 @@ pub fn db_path(paths: &Paths) -> PathBuf {
 /// rows built with one record cap were otherwise served after it changed (#26).
 fn built_with(limits: &Limits) -> (i64, i64, i64) {
     let settings = format!(
-        "record_chars={} tool_chars={} head_steps={:?} reasoning={}",
-        limits.record_chars, limits.tool_chars, limits.head_steps, limits.index_reasoning
+        "record_chars={} tool_chars={} unrecognized_chars={} head_steps={:?} reasoning={}",
+        limits.record_chars,
+        limits.tool_chars,
+        limits.unrecognized_chars,
+        limits.head_steps,
+        limits.index_reasoning
     );
     (
         SCHEMA_VERSION,
@@ -835,6 +839,7 @@ fn kind_str(k: RecordKind) -> &'static str {
         RecordKind::Attachment => "attachment",
         RecordKind::System => "system",
         RecordKind::Reasoning => "reasoning",
+        RecordKind::Unrecognized => "unrecognized",
         RecordKind::Omitted => "omitted",
     }
 }

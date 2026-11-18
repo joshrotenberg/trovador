@@ -75,8 +75,11 @@ bug, including spike issue numbers where the lesson came from there.
 - **Every tunable lives in `src/limits.rs`**, is overridable by a `TROVADOR_*` environment
   variable, and is reported by `trovador doctor`. These numbers are context budgets: most of
   what trovador returns ends up in some agent's context window.
-- **Unknown records are kept as `omitted` with a category**, never silently dropped. Provider
-  formats change without notice.
+- **Nothing is silently dropped.** A known type with nothing to read is `omitted` with a
+  category. A record, block, attachment subtype or item of a type the projection does not
+  know is `unrecognized`, with a bounded copy of its JSON that search can find. Provider
+  formats change without notice; teaching the projection a new type means adding it to a
+  match arm or to a bookkeeping list in `src/transcript.rs`.
 
 ## Tests
 

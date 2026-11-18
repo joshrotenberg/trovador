@@ -27,6 +27,11 @@ pub struct Limits {
     pub record_chars: usize,
     /// Cap for tool results and tool call arguments, which are rarely worth more.
     pub tool_chars: usize,
+    /// Cap for the JSON kept from a record, block or item of a type the projection does not
+    /// know (an `unrecognized` record). Enough to show its type, field names and the start
+    /// of its text, and to make that text searchable. Zero shows such records as `omitted`
+    /// with no text, as before they existed.
+    pub unrecognized_chars: usize,
     /// Records per transcript page.
     pub page_size: usize,
     /// Bytes above which a session is reported unresumable. The provider rejects the turn
@@ -72,6 +77,7 @@ impl Default for Limits {
             title_scan_max_bytes: 4 * 1024 * 1024,
             record_chars: 4_000,
             tool_chars: 600,
+            unrecognized_chars: 1_000,
             page_size: 200,
             resume_limit_bytes: 900_000,
             list_default: 20,
@@ -122,6 +128,7 @@ impl Limits {
             title_scan_max_bytes: num("TROVADOR_TITLE_SCAN_MAX_BYTES", d.title_scan_max_bytes),
             record_chars: num("TROVADOR_RECORD_CHARS", d.record_chars),
             tool_chars: num("TROVADOR_TOOL_CHARS", d.tool_chars),
+            unrecognized_chars: num("TROVADOR_UNRECOGNIZED_CHARS", d.unrecognized_chars),
             page_size: num("TROVADOR_PAGE_SIZE", d.page_size).max(1),
             resume_limit_bytes: num("TROVADOR_RESUME_LIMIT", d.resume_limit_bytes as usize) as u64,
             list_default: num("TROVADOR_LIST_DEFAULT", d.list_default).max(1),
@@ -166,6 +173,15 @@ mod tests {
         assert_eq!(l.offset_max, 50);
         let l = Limits::from_lookup(lookup(&[("TROVADOR_LIST_LOOKAHEAD", "7")]));
         assert_eq!(l.list_lookahead, 7);
+    }
+
+    #[test]
+    fn the_unrecognized_cap_can_be_overridden_or_turned_off() {
+        assert_eq!(Limits::default().unrecognized_chars, 1_000);
+        let l = Limits::from_lookup(lookup(&[("TROVADOR_UNRECOGNIZED_CHARS", "250")]));
+        assert_eq!(l.unrecognized_chars, 250);
+        let l = Limits::from_lookup(lookup(&[("TROVADOR_UNRECOGNIZED_CHARS", "0")]));
+        assert_eq!(l.unrecognized_chars, 0);
     }
 
     #[test]

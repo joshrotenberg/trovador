@@ -33,14 +33,18 @@ pub struct SessionText {
     pub truncated: Option<Truncated>,
 }
 
-/// The transcript as text, without omitted records, which carry nothing to read, or
+/// The transcript as text, without omitted records, which carry nothing to read,
 /// reasoning headings, which say little about what happened and would make every part
-/// longer.
+/// longer, or unrecognized records, which are raw JSON of types the projection does not
+/// know. Search and transcripts still show those.
 pub fn render(e: &ArchiveEntry, limits: &Limits) -> std::io::Result<String> {
     let mut out = String::new();
     let mut projection = Projection::open_snapshot(e, limits)?;
     for r in projection.by_ref() {
-        if matches!(r.kind, RecordKind::Omitted | RecordKind::Reasoning) {
+        if matches!(
+            r.kind,
+            RecordKind::Omitted | RecordKind::Reasoning | RecordKind::Unrecognized
+        ) {
             continue;
         }
         out.push_str(&transcript::render(&r));
