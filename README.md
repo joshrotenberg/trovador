@@ -334,6 +334,14 @@ text, so words in a shape the providers introduced after this release can still 
 the text is shown as data, not interpreted. Each unrecognized record stands alone and is
 never collapsed. `TROVADOR_UNRECOGNIZED_CHARS=0` shows them as `omitted` instead and keeps
 them out of the index.
+
+A Claude prompt typed while a turn is running is a `user` record named `queued` when Claude
+Code delivered it into that turn (a `queued_command` attachment), and an ordinary `user`
+record when it was dequeued as the next turn. A prompt removed from the queue before delivery
+never reached the model and stays in the omitted `queue-operation` run, as does `last-prompt`,
+a UI copy that is most often a shortened user prompt. Task notifications, which use the same
+attachment, stay omitted.
+
 Forked Codex children collapse copied parent history into an `omitted` record named
 `forked_history`; it does not contribute turns, indexed text, or session text. An
 impossible boundary in an archived file preserves the original transcript. A terminal-event
