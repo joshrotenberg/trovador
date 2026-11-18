@@ -234,6 +234,10 @@ pub struct Visibility {
     pub exclude_session: Option<String>,
     /// Leave out automated sessions, except these `backend/id` keys.
     pub automated_except: Option<Vec<String>>,
+    /// Leave out sessions started by another session. Resolved by `sessions` from the
+    /// caller's `include_subagents` and the configured default, so the index never reads
+    /// the raw option.
+    pub hide_subagents: bool,
     /// The Codex archived root, used with `SearchOpts::archived` to tell archived sessions
     /// from the rest. Like the caller's other filters it is not counted as hidden.
     pub archived_root: Option<String>,
@@ -1363,16 +1367,17 @@ pub struct SearchOpts {
     pub project: Option<String>,
     /// Only sessions with this origin.
     pub origin: Option<String>,
-    /// Include sessions started by another session.
-    #[serde(default)]
-    pub include_subagents: bool,
-    /// Include sessions written in the last few minutes, which by default are left out
-    /// because the session doing the search is always among them.
-    #[serde(default)]
-    pub include_active: bool,
-    /// Include automated sessions (`claude -p`, `codex exec`) that trovador did not start.
-    #[serde(default)]
-    pub include_automated: bool,
+    /// Include (true) or hide (false) sessions started by another session. Omitted: the
+    /// configured default, `TROVADOR_INCLUDE_SUBAGENTS` (hidden unless set).
+    pub include_subagents: Option<bool>,
+    /// Include (true) or hide (false) sessions written in the last few minutes, which by
+    /// default are left out because the session doing the search is always among them.
+    /// Omitted: the configured default, `TROVADOR_INCLUDE_ACTIVE` (hidden unless set).
+    pub include_active: Option<bool>,
+    /// Include (true) or hide (false) automated sessions (`claude -p`, `codex exec`) that
+    /// trovador did not start. Omitted: the configured default, `TROVADOR_INCLUDE_AUTOMATED`
+    /// (hidden unless set).
+    pub include_automated: Option<bool>,
     /// Leave out this session id, typically the caller's own.
     pub exclude_session: Option<String>,
     /// Only sessions last written at or after this: an RFC 3339 time, a date, or a
@@ -1651,7 +1656,7 @@ impl Index {
         // The defaults, each kept apart so what it hid can be counted.
         let mut defaults: Vec<(&str, String, rusqlite::types::Value)> = Vec::new();
         // Issue #15: an uncounted subagent filter made hidden matches look provably absent.
-        if !opts.include_subagents {
+        if vis.hide_subagents {
             defaults.push(("subagents", "s.subagent = ?".into(), 0.into()));
         }
         if let Some(t) = vis.active_since_ns {

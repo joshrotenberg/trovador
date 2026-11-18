@@ -48,14 +48,18 @@ enum Command {
         project: Option<String>,
         #[arg(long)]
         origin: Option<String>,
-        #[arg(long)]
-        include_subagents: bool,
-        /// Include sessions written in the last few minutes (TROVADOR_ACTIVE_WINDOW_S).
-        #[arg(long)]
-        include_active: bool,
-        /// Include claude -p and codex exec sessions.
-        #[arg(long)]
-        include_automated: bool,
+        /// Include sessions started by another session; =false hides them. Default:
+        /// TROVADOR_INCLUDE_SUBAGENTS, hidden unless set.
+        #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+        include_subagents: Option<bool>,
+        /// Include sessions written in the last few minutes (TROVADOR_ACTIVE_WINDOW_S);
+        /// =false hides them. Default: TROVADOR_INCLUDE_ACTIVE, hidden unless set.
+        #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+        include_active: Option<bool>,
+        /// Include claude -p and codex exec sessions; =false hides them. Default:
+        /// TROVADOR_INCLUDE_AUTOMATED, hidden unless set.
+        #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+        include_automated: Option<bool>,
         /// Leave out this session id.
         #[arg(long)]
         exclude_session: Option<String>,
@@ -154,12 +158,14 @@ enum SessionsCmd {
         /// Only sessions with this origin (cli, claude-desktop, sdk-cli, exec, vscode).
         #[arg(long)]
         origin: Option<String>,
-        /// Include sessions started by another session.
-        #[arg(long)]
-        include_subagents: bool,
-        /// Include claude -p and codex exec sessions.
-        #[arg(long)]
-        include_automated: bool,
+        /// Include sessions started by another session; =false hides them. Default:
+        /// TROVADOR_INCLUDE_SUBAGENTS, hidden unless set.
+        #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+        include_subagents: Option<bool>,
+        /// Include claude -p and codex exec sessions; =false hides them. Default:
+        /// TROVADOR_INCLUDE_AUTOMATED, hidden unless set.
+        #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+        include_automated: Option<bool>,
         /// Only sessions last written at or after this: 2026-10-01, an RFC 3339 time (Z or numeric offset), or 2d.
         #[arg(long)]
         since: Option<String>,

@@ -64,6 +64,18 @@ pub struct Limits {
     /// search. They raised the index from 287 MB to 415 MB on the development machine.
     /// Transcripts show them either way.
     pub index_reasoning: bool,
+    /// Whether search and list include, when a call does not say, sessions written within
+    /// `active_window_s`. Hidden by default because the session doing the search is among
+    /// them; a caller that passes its own id as `exclude_session` can include the rest.
+    pub include_active: bool,
+    /// Whether search and list include, when a call does not say, automated sessions
+    /// (`claude -p`, `codex exec`). Hidden by default because scripted runs outnumber the
+    /// sessions a person started.
+    pub include_automated: bool,
+    /// Whether search and list include, when a call does not say, sessions started by
+    /// another session. Hidden by default: on the development machine 2,950 of 5,292
+    /// sessions were subagents, 1,694 of them Codex approval reviewers.
+    pub include_subagents: bool,
     /// Redact secrets in what is returned, including search excerpts, which are built
     /// after redaction. Turned off only by `--no-redact` when the process starts.
     pub redact: bool,
@@ -88,6 +100,9 @@ impl Default for Limits {
             offset_max: 1_000_000,
             active_window_s: 600,
             index_reasoning: true,
+            include_active: false,
+            include_automated: false,
+            include_subagents: false,
             redact: true,
         }
     }
@@ -106,6 +121,13 @@ impl Limits {
             get(k)
                 .and_then(|v| v.trim().parse::<usize>().ok())
                 .unwrap_or(fallback)
+        };
+        // Unlike TROVADOR_INDEX_REASONING, which treats anything but an off word as on, these
+        // accept only clear words, so a typo keeps the default instead of widening results.
+        let flag = |k: &str, fallback: bool| match get(k).as_deref().map(str::trim) {
+            Some("1" | "true" | "yes" | "on") => true,
+            Some("0" | "false" | "no" | "off") => false,
+            _ => fallback,
         };
         let head_max = num(
             "TROVADOR_HEAD_MAX_BYTES",
@@ -141,6 +163,9 @@ impl Limits {
             index_reasoning: get("TROVADOR_INDEX_REASONING")
                 .map(|v| !matches!(v.trim(), "0" | "false" | "no" | "off"))
                 .unwrap_or(d.index_reasoning),
+            include_active: flag("TROVADOR_INCLUDE_ACTIVE", d.include_active),
+            include_automated: flag("TROVADOR_INCLUDE_AUTOMATED", d.include_automated),
+            include_subagents: flag("TROVADOR_INCLUDE_SUBAGENTS", d.include_subagents),
             // Deliberately not read from the environment: only the command line turns it off.
             redact: d.redact,
         }
@@ -182,6 +207,20 @@ mod tests {
         assert_eq!(l.unrecognized_chars, 250);
         let l = Limits::from_lookup(lookup(&[("TROVADOR_UNRECOGNIZED_CHARS", "0")]));
         assert_eq!(l.unrecognized_chars, 0);
+    }
+
+    #[test]
+    fn visibility_defaults_read_clear_words_and_ignore_anything_else() {
+        let d = Limits::default();
+        assert!(!d.include_active && !d.include_automated && !d.include_subagents);
+        let l = Limits::from_lookup(lookup(&[
+            ("TROVADOR_INCLUDE_ACTIVE", "yes"),
+            ("TROVADOR_INCLUDE_AUTOMATED", " 1 "),
+            ("TROVADOR_INCLUDE_SUBAGENTS", "true"),
+        ]));
+        assert!(l.include_active && l.include_automated && l.include_subagents);
+        let l = Limits::from_lookup(lookup(&[("TROVADOR_INCLUDE_SUBAGENTS", "sure")]));
+        assert!(!l.include_subagents, "a typo must not widen results");
     }
 
     #[test]

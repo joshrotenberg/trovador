@@ -457,6 +457,15 @@ transcript offset to open it at.
   `--include-automated`, or `--include-subagents` to include the respective defaults.
   An empty result with hidden matches has `absence_is_proof: false`; its note names
   the options that can reveal those matches.
+- **Changing the defaults.** `TROVADOR_INCLUDE_ACTIVE`, `TROVADOR_INCLUDE_AUTOMATED`, and
+  `TROVADOR_INCLUDE_SUBAGENTS` set whether a call that does not say includes each group
+  (`1`, `true`, `yes`, `on`, or `0`, `false`, `no`, `off`; anything else keeps the
+  default, which is to hide). A call always wins: `--include-subagents` or
+  `include_subagents: true` includes, `--include-subagents=false` or
+  `include_subagents: false` hides, whatever the default. `trovador doctor` reports the
+  values in effect. For the MCP server the variables must be in the environment the host
+  starts it in. `list` applies the automated and subagent defaults; it never hides
+  active sessions.
 - **Freshness.** A search first brings the index up to date, for at most
   `TROVADOR_INDEX_BUDGET_MS` (15,000). Files only appended to are read from where the last
   pass stopped; anything else changed is read again. `exhaustive` is true only when nothing

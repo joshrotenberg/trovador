@@ -105,6 +105,13 @@ pub fn row(e: &ArchiveEntry, meta: SessionMeta, limits: &Limits) -> SessionRow {
     }
 }
 
+/// A caller's `include_*` choice, or the configured default when it made none. The one
+/// place both doors' visibility inputs are resolved, so an omitted flag means the same
+/// thing on the CLI and over MCP.
+fn include(choice: Option<bool>, default: bool) -> bool {
+    choice.unwrap_or(default)
+}
+
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
 pub struct ListOpts {
     /// Only this backend.
@@ -121,14 +128,14 @@ pub struct ListOpts {
     pub archived: Option<bool>,
     /// Only sessions with this origin (`cli`, `claude-desktop`, `sdk-cli`, `exec`, ...).
     pub origin: Option<String>,
-    /// Include sessions started by another session. Off by default: approval reviewers and
-    /// spawned agents outnumber the sessions a person started.
-    #[serde(default)]
-    pub include_subagents: bool,
-    /// Include automated sessions (`claude -p`, `codex exec`) that trovador did not start.
-    /// An explicit `origin` includes them too.
-    #[serde(default)]
-    pub include_automated: bool,
+    /// Include (true) or hide (false) sessions started by another session. Omitted: the
+    /// configured default, `TROVADOR_INCLUDE_SUBAGENTS` (hidden unless set), because
+    /// approval reviewers and spawned agents outnumber the sessions a person started.
+    pub include_subagents: Option<bool>,
+    /// Include (true) or hide (false) automated sessions (`claude -p`, `codex exec`) that
+    /// trovador did not start. Omitted: the configured default, `TROVADOR_INCLUDE_AUTOMATED`
+    /// (hidden unless set). An explicit `origin` includes them too.
+    pub include_automated: Option<bool>,
     /// Only sessions last written at or after this: an RFC 3339 time, a date, or a
     /// duration back from now such as `2d`.
     pub since: Option<String>,
@@ -224,7 +231,9 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
         .as_ref()
         .map(|i| i.meta_snapshot())
         .unwrap_or_default();
-    let hide_automated = !opts.include_automated && opts.origin.is_none();
+    let hide_automated =
+        !include(opts.include_automated, ctx.limits.include_automated) && opts.origin.is_none();
+    let hide_subagents = !include(opts.include_subagents, ctx.limits.include_subagents);
     let mut hidden_automated = 0;
     // Issue #31: match search's SQLite LIKE semantics, which fold ASCII case only.
     let needle = opts
@@ -265,7 +274,7 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
                     .and_then(|i| i.read_meta_entry(e, &ctx.limits))
             })
             .unwrap_or_else(|| archive::read_meta(e, &ctx.limits));
-        if meta.subagent && !opts.include_subagents {
+        if meta.subagent && hide_subagents {
             continue;
         }
         if let Some(o) = opts.origin.as_deref()
@@ -650,13 +659,18 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         ),
         since_ns: since.map(crate::timespec::ns),
         until_ns: until.map(crate::timespec::ns),
-        active_since_ns: (!opts.include_active && ctx.limits.active_window_s > 0).then(|| {
-            let cutoff = std::time::SystemTime::now()
-                - Duration::from_secs(ctx.limits.active_window_s as u64);
-            crate::timespec::ns(cutoff)
-        }),
+        active_since_ns: (!include(opts.include_active, ctx.limits.include_active)
+            && ctx.limits.active_window_s > 0)
+            .then(|| {
+                let cutoff = std::time::SystemTime::now()
+                    - Duration::from_secs(ctx.limits.active_window_s as u64);
+                crate::timespec::ns(cutoff)
+            }),
         exclude_session: opts.exclude_session.clone().filter(|s| !s.is_empty()),
-        automated_except: (!opts.include_automated && opts.origin.is_none()).then(Vec::new),
+        automated_except: (!include(opts.include_automated, ctx.limits.include_automated)
+            && opts.origin.is_none())
+        .then(Vec::new),
+        hide_subagents: !include(opts.include_subagents, ctx.limits.include_subagents),
         archived_root: Some(ctx.paths.codex_archived.display().to_string()),
     };
     let raw = idx
@@ -697,7 +711,7 @@ pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         && refresh.pending == 0
         && refresh.failed == 0
         && refresh.unavailable_roots.is_empty();
-    let excluded_note = (opts.include_subagents && !text_excluded.is_empty()).then(|| {
+    let excluded_note = (!vis.hide_subagents && !text_excluded.is_empty()).then(|| {
         let mut parts: Vec<String> = text_excluded
             .iter()
             .map(|(o, n)| format!("{n} {}", if o.is_empty() { "unknown" } else { o }))
