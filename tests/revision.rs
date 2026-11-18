@@ -1055,3 +1055,86 @@ async fn both_doors_refuse_a_malformed_revision_with_the_same_message() {
     assert!(err);
     assert_eq!(text, lib);
 }
+
+// --- the pinned path still checks settings, path and the exact token ---------------
+
+#[test]
+fn a_grown_session_read_with_different_settings_is_refused_not_pinned() {
+    let (f, path) = claude_fixture();
+    let t = sessions::transcript(&f.ctx(), ID_A, None, 0, Some(2)).unwrap();
+    let x = sessions::text(&f.ctx(), ID_A, None, 0).unwrap();
+    append(&path, &claude_assistant("written later"));
+    let other = f.ctx_with(trovador::Limits {
+        record_chars: 10,
+        ..limits()
+    });
+    let now = sessions::transcript(&other, ID_A, None, 0, Some(2)).unwrap();
+    assert_stale(
+        sessions::transcript_at(&other, ID_A, None, 2, Some(2), Some(&t.revision)),
+        &t.revision,
+        &now.revision,
+    );
+    assert_stale(
+        sessions::text_at(&other, ID_A, None, 0, Some(&x.revision)),
+        &x.revision,
+        &sessions::text(&other, ID_A, None, 0).unwrap().revision,
+    );
+}
+
+#[test]
+fn a_grown_unforked_codex_rollout_moved_to_the_archived_root_is_refused_not_pinned() {
+    let f = Fixture::new();
+    let path = f.codex(ID_B, &codex_records(), 60);
+    let ctx = f.ctx();
+    let t = sessions::transcript(&ctx, ID_B, None, 0, None).unwrap();
+    let x = sessions::text(&ctx, ID_B, None, 0).unwrap();
+    append(&path, &codex_agent_item("written later"));
+    fs::create_dir_all(&f.paths.codex_archived).unwrap();
+    fs::rename(
+        &path,
+        f.paths.codex_archived.join(path.file_name().unwrap()),
+    )
+    .unwrap();
+    let now = sessions::transcript(&ctx, ID_B, None, 0, None).unwrap();
+    assert_stale(
+        sessions::transcript_at(&ctx, ID_B, None, 0, None, Some(&t.revision)),
+        &t.revision,
+        &now.revision,
+    );
+    assert_stale(
+        sessions::text_at(&ctx, ID_B, None, 0, Some(&x.revision)),
+        &x.revision,
+        &now.revision,
+    );
+}
+
+#[test]
+fn a_token_that_is_not_exactly_the_printed_form_is_refused_even_when_the_file_has_grown() {
+    // On a file that has not grown the size check refuses these anyway; after an append
+    // only the strict parse stands between a variant and a pinned read.
+    let (f, path) = claude_fixture();
+    let ctx = f.ctx();
+    let good = sessions::transcript(&ctx, ID_A, None, 0, None)
+        .unwrap()
+        .revision;
+    append(&path, &claude_assistant("written later"));
+    sessions::transcript_at(&ctx, ID_A, None, 0, None, Some(&good)).unwrap();
+    let now = sessions::transcript(&ctx, ID_A, None, 0, None)
+        .unwrap()
+        .revision;
+    let first = good.split('.').next().unwrap();
+    let padded = format!("0{good}");
+    let upper = good.to_uppercase();
+    let signed = format!("+{good}");
+    let zero_padded_field = good.replacen(first, &format!("00{first}"), 1);
+    let spaced = format!(" {good}");
+    for bad in [&padded, &upper, &signed, &zero_padded_field, &spaced] {
+        assert_ne!(bad, &good);
+        assert_stale(
+            sessions::transcript_at(&ctx, ID_A, None, 0, None, Some(bad)),
+            bad,
+            &now,
+        );
+        assert_stale(sessions::text_at(&ctx, ID_A, None, 0, Some(bad)), bad, &now);
+    }
+}

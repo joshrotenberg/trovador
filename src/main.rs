@@ -67,6 +67,12 @@ enum Command {
         until: Option<String>,
         #[arg(long)]
         limit: Option<usize>,
+        /// Matching sessions to skip, from `next_offset` of the previous page.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// true: only Codex sessions from the archived root. false: only sessions not from it.
+        #[arg(long)]
+        archived: Option<bool>,
         /// Matching records shown per session.
         #[arg(long)]
         per_session: Option<usize>,
@@ -139,6 +145,12 @@ enum SessionsCmd {
         project: Option<String>,
         #[arg(long)]
         limit: Option<usize>,
+        /// Matching sessions to skip, from `next_offset` of the previous page.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// true: only Codex sessions from the archived root. false: only sessions not from it.
+        #[arg(long)]
+        archived: Option<bool>,
         /// Only sessions with this origin (cli, claude-desktop, sdk-cli, exec, vscode).
         #[arg(long)]
         origin: Option<String>,
@@ -171,7 +183,8 @@ enum SessionsCmd {
         offset: usize,
         #[arg(long)]
         limit: Option<usize>,
-        /// The `revision` the previous page reported. Fails if the session has changed.
+        /// The `revision` the previous page reported. A session that has only grown is read as
+        /// it was at that revision; anything else fails.
         #[arg(long)]
         expected_revision: Option<String>,
     },
@@ -184,7 +197,8 @@ enum SessionsCmd {
         /// The character to start from, for the next part (truncated.next_offset).
         #[arg(long, default_value_t = 0)]
         offset: usize,
-        /// The `revision` the previous part reported. Fails if the session has changed.
+        /// The `revision` the previous part reported. A session that has only grown is read as
+        /// it was at that revision; anything else fails.
         #[arg(long)]
         expected_revision: Option<String>,
     },
@@ -247,6 +261,8 @@ fn main() -> ExitCode {
                 backend,
                 project,
                 limit,
+                offset,
+                archived,
                 origin,
                 include_subagents,
                 include_automated,
@@ -258,6 +274,8 @@ fn main() -> ExitCode {
                     backend,
                     project,
                     limit,
+                    offset,
+                    archived,
                     origin,
                     include_subagents,
                     include_automated,
@@ -315,6 +333,8 @@ fn main() -> ExitCode {
             since,
             until,
             limit,
+            offset,
+            archived,
             per_session,
             recent,
         } => {
@@ -332,6 +352,8 @@ fn main() -> ExitCode {
                 since,
                 until,
                 limit,
+                offset,
+                archived,
                 per_session,
                 order: if recent {
                     Order::Recent

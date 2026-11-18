@@ -594,3 +594,204 @@ async fn invalid_since_is_an_invalid_query_before_index_refresh_through_mcp() {
     assert!(error.starts_with("invalid query"), "{error}");
     assert!(!f.paths.home.join("index.db").exists());
 }
+
+fn paging_fixture() -> Fixture {
+    let f = Fixture::new();
+    for n in 1..=4u32 {
+        f.claude(
+            "-w",
+            &format!("{n:08x}-0000-4000-8000-000000000000"),
+            &[claude_user("/w", "pager needle")],
+            u64::from(n) * 10,
+        );
+    }
+    f.codex_archived(
+        ID_C,
+        &[
+            codex_meta("/w", json!("cli")),
+            codex_user_item("pager needle"),
+        ],
+        5,
+    );
+    f
+}
+
+#[tokio::test]
+async fn a_later_list_page_is_identical_from_the_library_the_cli_and_the_mcp_tool() {
+    let f = paging_fixture();
+    let lib = serde_json::to_value(
+        sessions::list(
+            &f.ctx(),
+            &ListOpts {
+                limit: Some(2),
+                offset: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(lib["offset"], 2);
+    assert_eq!(lib["next_offset"], 4);
+    assert_eq!(
+        cli(&f, &["sessions", "list", "--limit", "2", "--offset", "2"]),
+        lib
+    );
+    assert_eq!(
+        mcp(&f, json!({"action": "list", "limit": 2, "offset": 2})).await,
+        lib
+    );
+}
+
+#[tokio::test]
+async fn a_later_search_page_is_identical_from_the_library_the_cli_and_the_mcp_tool() {
+    let f = paging_fixture();
+    sessions::reindex(&f.ctx(), false).unwrap();
+    let opts = trovador::index::SearchOpts {
+        query: "pager".into(),
+        limit: Some(2),
+        offset: 2,
+        ..Default::default()
+    };
+    let lib =
+        without_timing(serde_json::to_value(sessions::search(&f.ctx(), &opts).unwrap()).unwrap());
+    assert_eq!(lib["offset"], 2);
+    assert_eq!(lib["next_offset"], 4);
+    assert_eq!(lib["returned"], 2);
+    assert_eq!(
+        without_timing(cli(
+            &f,
+            &["search", "pager", "--limit", "2", "--offset", "2"]
+        )),
+        lib
+    );
+    assert_eq!(
+        without_timing(
+            mcp_tool(
+                &f,
+                "search",
+                json!({"query": "pager", "limit": 2, "offset": 2})
+            )
+            .await
+        ),
+        lib
+    );
+}
+
+#[tokio::test]
+async fn the_archived_filter_is_identical_through_both_doors_for_list_and_search() {
+    let f = paging_fixture();
+    sessions::reindex(&f.ctx(), false).unwrap();
+    for (flag, value) in [("true", true), ("false", false)] {
+        let list = serde_json::to_value(
+            sessions::list(
+                &f.ctx(),
+                &ListOpts {
+                    archived: Some(value),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(list["returned"], if value { 1 } else { 4 });
+        assert_eq!(
+            cli(&f, &["sessions", "list", "--archived", flag]),
+            list,
+            "{flag}"
+        );
+        assert_eq!(
+            mcp(&f, json!({"action": "list", "archived": value})).await,
+            list,
+            "{flag}"
+        );
+
+        let search = without_timing(
+            serde_json::to_value(
+                sessions::search(
+                    &f.ctx(),
+                    &trovador::index::SearchOpts {
+                        query: "pager".into(),
+                        archived: Some(value),
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(search["sessions_matched"], if value { 1 } else { 4 });
+        assert_eq!(
+            without_timing(cli(&f, &["search", "pager", "--archived", flag])),
+            search,
+            "{flag}"
+        );
+        assert_eq!(
+            without_timing(
+                mcp_tool(&f, "search", json!({"query": "pager", "archived": value})).await
+            ),
+            search,
+            "{flag}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_invalid_offset_is_refused_by_both_doors_with_a_readable_error() {
+    let f = paging_fixture();
+    let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));
+    client.initialize().await;
+
+    // Above the ceiling: a library error, shown the same way by both doors.
+    let too_big = (trovador::Limits::default().offset_max + 1).to_string();
+    let out = cli_output(&f, &["sessions", "list", "--offset", &too_big]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("invalid offset"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let r = client
+        .call_tool(
+            "sessions",
+            json!({"action": "list", "offset": too_big.parse::<u64>().unwrap()}),
+        )
+        .await;
+    assert!(r.is_error);
+    assert!(
+        r.all_text().starts_with("invalid offset"),
+        "{}",
+        r.all_text()
+    );
+    let out = cli_output(&f, &["search", "pager", "--offset", &too_big]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("invalid offset"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let r = client
+        .call_tool(
+            "search",
+            json!({"query": "pager", "offset": too_big.parse::<u64>().unwrap()}),
+        )
+        .await;
+    assert!(r.is_error);
+    assert!(
+        r.all_text().starts_with("invalid offset"),
+        "{}",
+        r.all_text()
+    );
+
+    // Negative or not a number: refused when the input is parsed.
+    for bad in ["-1", "two"] {
+        let out = cli_output(&f, &["search", "pager", "--offset", bad]);
+        assert!(!out.status.success(), "{bad}");
+    }
+    for bad in [json!(-1), json!("two")] {
+        let r = client
+            .call_tool("search", json!({"query": "pager", "offset": bad}))
+            .await;
+        assert!(r.is_error, "{bad}");
+    }
+}

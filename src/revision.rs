@@ -16,9 +16,16 @@
 //! file path, the archived flag, `PROJECTION_VERSION`, the record and tool character caps
 //! and the redact setting. The redaction rules are not versioned separately: they are
 //! covered only through `PROJECTION_VERSION`, so a change to them must bump it. Producing a
-//! token reads two 4 KB regions, plus the first line of a Codex file, never the session.
+//! token reads two 4 KB regions plus, for a Codex file, a classification read: the first line
+//! of an unforked file, the lines up to the history boundary of a fork, and all `S` bytes
+//! of a fork whose boundary is not reached. On a 208 MB unresolved fork (release build,
+//! three runs) a refused continuation, which is classification only, took 0.10 to 0.11 s
+//! and a first page with `--limit 1` 0.25 s; a 208 MB unforked file took 0.00 s for both.
 //! The format is not a promise. Callers pass the string back unchanged, and anything that
-//! does not parse back to exactly the same string is refused like a stale revision.
+//! does not parse back to exactly the same string is refused like a stale revision. The
+//! kind field is not covered by the hash, so a caller can change `f` to `p` and get a
+//! consistent older view of a fork. The fork refusal is a freshness choice for the caller's
+//! benefit; soundness does not depend on it, because a pinned read is cut at `S` either way.
 //!
 //! # Continuing a session that has grown
 //!

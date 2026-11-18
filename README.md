@@ -141,12 +141,15 @@ trovador sessions list --project trovador    # project path contains this text (
 trovador sessions list --origin cli          # how it was started
 trovador sessions list --include-subagents   # also sessions started by other sessions
 trovador sessions list --since 1d            # last written in the past day (also 36h, 1w, 2026-10-01)
+trovador sessions list --offset 20           # the next page, from next_offset of the last
+trovador sessions list --archived true       # only Codex threads in archived_sessions (false: only the rest)
 trovador sessions show 27d1f434              # id or unambiguous prefix
 trovador sessions transcript 27d1f434 --offset 200 --limit 50
 trovador sessions text 27d1f434              # the whole session as plain text, in parts
-trovador sessions text 27d1f434 --offset 100000 --expected-revision 3f9a1c0b7d2e4a58  # fails if the session changed
+trovador sessions text 27d1f434 --offset 100000 --expected-revision 1c8a.17a3f2b4c5d6e7f8.9f1e2d3c4b5a6978.1a2b3c4d5e6f7081.p.3f9a1c0b7d2e4a58  # as it was at that revision; fails unless it only grew
 trovador search idempotency_key              # words and "quoted phrases", all required
 trovador search "redact" --since 1w          # only sessions written in the last week
+trovador search redact --offset 20           # the next page of sessions, from next_offset
 trovador search 'redact NOT summary' --fts   # FTS5 syntax
 trovador search 'retry_after:\s*\d+' --regex # regular expression, newest first
 trovador index                               # bring the index fully up to date
@@ -164,6 +167,49 @@ Every command prints one JSON document. The MCP `sessions` tool takes the same i
 `trovador search`; both return the same JSON as the CLI. Resources
 `session://{backend}/{id}` and `session://{backend}/{id}/transcript` return `show` and the
 first transcript page.
+
+### Paging
+
+`sessions list` and `search` return one page: `--limit` sessions (`TROVADOR_LIST_DEFAULT`,
+`TROVADOR_SEARCH_DEFAULT`), starting `--offset` sessions in. A result that has more after it
+carries `next_offset`; pass it as `offset`, with the same other inputs, for the next page.
+The last page has no `next_offset`. The MCP `sessions` tool (for `action: list`) and `search`
+take `offset` too, and the library computes both, so the doors return the same page.
+
+- **The unit is a session.** A search groups its matching records by session, and `offset`
+  counts sessions in that order: best match first, or newest first with `--recent` and for
+  `--regex`. Ties on score and time break by the index's session number, so the order is
+  total and two pages never split a tie differently. A list counts sessions that pass every
+  filter, so `--offset 20` means the same thing whatever the filters hide.
+- **Coverage is for the whole result.** `sessions_matched`, `exhaustive`, `coverage` and
+  the `hidden` counts for the defaults (`active`, `automated`, `subagents`, `excluded`)
+  describe the query, not the page, and are the same on every page. Two `hidden` counts
+  are for the page only: `unavailable` (a match whose file or archive root could not be
+  read) and `unrecognized` (shown only when above zero: a match indexed under a backend this version does not know;
+  `trovador index --rebuild` fixes it). `absence_is_proof` appears only on an empty page
+  and is false for any `offset` above zero, or when the page consumed matches it could not
+  show. A page past the last match says how many matched; a page with matches but nothing
+  showable says so and keeps `next_offset`. With zero matches and an offset above zero,
+  the note says to retry at offset 0.
+- **Look-ahead.** A list learns whether another page exists by reading past a full page
+  until it finds one more matching session, at most `TROVADOR_LIST_LOOKAHEAD` sessions
+  (500) so a selective `--project` or `--origin` filter does not read every remaining
+  session. A list's `truncated` is true when it found one, or when it stopped at that bound
+  with older sessions unread; `next_offset` is present exactly when `truncated` is, and the
+  next page can then be empty. `truncated` false means the list reached its end.
+- **No snapshot between pages.** Each page is a fresh query. Sessions written while paging
+  can shift later pages, so an item can repeat or be skipped, most visibly in a list, which
+  puts new sessions first. For a steady walk, pass the same `--until` (an RFC 3339 time
+  taken before the first page) on every page; sessions written afterwards are then outside
+  the window. A search that brings the index up to date between pages can also change bm25
+  scores, so a relevance order can move between pages where `--recent` does not.
+- **Bounds.** An offset above `TROVADOR_OFFSET_MAX` (1,000,000) is rejected with `invalid
+  offset`; a negative or non-numeric offset is rejected as an invalid number by both doors.
+  An offset past the last result is not an error: it returns an empty page.
+- **Archived threads.** `--archived true` keeps only Codex threads read from
+  `archived_sessions`, `--archived false` keeps only sessions not read from it (all Claude
+  sessions and Codex threads that are not archived), and leaving it out includes both, as
+  before. It is a filter you ask for, so what it excludes is not counted in `hidden`.
 
 ## Examples
 
@@ -298,13 +344,18 @@ names: the size the read was cut at, the file's mtime, hashes of the first and l
 those bytes, a kind (plain, a Codex fork with an unresolved boundary, or compressed) and a
 hash of the file path, the archived flag, the projection version and the record and tool
 character limits and redact setting. Its format is not a promise. Producing it reads two
-4 KB regions, and for a Codex file the header line, not the session. A string that does not
-parse back to exactly itself is refused like a stale one.
+4 KB regions, and for a Codex file a classification read: the header line for an unforked
+file, the lines up to the history boundary for a fork, and all the bytes up to the size for
+a fork whose boundary is not reached. On a 208 MB unresolved fork (release build, three
+runs) a refused continuation, which is classification only, took 0.10 to 0.11 s and a first
+page with `--limit 1` 0.25 s; a 208 MB unforked file took 0.00 s for both. A string that
+does not parse back to exactly itself is refused like a stale one.
 
 **A session that has only grown.** If the file is larger than the revision's size and its
 first bytes still match the samples, the call is served the session as it was at that
 size: the read stops there, offsets and records are exactly what the revision described,
-and `total` and the end of the session are those of that state. The response carries
+and `total` and the end of the session are those of that state: the end of a pinned walk is
+the end of the session as it was at that revision, and `grown` says more exists. The response carries
 `grown`, with `current_revision` and `bytes_added`, so the caller can start a fresh read
 without `expected_revision` when it wants the new content. This is what lets an agent page
 through a session that is still being written. A torn final line at the cut is projected
@@ -314,7 +365,8 @@ as it was on the first read, because the bytes are the same.
 nothing, naming the revision the caller passed and the current one, and telling the caller
 to restart from offset 0 without `expected_revision`: a rewrite or truncation, a file
 moved between the active and archived roots, a file compressed or replaced, different
-`TROVADOR_*` limits or `--no-redact`, a malformed string, and any append to a Codex fork
+`TROVADOR_*` limits or `--no-redact`, a touch that leaves the size unchanged, a malformed
+string, and any append to a Codex fork
 whose start ordinal has not been reached in the bytes read. For that fork a later line can
 resolve the boundary and turn records already shown into `forked_history`, so the append
 cannot be tolerated. The same root reached through a different path spelling or a symlink

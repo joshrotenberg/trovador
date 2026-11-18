@@ -28,8 +28,15 @@ minutes; `hidden` and `note` in the result say what was left out. Automated sess
 `exhaustive=false` means the index was not fully current, so finding nothing proves
 nothing. Say so rather than concluding the work never happened.
 
+A search returns one page of sessions. When the result has `next_offset`, pass it as
+`offset` with the same other inputs to get the next page; no `next_offset` means that
+was the last. An empty later page never proves absence.
+
 To browse instead of search, `sessions` with `action=list` returns sessions newest
-first, with the same `project`, `backend`, and `since`/`until` filters.
+first, with the same `project`, `backend`, and `since`/`until` filters, and pages the
+same way with `next_offset` and `offset`. `archived=true` keeps only Codex threads
+that were archived and `archived=false` leaves them out; both `search` and `list`
+take it, and leaving it out includes both.
 
 ## Read
 
@@ -39,7 +46,8 @@ Follow `next_offset` only as far as you need.
 Every transcript page and text part reports a `revision` of the session it was read
 from. Pass the same string back as `expected_revision` on each continuation. A session that
 was only appended to since is still read as it was, so a walk through a live session
-stays consistent; the page then carries `grown` with the `current_revision`, and a
+stays consistent; the page then carries `grown` with the `current_revision`, and the end
+of that walk is the end of the session as it was at that revision, not of the session. A
 fresh read without `expected_revision` shows the newer content. If the session is not
 at that revision in any other way (rewritten, moved, compressed, or a Codex fork
 whose history boundary is still open), the call fails and names the current revision
