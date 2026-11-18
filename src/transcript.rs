@@ -1270,7 +1270,7 @@ impl Projection {
                 end
             } else {
                 let mut reader = bounded(open_archive(&e.file, 0)?);
-                let boundary = crate::codex::fork_boundary(&mut reader, e.archived, true)?;
+                let boundary = crate::codex::fork_boundary(&mut reader, e.finished(), true)?;
                 // Issue #35: terminal events before the start ordinal belong to
                 // copied history. Display may fall back, but indexing must wait
                 // for the real boundary and never persist the parent's completion.
