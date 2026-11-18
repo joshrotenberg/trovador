@@ -50,6 +50,12 @@ impl ArchiveEntry {
     pub fn modified(&self) -> String {
         humantime::format_rfc3339_millis(self.mtime).to_string()
     }
+
+    /// No line will be appended: Codex archived the thread, or compressed the rollout,
+    /// which it does only to finished ones.
+    pub(crate) fn finished(&self) -> bool {
+        self.archived || is_compressed(&self.file)
+    }
 }
 
 // --- scanning --------------------------------------------------------------
@@ -372,7 +378,7 @@ fn read_meta_inner(e: &ArchiveEntry, limits: &Limits, scan_titles: bool) -> Sess
         };
         meta = match e.backend {
             Backend::Claude => parse_claude_head(&head),
-            Backend::Codex => parse_codex_head(&head, e.archived, complete),
+            Backend::Codex => parse_codex_head(&head, e.finished(), complete),
         };
         covered = step as u64;
         if complete || (meta.cwd.is_some() && meta.snippet.is_some()) {
@@ -586,11 +592,11 @@ fn push_unique(list: &mut Vec<String>, item: Option<&str>) {
 /// `item_completed` event carrying a `UserMessage` item; older versions emit
 /// `event_msg/user_message`; both also write the model-facing `response_item/message`,
 /// which includes injected context. The first two are what the user typed, so they win.
-fn parse_codex_head(text: &str, archived: bool, complete: bool) -> SessionMeta {
+fn parse_codex_head(text: &str, finished: bool, complete: bool) -> SessionMeta {
     let mut meta = SessionMeta::default();
     let (mut from_item, mut from_event, mut from_response) = (None, None, None);
     let mut seen_meta = false;
-    let boundary = crate::codex::fork_boundary(&mut std::io::Cursor::new(text), archived, complete)
+    let boundary = crate::codex::fork_boundary(&mut std::io::Cursor::new(text), finished, complete)
         .expect("reading an in-memory head");
     let inherited_end = boundary.end.unwrap_or(boundary.scanned);
     let mut fork_snippet = None;

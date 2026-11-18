@@ -336,8 +336,15 @@ never collapsed. `TROVADOR_UNRECOGNIZED_CHARS=0` shows them as `omitted` instead
 them out of the index.
 Forked Codex children collapse copied parent history into an `omitted` record named
 `forked_history`; it does not contribute turns, indexed text, or session text. An
-impossible boundary in an archived file preserves the original transcript. A terminal-event
-fallback in an unarchived file is for display only; indexing waits for a known boundary.
+impossible boundary in a finished file (archived, or compressed, which Codex does only to
+finished rollouts) preserves the original transcript, and the index holds what it shows. A
+terminal-event fallback in a plain unarchived file is for display only; indexing waits for a
+known boundary, since Codex may still append the child's own records. On the development
+machine on 2026-11-18, all 1,528 forked children were in `history_mode: paginated`, and 540
+of them, every one compressed, never reach their start ordinal. Their transcripts include
+any history they copied, but only 5.1% of their text by characters also appears verbatim in
+the parent rollout, so indexing them adds 76,403 records (81 MB, 13.9%) that were not
+searchable before. They are subagents, which search hides unless `include_subagents` is set.
 Consecutive omitted records of one category collapse into one
 with a `count`. Text is capped per record (4,000 chars, 600 for tool calls and results) and
 per page (100,000 chars); a page says when it stopped early and where to continue.

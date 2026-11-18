@@ -90,9 +90,15 @@ fn ordinal(line: &[u8], physical: u64) -> u64 {
         .unwrap_or(physical)
 }
 
+/// `finished` says no line will be appended to the file: Codex has archived it or
+/// compressed it, and it compresses only finished rollouts. A finished fork whose start
+/// ordinal is never reached keeps its whole transcript, for display and for the index.
+/// Compressed forks were left out of that rule, so 540 of 1,528 local forked children
+/// (every one compressed, the newest 7 days old) were shown but never indexed
+/// (trovador#90).
 pub(crate) fn fork_boundary(
     reader: &mut impl BufRead,
-    archived: bool,
+    finished: bool,
     complete: bool,
 ) -> std::io::Result<ForkBoundary> {
     let mut line = Vec::new();
@@ -166,9 +172,9 @@ pub(crate) fn fork_boundary(
     // Issue #35: an impossible boundary must not erase a finished transcript.
     // Otherwise stop at the scanned prefix: a writer may append the child before
     // this pass ends, and checkpointing those unseen bytes would lose its turns.
-    let display_fallback = complete && !archived && terminal_tail;
+    let display_fallback = complete && !finished && terminal_tail;
     Ok(ForkBoundary {
-        end: (complete && (archived || terminal_tail)).then_some(0),
+        end: (complete && (finished || terminal_tail)).then_some(0),
         scanned,
         display_fallback,
         unresolved: true,

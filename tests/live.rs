@@ -276,7 +276,8 @@ fn walk_sessions(paths: &Paths) -> HashSet<(Backend, String)> {
         }
     }
     let uuid = regex::Regex::new(
-        r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$",
+        // Codex 0.165 compresses finished rollouts to `.jsonl.zst` (#90).
+        r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(\.zst)?$",
     )
     .unwrap();
     let mut stack = vec![paths.codex_archive.clone(), paths.codex_archived.clone()];
@@ -400,7 +401,9 @@ fn metadata_is_well_formed_for_every_session() {
                 problems.push(format!("{}: snippet is injected context: {s}", who(e)));
             }
         }
-        if row.resumable != (e.size_bytes < l.ctx.limits.resume_limit_bytes) {
+        // A compressed rollout is judged by its decompressed size, which the provider
+        // reads on resume, not by its size on disk (#90).
+        if row.resumable != (archive::transcript_bytes(e) < l.ctx.limits.resume_limit_bytes) {
             problems.push(format!("{}: resumable disagrees with size", who(e)));
         }
         if !row.open_with.contains(&e.session_id) {

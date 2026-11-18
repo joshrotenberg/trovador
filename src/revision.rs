@@ -194,7 +194,7 @@ fn fork_unresolved(e: &ArchiveEntry) -> std::io::Result<bool> {
         return Ok(false);
     }
     let mut reader = std::io::Read::take(archive::open_archive(&e.file, 0)?, e.size_bytes);
-    Ok(crate::codex::fork_boundary(&mut reader, e.archived, true)?.unresolved)
+    Ok(crate::codex::fork_boundary(&mut reader, e.finished(), true)?.unresolved)
 }
 
 fn io_error(e: &ArchiveEntry, what: &str) -> std::io::Error {

@@ -21,7 +21,7 @@ use std::io::BufRead;
 /// A change to the redaction rules in `redact.rs` must bump it too: the revision of a
 /// session (`revision.rs`) holds this number and not the rules, so two builds with
 /// different rules would otherwise share a revision for `text`.
-pub const PROJECTION_VERSION: i64 = 11;
+pub const PROJECTION_VERSION: i64 = 12;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1236,7 +1236,7 @@ impl Projection {
                 end
             } else {
                 let mut reader = bounded(open_archive(&e.file, 0)?);
-                let boundary = crate::codex::fork_boundary(&mut reader, e.archived, true)?;
+                let boundary = crate::codex::fork_boundary(&mut reader, e.finished(), true)?;
                 // Issue #35: terminal events before the start ordinal belong to
                 // copied history. Display may fall back, but indexing must wait
                 // for the real boundary and never persist the parent's completion.

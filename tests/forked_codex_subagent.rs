@@ -584,3 +584,52 @@ fn copied_parent_completion_never_persists_a_zero_boundary_before_child_history_
         assert!(indexed.iter().all(|r| !r.2.contains("parent-only")));
     }
 }
+
+#[test]
+fn a_finished_fork_with_an_impossible_boundary_is_indexed_as_its_transcript_shows_it() {
+    // #90: Codex compresses only finished rollouts, but a compressed fork was not treated as
+    // finished. Its transcript showed every record while the index waited for a boundary
+    // that could never arrive, so 540 of 1,528 local forked children were never searchable.
+    // A plain fork Codex may still append to keeps waiting.
+    let mut records = fork_records();
+    records[0]["payload"]["subagent_history_start_ordinal"] = json!(1000);
+    records.push(json!({"type":"event_msg", "payload":{"type":"task_complete"}}));
+    for (how, indexed) in [("compressed", true), ("archived", true), ("plain", false)] {
+        let f = Fixture::new();
+        match how {
+            "compressed" => f.codex_zstd(ID_B, &records, 0, false),
+            "archived" => f.codex_archived(ID_B, &records, 0),
+            _ => f.codex(ID_B, &records, 0),
+        };
+        let ctx = f.ctx();
+        let shown: Vec<String> = sessions::transcript(&ctx, ID_B, None, 0, Some(200))
+            .unwrap()
+            .page
+            .records
+            .into_iter()
+            .filter(|r| r.kind != RecordKind::Omitted)
+            .filter_map(|r| r.text)
+            .collect();
+        assert!(
+            shown.iter().any(|t| t == "child-only task"),
+            "{how}: {shown:?}"
+        );
+        let mut idx = Index::open(&ctx.paths, &ctx.limits).unwrap();
+        idx.refresh(&ctx.paths, &ctx.limits, &RefreshOpts::default())
+            .unwrap();
+        let rows: Vec<String> = idx
+            .session_records(trovador::Backend::Codex, ID_B)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.2)
+            .collect();
+        if indexed {
+            assert_eq!(rows, shown, "{how}: the index differs from the transcript");
+        } else {
+            assert!(
+                rows.is_empty(),
+                "{how}: indexed before the boundary is known"
+            );
+        }
+    }
+}
