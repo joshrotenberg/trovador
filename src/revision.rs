@@ -11,6 +11,9 @@
 //! hashes of the first and last 4 KB that the index uses to tell an append from a rewrite
 //! (#25). Computing it reads two 4 KB regions, never the session.
 //!
+//! The redaction rules are not versioned separately; they are covered only through
+//! `PROJECTION_VERSION`, so a change to them must bump it.
+//!
 //! Any append changes it, including one that leaves every earlier record alone. The case
 //! that needs this is a forked Codex child: its boundary between copied parent history and
 //! its own records is found from a later line, so an appended line can turn records that

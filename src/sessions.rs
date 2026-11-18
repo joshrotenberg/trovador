@@ -350,9 +350,10 @@ pub fn transcript_at(
     transcript_at_hooked(ctx, id, backend, offset, limit, expected_revision, || {})
 }
 
-/// [`transcript_at`] that runs `after_read` between the read and the final check. Only
-/// tests use it, to change the file at the one moment a rewrite during a read matters;
-/// nothing else can place a change there deterministically.
+/// [`transcript_at`] that runs `after_read` between the read and the final check. Public
+/// only because integration tests are separate crates; they use it to change the file at
+/// the one moment a rewrite during a read matters, which nothing else can place
+/// deterministically. Not part of the supported API.
 #[doc(hidden)]
 pub fn transcript_at_hooked(
     ctx: &Ctx,
@@ -402,7 +403,8 @@ pub fn text_at(
     text_at_hooked(ctx, id, backend, offset, expected_revision, || {})
 }
 
-/// [`text_at`] with the same test hook as [`transcript_at_hooked`].
+/// [`text_at`] with the same test-only hook as [`transcript_at_hooked`], public for the
+/// same reason and not part of the supported API.
 #[doc(hidden)]
 pub fn text_at_hooked(
     ctx: &Ctx,

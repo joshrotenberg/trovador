@@ -37,9 +37,9 @@ Each hit has `matches[].index`. Open the transcript there: `sessions` with
 `action=transcript`, `session_id`, and `offset` set a few records before the index.
 Follow `next_offset` only as far as you need.
 Every transcript page and text part reports a `revision` of the session it was read
-from. Pass it back as `expected_revision` on each continuation. If the session has
-grown or been rewritten since, the call fails and names the current revision instead
-of returning a page from a different state; start again from offset 0 without
+from. Pass it back as `expected_revision` on each continuation. If the session is
+not at that revision, the call fails and names the current revision instead of
+returning a page from a different state; start again from offset 0 without
 `expected_revision`. A session still being written changes often, so expect this on a
 live one.
 

@@ -307,7 +307,9 @@ needs this is a forked Codex child: its boundary between copied parent history a
 records is found from a later line, so an appended line can turn records already shown into
 `forked_history`. A live session therefore fails a continuation whenever it was written
 since the page, and the caller restarts from offset 0. A `touch` with no content change
-also changes it. A Codex file moved between the active and archived roots changes it,
+also changes it. The same root reached through a different path spelling or a symlink gives
+a different revision, so two doors configured with different spellings of a root never
+share one. A Codex file moved between the active and archived roots changes it,
 because the two can project a fork differently.
 
 A compressed rollout is revised by the compressed file's size and mtime, so compressing a

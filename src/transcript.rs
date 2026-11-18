@@ -12,6 +12,9 @@
 use std::io::BufRead;
 
 /// Bumped whenever the projection changes what it emits, which invalidates every index row.
+/// A change to the redaction rules in `redact.rs` must bump it too: the revision of a
+/// session (`revision.rs`) holds this number and not the rules, so two builds with
+/// different rules would otherwise share a revision for `text`.
 pub const PROJECTION_VERSION: i64 = 9;
 
 use schemars::JsonSchema;
