@@ -15,7 +15,7 @@ use std::io::BufRead;
 /// A change to the redaction rules in `redact.rs` must bump it too: the revision of a
 /// session (`revision.rs`) holds this number and not the rules, so two builds with
 /// different rules would otherwise share a revision for `text`.
-pub const PROJECTION_VERSION: i64 = 9;
+pub const PROJECTION_VERSION: i64 = 10;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -460,12 +460,22 @@ fn project_codex_item(item: &Value, limits: &Limits, out: &mut Vec<Draft>) {
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| block_text(item.get("command").unwrap_or(&Value::Null)));
             out.push(Draft::named(RecordKind::ToolCall, "exec", cap(&cmd, tc)));
-            let stdout = str_at(item, "stdout").unwrap_or("");
-            let stderr = str_at(item, "stderr").unwrap_or("");
-            let result = if stderr.is_empty() {
-                stdout.to_string()
-            } else {
-                format!("{stdout}\n[stderr] {stderr}")
+            // Codex 0.162.0 stopped writing stdout and stderr and keeps only
+            // aggregated_output, so reading stdout alone left every later command's result
+            // empty. Earlier versions wrote all three, with aggregated_output equal to
+            // stdout in all 6,991 commands sampled (2026-11-03), so preferring it changes
+            // nothing for older sessions.
+            let result = match str_at(item, "aggregated_output") {
+                Some(all) => all.to_string(),
+                None => {
+                    let stdout = str_at(item, "stdout").unwrap_or("");
+                    let stderr = str_at(item, "stderr").unwrap_or("");
+                    if stderr.is_empty() {
+                        stdout.to_string()
+                    } else {
+                        format!("{stdout}\n[stderr] {stderr}")
+                    }
+                }
             };
             out.push(Draft::new(RecordKind::ToolResult, cap(&result, tc)));
         }
