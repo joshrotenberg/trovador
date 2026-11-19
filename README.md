@@ -166,6 +166,7 @@ trovador sessions list --archived true        # only archived Codex threads (fal
 trovador sessions list --offset 20            # next page, from next_offset
 trovador sessions transcript 27d1f434 --offset 200 --limit 50
 trovador sessions text 27d1f434 --offset 100000 --expected-revision <revision>
+trovador sessions record 27d1f434 812 --offset 2700   # one record's whole text, from a match's offset
 trovador search idempotency_key               # words and "quoted phrases", all required
 trovador search 'redact NOT summary' --fts    # FTS5 syntax
 trovador search 'retry_after:\s*\d+' --regex  # regular expression
@@ -199,7 +200,7 @@ the CLI:
 | Tool or resource | Inputs |
 |---|---|
 | `search` | As `trovador search`: `query`, `fts`, `regex`, `provider`, `project`, `origin`, `include_active`, `include_automated`, `include_subagents`, `exclude_session`, `since`, `until`, `archived`, `limit`, `offset`, `per_session`, `order` |
-| `sessions` | `action` (`list`, `show`, `transcript`, `text`) plus that command's inputs: `session_id`, `offset`, `limit`, `expected_revision`, list filters |
+| `sessions` | `action` (`list`, `show`, `transcript`, `text`, `record`) plus that command's inputs: `session_id`, `index` (record), `offset`, `limit`, `expected_revision`, list filters |
 | `session://{provider}/{id}` | Same as `sessions` `show` |
 | `session://{provider}/{id}/transcript` | First transcript page |
 
@@ -239,8 +240,10 @@ rather than everything from the last 10 minutes.
 
 Text is capped per record (4,000 characters; 600 for tool calls and results). The index keeps
 up to 4,000 characters of each tool call and result, so search finds words deep in file
-reads, grep output and test logs. Such a match's excerpt shows it; the transcript record at
-its `index` shows only the first 600 characters.
+reads, grep output and test logs. A match past what the transcript shows of its record
+carries `offset`, the character where it starts; `sessions record <id> <index> --offset <n>`
+(MCP `action=record`) returns that record's whole text in parts, redacted as a whole like
+session text.
 
 **Paging.** `sessions list`, `search`, and `sessions transcript` return one page. Pass
 `next_offset` as `offset` for the next; no `next_offset` means the last page. Search pages

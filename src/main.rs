@@ -198,6 +198,23 @@ enum SessionsCmd {
         #[arg(long)]
         expected_revision: Option<String>,
     },
+    /// One record's whole text, in parts of TROVADOR_RESPONSE_MAX_CHARS. Transcripts cut
+    /// tool calls and results at TROVADOR_TOOL_CHARS; a search match with an `offset` lies
+    /// past that, and this reads it.
+    Record {
+        id: String,
+        /// The record index, as a search match's `index` gives it.
+        index: usize,
+        #[arg(long)]
+        provider: Option<Provider>,
+        /// The character to start from: a little before a match's `offset`, or
+        /// truncated.next_offset for the next part.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// The `revision` the previous part reported.
+        #[arg(long)]
+        expected_revision: Option<String>,
+    },
     /// The whole session as plain text, in parts of TROVADOR_RESPONSE_MAX_CHARS, for
     /// reading or summarizing.
     Text {
@@ -379,6 +396,23 @@ fn main() -> ExitCode {
                 expected_revision.as_deref(),
             ) {
                 Ok(t) => print(&t),
+                Err(e) => fail(e),
+            },
+            SessionsCmd::Record {
+                id,
+                index,
+                provider,
+                offset,
+                expected_revision,
+            } => match sessions::record_at(
+                &ctx,
+                &id,
+                provider,
+                index,
+                offset,
+                expected_revision.as_deref(),
+            ) {
+                Ok(r) => print(&r),
                 Err(e) => fail(e),
             },
             SessionsCmd::Text {

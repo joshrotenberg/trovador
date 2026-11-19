@@ -321,7 +321,14 @@ fn concurrent_wal_commits_cannot_mix_readonly_counts_and_excerpts() {
         .execute_batch("UPDATE records SET text = 'laterneedle';")
         .unwrap();
     let old = reader
-        .search(&opts("walneedle"), &Visibility::default(), 10, 3, false)
+        .search(
+            &opts("walneedle"),
+            &Visibility::default(),
+            10,
+            3,
+            false,
+            600,
+        )
         .unwrap();
     assert_eq!(old.sessions_matched, 1);
     assert_eq!(old.hits.len(), 1);
@@ -330,14 +337,28 @@ fn concurrent_wal_commits_cannot_mix_readonly_counts_and_excerpts() {
     let fresh = Index::open_read_only(&f.paths, &f.ctx().limits).unwrap();
     assert_eq!(
         fresh
-            .search(&opts("laterneedle"), &Visibility::default(), 10, 3, false)
+            .search(
+                &opts("laterneedle"),
+                &Visibility::default(),
+                10,
+                3,
+                false,
+                600
+            )
             .unwrap()
             .sessions_matched,
         1
     );
     assert_eq!(
         reader
-            .search(&opts("laterneedle"), &Visibility::default(), 10, 3, false)
+            .search(
+                &opts("laterneedle"),
+                &Visibility::default(),
+                10,
+                3,
+                false,
+                600
+            )
             .unwrap()
             .sessions_matched,
         0
@@ -359,6 +380,7 @@ fn immutable_reader_rejects_results_when_the_host_rebuilds_the_index() {
             10,
             3,
             false,
+            600,
         )
         .unwrap();
     assert_eq!(old.sessions_matched, 1);
@@ -390,6 +412,7 @@ fn main_file_checkpoint_between_open_and_search_completion_returns_snapshot_chan
             10,
             3,
             false,
+            600,
         )
         .and_then(|result| {
             assert_eq!(result.sessions_matched, 1);
@@ -433,6 +456,7 @@ fn a_new_wal_or_journal_invalidates_immutable_results_even_without_main_file_cha
                 10,
                 3,
                 false,
+                600,
             )
             .unwrap();
         assert_eq!(result.sessions_matched, 1);
@@ -465,6 +489,7 @@ fn a_removed_main_file_invalidates_immutable_results() {
             10,
             3,
             false,
+            600,
         )
         .unwrap();
     assert_eq!(result.sessions_matched, 1);
