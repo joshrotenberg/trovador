@@ -225,6 +225,43 @@ async fn search_is_identical_from_the_library_the_cli_and_the_mcp_tool() {
 }
 
 #[tokio::test]
+async fn the_provider_filter_is_identical_through_both_doors() {
+    let f = fixture();
+    sessions::reindex(&f.ctx(), false).unwrap();
+    let opts = trovador::index::SearchOpts {
+        query: "question".into(),
+        provider: Some(trovador::Provider::Codex),
+        ..Default::default()
+    };
+    let lib =
+        without_timing(serde_json::to_value(sessions::search(&f.ctx(), &opts).unwrap()).unwrap());
+    assert_eq!(lib["sessions_matched"], 1);
+    assert_eq!(lib["hits"][0]["provider"], "codex");
+    assert_eq!(
+        without_timing(cli(&f, &["search", "question", "--provider", "codex"])),
+        lib
+    );
+    assert_eq!(
+        without_timing(
+            mcp_tool(
+                &f,
+                "search",
+                json!({"query": "question", "provider": "codex"})
+            )
+            .await
+        ),
+        lib
+    );
+    let list = cli(&f, &["sessions", "list", "--provider", "claude"]);
+    assert_eq!(list["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(list["sessions"][0]["provider"], "claude");
+    assert_eq!(
+        mcp(&f, json!({"action": "list", "provider": "claude"})).await,
+        list
+    );
+}
+
+#[tokio::test]
 async fn a_bad_query_is_a_readable_tool_error() {
     let f = fixture();
     let mut client = TestClient::from_router(trovador::mcp::router(f.ctx()));

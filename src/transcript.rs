@@ -27,7 +27,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::archive::{ArchiveEntry, Backend, block_text, is_compressed, open_archive};
+use crate::archive::{ArchiveEntry, Provider, block_text, is_compressed, open_archive};
 use crate::limits::Limits;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1198,7 +1198,7 @@ fn is_turn(k: RecordKind) -> bool {
 /// Streams a session's projected records, with omitted runs collapsed and indexes assigned.
 pub struct Projection {
     reader: Box<dyn BufRead + Send>,
-    backend: Backend,
+    provider: Provider,
     inherited_end: u64,
     scan_limit: Option<u64>,
     limits: Limits,
@@ -1265,7 +1265,7 @@ impl Projection {
         // the last emitted turn instead.
         let mut state = resume.unwrap_or_default();
         let mut scan_limit = None;
-        let inherited_end = if e.backend == Backend::Codex {
+        let inherited_end = if e.provider == Provider::Codex {
             if let Some(end) = state.codex_inherited_end {
                 end
             } else {
@@ -1288,7 +1288,7 @@ impl Projection {
         };
         Ok(Self {
             reader: bounded(open_archive(&e.file, state.offset)?),
-            backend: e.backend,
+            provider: e.provider,
             inherited_end,
             scan_limit,
             limits: limits.clone(),
@@ -1330,7 +1330,7 @@ impl Projection {
                 Err(error) => {
                     // Decoding may fail after a valid Codex header. A partial projection
                     // must not look like a successful transcript or index checkpoint.
-                    if self.backend == Backend::Codex {
+                    if self.provider == Provider::Codex {
                         self.read_error = Some(error);
                     }
                     self.done = true;
@@ -1353,7 +1353,7 @@ impl Projection {
             if self.line.iter().all(|b| b.is_ascii_whitespace()) {
                 continue;
             }
-            if self.backend == Backend::Codex
+            if self.provider == Provider::Codex
                 && let Some(d) = compacted_without_parsing(&self.line, &self.limits)
             {
                 self.pending.push_back(d);
@@ -1366,15 +1366,15 @@ impl Projection {
             let Ok(r) = parsed else {
                 continue;
             };
-            if self.backend == Backend::Claude
+            if self.provider == Provider::Claude
                 && let Some(title) = crate::archive::custom_title(&r)
             {
                 self.state.custom_title = Some(title.to_owned());
             }
             let mut drafts = Vec::new();
-            match self.backend {
-                Backend::Claude => project_claude(&r, &self.limits, &mut drafts),
-                Backend::Codex => {
+            match self.provider {
+                Provider::Claude => project_claude(&r, &self.limits, &mut drafts),
+                Provider::Codex => {
                     // A stream seen later than the pre-scan reached still takes over from
                     // that point on.
                     // A new task cannot be a copy of the preceding task's identical user.

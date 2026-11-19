@@ -16,12 +16,13 @@ use rusqlite::{Connection, OptionalExtension, params};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::archive::{self, ArchiveEntry, Backend, SessionMeta};
+use crate::archive::{self, ArchiveEntry, Provider, SessionMeta};
 use crate::limits::Limits;
 use crate::paths::Paths;
 use crate::transcript::{CodexMode, PROJECTION_VERSION, Projection, ProjectionState, RecordKind};
 
-const SCHEMA_VERSION: i64 = 3;
+// 4: the `backend` columns were renamed `provider`.
+const SCHEMA_VERSION: i64 = 4;
 // Issue #36: title state needs one backfill, but projected text and record indexes agree.
 const TITLE_METADATA_VERSION: i64 = 1;
 const TOKENIZER: &str = "unicode61 remove_diacritics 2";
@@ -235,7 +236,7 @@ pub struct Visibility {
     /// Leave out sessions written at or after this time, in nanoseconds since the epoch.
     pub active_since_ns: Option<i64>,
     pub exclude_session: Option<String>,
-    /// Leave out automated sessions, except these `backend/id` keys.
+    /// Leave out automated sessions, except these `provider/id` keys.
     pub automated_except: Option<Vec<String>>,
     /// Leave out sessions started by another session. Resolved by `sessions` from the
     /// caller's `include_subagents` and the configured default, so the index never reads
@@ -264,7 +265,7 @@ pub struct Hidden {
     /// this page only, not the whole result.
     #[serde(default)]
     pub unavailable: usize,
-    /// Matched in the index under a backend this build does not know, so not returned.
+    /// Matched in the index under a provider this build does not know, so not returned.
     /// Counted among the sessions of this page only. Left out of the output when zero, so
     /// the shape of `hidden` is unchanged until it applies.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -293,8 +294,8 @@ fn mtime_ns(t: SystemTime) -> i64 {
         .unwrap_or(0)
 }
 
-fn key(backend: Backend, id: &str) -> (Backend, String) {
-    (backend, id.to_string())
+fn key(provider: Provider, id: &str) -> (Provider, String) {
+    (provider, id.to_string())
 }
 
 impl Index {
@@ -586,7 +587,7 @@ impl Index {
              DROP TABLE IF EXISTS sessions;
              CREATE TABLE sessions (
                  id INTEGER PRIMARY KEY,
-                 backend TEXT NOT NULL,
+                 provider TEXT NOT NULL,
                  session_id TEXT NOT NULL,
                  file TEXT NOT NULL,
                  size INTEGER NOT NULL,
@@ -612,7 +613,7 @@ impl Index {
                  custom_title TEXT,
                  title_offset INTEGER NOT NULL DEFAULT -1,
                  codex_inherited_end INTEGER,
-                 UNIQUE (backend, session_id)
+                 UNIQUE (provider, session_id)
              );
              CREATE VIRTUAL TABLE records USING fts5(
                  text, kind UNINDEXED, name UNINDEXED,
@@ -639,8 +640,8 @@ impl Index {
             .conn
             .query_row(
                 "SELECT file, size, mtime_ns, meta, offset, head_hash, tail_hash, custom_title
-             FROM sessions WHERE backend = ?1 AND session_id = ?2 AND title_metadata_version = ?3 AND title_offset = offset",
-                params![e.backend.as_str(), e.session_id, TITLE_METADATA_VERSION],
+             FROM sessions WHERE provider = ?1 AND session_id = ?2 AND title_metadata_version = ?3 AND title_offset = offset",
+                params![e.provider.as_str(), e.session_id, TITLE_METADATA_VERSION],
                 |r| {
                     Ok(IndexedTitle {
                         file: r.get(0)?,
@@ -669,7 +670,7 @@ impl Index {
             }
             archive::read_meta_windows(e, limits)
         };
-        if e.backend == Backend::Claude {
+        if e.provider == Provider::Claude {
             let mut title = stored.custom_title;
             // Issue #36: pending appends and final records without a newline share the
             // display budget; their titles must not change the persisted checkpoint.
@@ -690,11 +691,11 @@ impl Index {
 
     /// Stored metadata for every session, for callers that want it without reading files.
     /// An entry is only trustworthy while the file's size and mtime still match.
-    pub fn meta_snapshot(&self) -> HashMap<(Backend, String), (u64, i64, SessionMeta)> {
+    pub fn meta_snapshot(&self) -> HashMap<(Provider, String), (u64, i64, SessionMeta)> {
         let mut out = HashMap::new();
         let Ok(mut stmt) = self
             .conn
-            .prepare("SELECT backend, session_id, size, mtime_ns, meta FROM sessions WHERE title_metadata_version = ?1 AND title_offset = offset AND (backend != 'claude' OR offset = size)")
+            .prepare("SELECT provider, session_id, size, mtime_ns, meta FROM sessions WHERE title_metadata_version = ?1 AND title_offset = offset AND (provider != 'claude' OR offset = size)")
         else {
             return out;
         };
@@ -708,7 +709,7 @@ impl Index {
             ))
         });
         for (b, id, size, mtime, meta) in rows.into_iter().flatten().flatten() {
-            if let (Ok(b), Ok(meta)) = (b.parse::<Backend>(), serde_json::from_str(&meta)) {
+            if let (Ok(b), Ok(meta)) = (b.parse::<Provider>(), serde_json::from_str(&meta)) {
                 out.insert((b, id), (size as u64, mtime, meta));
             }
         }
@@ -909,7 +910,7 @@ fn project(job: Job, limits: &Limits) -> Option<Done> {
         // Issue #36: an old binary can rewrite a file while retaining its previous title.
         // Backfill from an empty title so a rewrite without custom-title clears that name.
         state.custom_title = None;
-        if job.entry.backend == Backend::Claude {
+        if job.entry.provider == Provider::Claude {
             archive::scan_custom_titles(&job.entry.file, 0, state.offset, &mut state.custom_title)
                 .ok()?;
         }
@@ -968,9 +969,9 @@ fn project(job: Job, limits: &Limits) -> Option<Done> {
 }
 
 impl Index {
-    fn stored_rows(&self) -> Result<HashMap<(Backend, String), StoredRow>> {
+    fn stored_rows(&self) -> Result<HashMap<(Provider, String), StoredRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, backend, session_id, file, size, mtime_ns, text_indexed,
+            "SELECT id, provider, session_id, file, size, mtime_ns, text_indexed,
                     projection_version, offset, next_index, codex_mode, head_hash, tail_hash,
                     run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end, last_user_filtered_hash, last_user_streams
              FROM sessions",
@@ -1019,7 +1020,7 @@ impl Index {
         let mut out = HashMap::new();
         for row in rows {
             let (b, id, stored) = row?;
-            if let Ok(b) = b.parse::<Backend>() {
+            if let Ok(b) = b.parse::<Provider>() {
                 out.insert((b, id), stored);
             }
         }
@@ -1052,7 +1053,7 @@ impl Index {
         let mut jobs = Vec::new();
         for e in &entries {
             let file = e.file.display().to_string();
-            let work = match stored.get(&key(e.backend, &e.session_id)) {
+            let work = match stored.get(&key(e.provider, &e.session_id)) {
                 Some(s)
                     if s.file == file
                         && s.size == e.size_bytes as i64
@@ -1110,9 +1111,9 @@ impl Index {
         // are compared as spelled (case-sensitive and lossy), so require every root to
         // be readable or missing before discarding rows that might use another spelling
         // of one. A missing provider archive must not block single-provider cleanup.
-        let live: std::collections::HashSet<(Backend, String)> = entries
+        let live: std::collections::HashSet<(Provider, String)> = entries
             .iter()
-            .map(|e| key(e.backend, &e.session_id))
+            .map(|e| key(e.provider, &e.session_id))
             .collect();
         let roots: Vec<(&std::path::Path, bool, Option<String>)> = [
             &paths.claude_archive,
@@ -1351,10 +1352,10 @@ impl Index {
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let k = key(d.entry.backend, &d.entry.session_id);
+        let k = key(d.entry.provider, &d.entry.session_id);
         let existing: Option<(i64, i64)> = tx
             .query_row(
-                "SELECT id, offset FROM sessions WHERE backend = ?1 AND session_id = ?2",
+                "SELECT id, offset FROM sessions WHERE provider = ?1 AND session_id = ?2",
                 params![k.0.as_str(), k.1],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
@@ -1376,11 +1377,11 @@ impl Index {
         // Issue #36: old binaries leave title_offset behind when advancing offset, so
         // readers can detect that the cached title did not follow the new checkpoint.
         let id: i64 = tx.query_row(
-            "INSERT INTO sessions (backend, session_id, file, size, mtime_ns, meta, paths, origin,
+            "INSERT INTO sessions (provider, session_id, file, size, mtime_ns, meta, paths, origin,
                  subagent, text_indexed, projection_version, offset, next_index, codex_mode,
                  head_hash, tail_hash, run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end, last_user_filtered_hash, last_user_streams)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
-             ON CONFLICT (backend, session_id) DO UPDATE SET
+             ON CONFLICT (provider, session_id) DO UPDATE SET
                  file = excluded.file, size = excluded.size, mtime_ns = excluded.mtime_ns,
                  meta = excluded.meta, paths = excluded.paths, origin = excluded.origin,
                  subagent = excluded.subagent, text_indexed = excluded.text_indexed,
@@ -1516,7 +1517,7 @@ pub struct SearchOpts {
     /// Treat `query` as a case-insensitive regular expression over the indexed text.
     #[serde(default)]
     pub regex: bool,
-    pub backend: Option<Backend>,
+    pub provider: Option<Provider>,
     /// Only sessions whose project path contains this text (ASCII case-insensitive).
     pub project: Option<String>,
     /// Only sessions with this origin.
@@ -1569,7 +1570,7 @@ pub struct SessionHits {
     /// This session's position among the rows of the SQL page, counting rows not shown.
     /// A caller that returns fewer hits continues the order from the first one it left out.
     pub row: usize,
-    pub backend: Backend,
+    pub provider: Provider,
     pub session_id: String,
     pub meta: SessionMeta,
     pub match_count: usize,
@@ -1782,9 +1783,9 @@ impl Index {
                 format!("({})", scoped.join(" OR "))
             });
         }
-        if let Some(b) = opts.backend {
+        if let Some(b) = opts.provider {
             args.push(b.as_str().to_string().into());
-            filters.push(format!("s.backend = ?{}", args.len()));
+            filters.push(format!("s.provider = ?{}", args.len()));
         }
         if let Some(p) = opts.project.as_deref().filter(|p| !p.is_empty()) {
             args.push(format!("%{}%", like_escape(p)).into());
@@ -1831,7 +1832,7 @@ impl Index {
             defaults.push((
                 "automated",
                 format!(
-                    "(coalesce(s.origin, '') NOT IN ({list}) OR (s.backend || '/' || s.session_id) IN (SELECT value FROM json_each(?)))"
+                    "(coalesce(s.origin, '') NOT IN ({list}) OR (s.provider || '/' || s.session_id) IN (SELECT value FROM json_each(?)))"
                 ),
                 serde_json::to_string(except).unwrap_or_else(|_| "[]".into()).into(),
             ));
@@ -1891,7 +1892,7 @@ impl Index {
 
         let offset = opts.offset;
         let mut top = self.conn.prepare(&format!(
-            "{cte} SELECT s.id, s.backend, s.session_id, s.meta, count(*) AS n, min(m.score) AS best
+            "{cte} SELECT s.id, s.provider, s.session_id, s.meta, count(*) AS n, min(m.score) AS best
              FROM {matched} WHERE {where_s}
              GROUP BY s.id ORDER BY {order} LIMIT {limit} OFFSET {offset}"
         ))?;
@@ -1918,8 +1919,8 @@ impl Index {
 
         let mut hits = Vec::new();
         let row_count = rows.len();
-        for (row, (id, backend, session_id, meta, n)) in rows.into_iter().enumerate() {
-            let Ok(backend) = backend.parse::<Backend>() else {
+        for (row, (id, provider, session_id, meta, n)) in rows.into_iter().enumerate() {
+            let Ok(provider) = provider.parse::<Provider>() else {
                 hidden.unrecognized += 1;
                 continue;
             };
@@ -1939,7 +1940,7 @@ impl Index {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             hits.push(SessionHits {
                 row,
-                backend,
+                provider,
                 session_id,
                 meta: serde_json::from_str(&meta).unwrap_or_default(),
                 match_count: n as usize,
@@ -1959,14 +1960,14 @@ impl Index {
     /// find for that session, for checking it against the transcript projection.
     pub fn session_records(
         &self,
-        backend: Backend,
+        provider: Provider,
         id: &str,
     ) -> Result<Vec<(usize, String, String)>> {
         let sid: Option<i64> = self
             .conn
             .query_row(
-                "SELECT id FROM sessions WHERE backend = ?1 AND session_id = ?2",
-                params![backend.as_str(), id],
+                "SELECT id FROM sessions WHERE provider = ?1 AND session_id = ?2",
+                params![provider.as_str(), id],
                 |r| r.get(0),
             )
             .optional()?;

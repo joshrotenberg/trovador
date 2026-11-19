@@ -159,7 +159,7 @@ fn a_first_install_writes_the_marketplace_and_registers_with_both_hosts() {
     let hook = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         .as_str()
         .unwrap();
-    assert!(hook.starts_with(&format!("\"{bin}\" hook session-start --backend claude")));
+    assert!(hook.starts_with(&format!("\"{bin}\" hook session-start --provider claude")));
     assert!(
         hook.ends_with("|| true"),
         "a hook must never block a session"
@@ -345,9 +345,10 @@ fn the_codex_hook_is_reported_and_never_written() {
     let hook = r.codex_hook.unwrap();
     assert!(!hook.present);
     let add = hook.add.unwrap().to_string();
-    assert!(add.contains("hook session-start --backend codex"), "{add}");
+    assert!(add.contains("hook session-start --provider codex"), "{add}");
     assert!(!hooks.exists(), "init never writes under ~/.codex");
 
+    // An entry written before the flag was renamed from --backend still counts.
     fs::create_dir_all(hooks.parent().unwrap()).unwrap();
     fs::write(&hooks, json!({"hooks": {"SessionStart": [{"hooks": [
         {"type": "command", "command": "/x/trovador hook session-start --backend codex || true"}]}]}})
@@ -458,6 +459,35 @@ fn a_failing_host_step_is_a_warning_even_with_progress_off() {
     );
 }
 
+#[test]
+fn a_hook_line_written_with_the_old_backend_flag_still_names_the_session() {
+    // Hook command lines live in host configuration init does not rewrite. Under
+    // `|| true`, a flag the parser rejected would silently drop the session's
+    // self-exclusion.
+    let payload =
+        r#"{"session_id":"01a007a0-134e-70e2-84e5-a19ae6996317","transcript_path":"/tmp/x.jsonl"}"#;
+    let hook = |flag: &str| {
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_trovador"))
+            .args(["hook", "session-start", flag, "codex"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(child.stdin.as_mut().unwrap(), payload.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "{flag}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let new = hook("--provider");
+    assert!(new.contains("codex session 01a007a0"), "{new}");
+    assert_eq!(hook("--backend"), new);
+}
+
 #[tokio::test]
 async fn the_skill_names_only_tools_and_actions_the_server_offers() {
     // The skill is what an agent reads first; a tool or action it names that does not
@@ -484,7 +514,7 @@ async fn the_skill_names_only_tools_and_actions_the_server_offers() {
     let params = search["inputSchema"]["properties"].as_object().unwrap();
     for p in [
         "project",
-        "backend",
+        "provider",
         "since",
         "until",
         "regex",

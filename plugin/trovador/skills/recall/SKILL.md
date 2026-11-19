@@ -13,7 +13,7 @@ they are deferred. Neither runs a model or costs tokens.
 
 Call `search` with the distinctive words: an error message, a function or file name,
 an issue number, a phrase the user remembers. Words are all required; quote exact
-phrases. Narrow with `project` (path substring), `backend` (`claude` or `codex`), and
+phrases. Narrow with `project` (path substring), `provider` (`claude` or `codex`), and
 `since`/`until` (`2d`, `1w`, `2026-10-01`). Use `regex=true` only for patterns and
 `fts=true` only for FTS5 syntax.
 
@@ -39,7 +39,7 @@ from there. Keep `per_session` small (the default 3 is usually enough): `match_c
 says how many records matched, and the transcript shows the rest.
 
 To browse instead of search, `sessions` with `action=list` returns sessions newest
-first, with the same `project`, `backend`, and `since`/`until` filters, and pages the
+first, with the same `project`, `provider`, and `since`/`until` filters, and pages the
 same way with `next_offset` and `offset`. `archived=true` keeps only Codex threads
 that were archived and `archived=false` leaves them out; both `search` and `list`
 take it, and leaving it out includes both.
@@ -71,7 +71,7 @@ needs.
 
 ## Report
 
-Answer the user's question, citing the session (backend, short id, date, title or
+Answer the user's question, citing the session (provider, short id, date, title or
 first prompt) and what it showed. Give the `open_with` command from `sessions` with
 `action=show` when the user may want to resume it themselves.
 

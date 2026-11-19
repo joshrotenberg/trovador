@@ -9,7 +9,7 @@
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::archive::Backend;
+use crate::archive::Provider;
 
 #[derive(Deserialize)]
 struct SessionStart {
@@ -21,21 +21,21 @@ struct SessionStart {
 /// The hook's stdout for this input, or None when the input is not a SessionStart payload.
 /// A hook must never block a session from starting, so the caller prints nothing and exits
 /// successfully on None.
-pub fn session_start(input: &str, backend: Option<Backend>) -> Option<String> {
+pub fn session_start(input: &str, provider: Option<Provider>) -> Option<String> {
     let start: SessionStart = serde_json::from_str(input).ok()?;
     let id = start.session_id.trim();
     if id.is_empty() || id.len() > 1024 || id.contains(['"', '\n', '\0']) {
         return None;
     }
-    let backend = backend.unwrap_or_else(|| {
+    let provider = provider.unwrap_or_else(|| {
         // Codex writes rollouts under ~/.codex; anything else is Claude Code.
         match start.transcript_path.as_deref() {
-            Some(p) if p.contains("/.codex/") => Backend::Codex,
-            _ => Backend::Claude,
+            Some(p) if p.contains("/.codex/") => Provider::Codex,
+            _ => Provider::Claude,
         }
     });
     let context = format!(
-        "This conversation is {backend} session {id}. When searching past sessions with \
+        "This conversation is {provider} session {id}. When searching past sessions with \
          trovador's search tool, pass exclude_session=\"{id}\" and include_active=true: that \
          leaves out only this conversation and keeps other sessions running now, in Claude \
          Code or Codex."
@@ -60,7 +60,7 @@ mod tests {
     }
 
     #[test]
-    fn names_the_session_and_its_backend_from_either_host() {
+    fn names_the_session_and_its_provider_from_either_host() {
         let claude = r#"{"session_id":"27d1f434-b559-4583-8026-7c2ba30ac060","transcript_path":"/Users/me/.claude/projects/-w/27d1f434-b559-4583-8026-7c2ba30ac060.jsonl","cwd":"/w","hook_event_name":"SessionStart","source":"startup"}"#;
         let c = context(&session_start(claude, None).unwrap());
         assert!(c.contains("claude session 27d1f434-b559-4583-8026-7c2ba30ac060"));
@@ -68,9 +68,9 @@ mod tests {
 
         let codex = r#"{"session_id":"01a007a0-134e-70e2-84e5-a19ae6996317","transcript_path":"/Users/me/.codex/sessions/2026/10/08/rollout-x.jsonl"}"#;
         assert!(context(&session_start(codex, None).unwrap()).contains("codex session 01a007a0"));
-        // An explicit backend wins over the path.
+        // An explicit provider wins over the path.
         assert!(
-            context(&session_start(codex, Some(Backend::Claude)).unwrap())
+            context(&session_start(codex, Some(Provider::Claude)).unwrap())
                 .contains("claude session")
         );
     }

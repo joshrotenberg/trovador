@@ -574,13 +574,13 @@ fn a_page_whose_matches_are_all_unavailable_is_not_reported_as_past_the_end() {
 }
 
 #[test]
-fn a_row_under_an_unknown_backend_is_counted_and_next_offset_still_advances() {
+fn a_row_under_an_unknown_provider_is_counted_and_next_offset_still_advances() {
     let f = many(3);
-    // An index written by a build that knew another backend.
+    // An index written by a build that knew another provider.
     let conn = Connection::open(db_path(&f.paths)).unwrap();
     let changed = conn
         .execute(
-            "UPDATE sessions SET backend = 'mystery' WHERE session_id = ?1",
+            "UPDATE sessions SET provider = 'mystery' WHERE session_id = ?1",
             [sid(1)],
         )
         .unwrap();
@@ -608,7 +608,7 @@ fn a_row_under_an_unknown_backend_is_counted_and_next_offset_still_advances() {
         first
             .note
             .unwrap()
-            .contains("backend this version does not know")
+            .contains("provider this version does not know")
     );
     let second = sessions::search(
         &f.ctx(),

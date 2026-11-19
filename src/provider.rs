@@ -3,33 +3,33 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum Backend {
+pub enum Provider {
     Claude,
     Codex,
 }
 
-impl Backend {
+impl Provider {
     pub fn as_str(self) -> &'static str {
         match self {
-            Backend::Claude => "claude",
-            Backend::Codex => "codex",
+            Provider::Claude => "claude",
+            Provider::Codex => "codex",
         }
     }
 }
 
-impl std::fmt::Display for Backend {
+impl std::fmt::Display for Provider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl std::str::FromStr for Backend {
+impl std::str::FromStr for Provider {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "claude" => Ok(Backend::Claude),
-            "codex" => Ok(Backend::Codex),
-            other => Err(format!("unknown backend \"{other}\"; have: claude, codex")),
+            "claude" => Ok(Provider::Claude),
+            "codex" => Ok(Provider::Codex),
+            other => Err(format!("unknown provider \"{other}\"; have: claude, codex")),
         }
     }
 }
