@@ -101,7 +101,7 @@ fn a_relocated_claude_session_resumes_from_where_it_lives_now() {
     assert_eq!(d.row.meta.cwd.as_deref(), Some("/old/scratch"));
     assert_eq!(d.row.project.as_deref(), Some("/new/home"));
     assert_eq!(
-        d.row.open_with,
+        d.open_with,
         format!("cd '/new/home' && claude --resume {ID_A}")
     );
     assert_eq!(
