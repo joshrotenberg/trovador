@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use trovador::index::{Index, Order, RefreshOpts, SearchOpts};
 use trovador::sessions::{self, Ctx};
 use trovador::transcript::RecordKind;
-use trovador::{Backend, Limits};
+use trovador::{Limits, Provider};
 
 fn append(path: &std::path::Path, records: &[Value]) {
     let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
@@ -25,10 +25,10 @@ fn refresh(ctx: &Ctx) -> trovador::index::RefreshReport {
 /// What the index holds for a session must be exactly the text-bearing records a full
 /// transcript read produces, with the same indexes, or a search hit's index would open the
 /// transcript at the wrong record.
-fn assert_index_matches_transcript(ctx: &Ctx, backend: Backend, id: &str) {
+fn assert_index_matches_transcript(ctx: &Ctx, provider: Provider, id: &str) {
     let idx = Index::open(&ctx.paths, &ctx.limits).unwrap();
-    let indexed = idx.session_records(backend, id).unwrap();
-    let page = sessions::transcript(ctx, id, Some(backend), 0, Some(200))
+    let indexed = idx.session_records(provider, id).unwrap();
+    let page = sessions::transcript(ctx, id, Some(provider), 0, Some(200))
         .unwrap()
         .page;
     let expected: Vec<(usize, String, String)> = page
@@ -148,7 +148,7 @@ fn old_cached_generated_titles_are_backfilled_without_reprojecting_search_record
     );
     assert_eq!(refresh(&ctx).reindexed, 1);
     let index = Index::open(&ctx.paths, &ctx.limits).unwrap();
-    let original_records = index.session_records(Backend::Claude, ID_A).unwrap();
+    let original_records = index.session_records(Provider::Claude, ID_A).unwrap();
     drop(index);
     let conn = rusqlite::Connection::open(trovador::index::db_path(&ctx.paths)).unwrap();
     let raw: String = conn
@@ -170,7 +170,7 @@ fn old_cached_generated_titles_are_backfilled_without_reprojecting_search_record
     assert_eq!((r.metadata_refreshed, r.reindexed, r.appended), (1, 0, 0));
     let index = Index::open(&ctx.paths, &ctx.limits).unwrap();
     assert_eq!(
-        index.session_records(Backend::Claude, ID_A).unwrap(),
+        index.session_records(Provider::Claude, ID_A).unwrap(),
         original_records
     );
     assert_custom_title_on_both_doors(&ctx, "typed");
@@ -433,7 +433,7 @@ fn an_append_continues_the_open_omitted_run_and_keeps_indexes_aligned() {
     );
     let r1 = refresh(&ctx);
     assert_eq!(r1.reindexed, 1);
-    assert_index_matches_transcript(&ctx, Backend::Claude, ID_A);
+    assert_index_matches_transcript(&ctx, Provider::Claude, ID_A);
 
     // The omitted run that was open at the end of the first pass continues here. A full
     // read collapses all three attachments into one record, so "second" is index 2.
@@ -446,10 +446,10 @@ fn an_append_continues_the_open_omitted_run_and_keeps_indexes_aligned() {
     );
     let r2 = refresh(&ctx);
     assert_eq!((r2.appended, r2.reindexed), (1, 0));
-    assert_index_matches_transcript(&ctx, Backend::Claude, ID_A);
+    assert_index_matches_transcript(&ctx, Provider::Claude, ID_A);
     let records = Index::open(&ctx.paths, &ctx.limits)
         .unwrap()
-        .session_records(Backend::Claude, ID_A)
+        .session_records(Provider::Claude, ID_A)
         .unwrap();
     assert_eq!(records.last().unwrap().0, 2);
 
@@ -482,10 +482,10 @@ fn a_codex_file_that_later_shows_its_item_stream_is_continued_without_a_duplicat
     );
     let r = refresh(&ctx);
     assert_eq!((r.appended, r.reindexed), (1, 0));
-    assert_index_matches_transcript(&ctx, Backend::Codex, ID_A);
+    assert_index_matches_transcript(&ctx, Provider::Codex, ID_A);
     let idx = Index::open(&ctx.paths, &ctx.limits).unwrap();
     let users = idx
-        .session_records(Backend::Codex, ID_A)
+        .session_records(Provider::Codex, ID_A)
         .unwrap()
         .into_iter()
         .filter(|(_, k, _)| k == "user")
@@ -522,10 +522,10 @@ fn indexing_split_between_a_turn_and_its_copy_in_the_other_stream_matches_a_full
     );
     let r = refresh(&ctx);
     assert_eq!((r.appended, r.reindexed), (1, 0));
-    assert_index_matches_transcript(&ctx, Backend::Codex, ID_A);
+    assert_index_matches_transcript(&ctx, Provider::Codex, ID_A);
     let users = Index::open(&ctx.paths, &ctx.limits)
         .unwrap()
-        .session_records(Backend::Codex, ID_A)
+        .session_records(Provider::Codex, ID_A)
         .unwrap()
         .into_iter()
         .filter(|(_, k, _)| k == "user")
@@ -560,7 +560,7 @@ fn a_torn_final_line_is_left_for_the_next_pass_and_indexed_once() {
     assert_eq!(hit.coverage.refresh.appended, 1);
     assert_eq!(hit.sessions_matched, 1);
     assert_eq!(hit.hits[0].match_count, 1);
-    assert_index_matches_transcript(&ctx, Backend::Claude, ID_A);
+    assert_index_matches_transcript(&ctx, Provider::Claude, ID_A);
 }
 
 #[test]
@@ -770,7 +770,7 @@ fn a_regex_searches_raw_text_and_brackets_the_match() {
 }
 
 #[test]
-fn filters_narrow_by_backend_project_and_origin() {
+fn filters_narrow_by_provider_project_and_origin() {
     let f = corpus();
     let ctx = f.ctx();
     let with = |o: SearchOpts| sessions::search(&ctx, &o).unwrap().sessions_matched;
@@ -780,7 +780,7 @@ fn filters_narrow_by_backend_project_and_origin() {
     };
     assert_eq!(
         with(SearchOpts {
-            backend: Some(Backend::Codex),
+            provider: Some(Provider::Codex),
             ..base()
         }),
         1
@@ -880,7 +880,7 @@ fn reasoning_can_be_left_out_of_the_index_and_changing_that_rebuilds_it() {
     assert_eq!(r.coverage.refresh.reindexed, 1);
     let kinds: Vec<String> = Index::open(&off.paths, &off.limits)
         .unwrap()
-        .session_records(Backend::Claude, ID_A)
+        .session_records(Provider::Claude, ID_A)
         .unwrap()
         .into_iter()
         .map(|(_, k, _)| k)
@@ -915,7 +915,7 @@ fn a_rewrite_of_the_same_size_or_larger_is_reindexed_not_continued() {
         );
         assert_eq!(r.sessions_matched, 1);
         assert_eq!(search(&ctx, "alpha").sessions_matched, 0, "{replacement}");
-        assert_index_matches_transcript(&ctx, Backend::Claude, ID_A);
+        assert_index_matches_transcript(&ctx, Provider::Claude, ID_A);
     }
 }
 
@@ -1006,8 +1006,8 @@ fn older_format_codex_turns_survive_a_newer_client_continuing_the_session() {
     let r = search(&ctx, "historicalzephyr");
     assert_eq!(r.coverage.refresh.appended, 1);
     assert_eq!(r.sessions_matched, 1);
-    assert_index_matches_transcript(&ctx, Backend::Codex, ID_A);
+    assert_index_matches_transcript(&ctx, Provider::Codex, ID_A);
     sessions::reindex(&ctx, true).unwrap();
-    assert_index_matches_transcript(&ctx, Backend::Codex, ID_A);
+    assert_index_matches_transcript(&ctx, Provider::Codex, ID_A);
     assert_eq!(search(&ctx, "historicalzephyr").sessions_matched, 1);
 }

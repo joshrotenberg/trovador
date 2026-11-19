@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::archive::{self, ArchiveEntry, Backend, LookupError, SessionMeta};
+use crate::archive::{self, ArchiveEntry, LookupError, Provider, SessionMeta};
 use crate::index::{
     self, AUTOMATED_ORIGINS, Hidden, Index, IndexError, Match, RefreshOpts, RefreshReport,
     SearchOpts, Visibility,
@@ -43,19 +43,21 @@ pub enum Error {
     Query(String),
     /// The caller's continuation names a revision the session no longer has.
     #[error(
-        "session {backend}/{session_id} is not at revision {expected}; it is now at revision {current}. Offsets from the earlier read may not address the same records: restart from offset 0 without expected_revision"
+        "session {provider}/{session_id} is not at revision {expected}; it is now at revision {current}. Offsets from the earlier read may not address the same records: restart from offset 0 without expected_revision"
     )]
     StaleRevision {
-        backend: Backend,
+        provider: Provider,
         session_id: String,
         expected: String,
         current: String,
     },
     /// The file was rewritten while a page was being read, so the page could mix two
     /// versions. Nothing is returned for it.
-    #[error("session {backend}/{session_id} was rewritten while it was being read; retry the call")]
+    #[error(
+        "session {provider}/{session_id} was rewritten while it was being read; retry the call"
+    )]
     ChangedWhileReading {
-        backend: Backend,
+        provider: Provider,
         session_id: String,
     },
     #[error("invalid offset: {0}")]
@@ -70,7 +72,7 @@ pub enum Error {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SessionRow {
-    pub backend: Backend,
+    pub provider: Provider,
     pub session_id: String,
     pub modified: String,
     pub size_kb: u64,
@@ -92,12 +94,12 @@ pub struct SessionRow {
 pub fn row(e: &ArchiveEntry, meta: SessionMeta, limits: &Limits) -> SessionRow {
     let project = meta.project().map(str::to_string);
     SessionRow {
-        backend: e.backend,
+        provider: e.provider,
         session_id: e.session_id.clone(),
         modified: e.modified(),
         size_kb: e.size_bytes.div_ceil(1024),
-        open_with: archive::open_with(e.backend, project.as_deref(), &e.session_id),
-        resource: format!("session://{}/{}", e.backend, e.session_id),
+        open_with: archive::open_with(e.provider, project.as_deref(), &e.session_id),
+        resource: format!("session://{}/{}", e.provider, e.session_id),
         resumable: archive::resumability(e, limits).resumable,
         archived: e.archived,
         project,
@@ -114,8 +116,8 @@ fn include(choice: Option<bool>, default: bool) -> bool {
 
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
 pub struct ListOpts {
-    /// Only this backend.
-    pub backend: Option<Backend>,
+    /// Only this provider.
+    pub provider: Option<Provider>,
     /// Only sessions whose project path contains this text (ASCII case-insensitive).
     pub project: Option<String>,
     /// How many to return, newest first.
@@ -174,7 +176,7 @@ pub(crate) fn window(
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ListResult {
-    /// Sessions in the archives searched, after the backend and archived filters and
+    /// Sessions in the archives searched, after the provider and archived filters and
     /// before any other.
     pub total_sessions: usize,
     /// Sessions whose metadata was read to answer this list, including those skipped by
@@ -237,7 +239,7 @@ fn list_inner(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
     let (since, until) = window(opts.since.as_deref(), opts.until.as_deref())?;
     let all: Vec<ArchiveEntry> = archive::scan_all(&ctx.paths)
         .into_iter()
-        .filter(|e| opts.backend.is_none_or(|b| e.backend == b))
+        .filter(|e| opts.provider.is_none_or(|b| e.provider == b))
         .filter(|e| opts.archived.is_none_or(|a| e.archived == a))
         .collect();
     let limit = opts.limit.unwrap_or(ctx.limits.list_default).max(1);
@@ -349,8 +351,8 @@ pub struct SessionDetail {
     pub transcript_resource: String,
 }
 
-pub fn show(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<SessionDetail, Error> {
-    let e = archive::find_session(&ctx.paths, id, backend)?;
+pub fn show(ctx: &Ctx, id: &str, provider: Option<Provider>) -> Result<SessionDetail, Error> {
+    let e = archive::find_session(&ctx.paths, id, provider)?;
     tracing::debug!(id, file = %e.file.display(), "show");
     let meta = Index::open_existing(&ctx.paths, &ctx.limits)
         .and_then(|i| i.read_meta_entry(&e, &ctx.limits))
@@ -367,7 +369,7 @@ pub fn show(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<SessionDeta
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct TranscriptResult {
-    pub backend: Backend,
+    pub provider: Provider,
     pub session_id: String,
     /// The revision of the session this page was read from. Pass it as
     /// `expected_revision` when reading the next page.
@@ -411,7 +413,7 @@ fn begin_read(ctx: &Ctx, e: &ArchiveEntry, expected: Option<&str>) -> Result<Rea
         ),
         revision::Check::Stale { current } => {
             return Err(Error::StaleRevision {
-                backend: e.backend,
+                provider: e.provider,
                 session_id: e.session_id.clone(),
                 expected: expected.unwrap_or_default().to_string(),
                 current: current.id,
@@ -436,7 +438,7 @@ fn end_read(read: &Read) -> Result<(), Error> {
         Ok(())
     } else {
         Err(Error::ChangedWhileReading {
-            backend: e.backend,
+            provider: e.provider,
             session_id: e.session_id.clone(),
         })
     }
@@ -446,11 +448,11 @@ fn end_read(read: &Read) -> Result<(), Error> {
 pub fn transcript(
     ctx: &Ctx,
     id: &str,
-    backend: Option<Backend>,
+    provider: Option<Provider>,
     offset: usize,
     limit: Option<usize>,
 ) -> Result<TranscriptResult, Error> {
-    transcript_at(ctx, id, backend, offset, limit, None)
+    transcript_at(ctx, id, provider, offset, limit, None)
 }
 
 /// One page of a transcript. With `expected_revision`, a session that has only grown since
@@ -459,12 +461,12 @@ pub fn transcript(
 pub fn transcript_at(
     ctx: &Ctx,
     id: &str,
-    backend: Option<Backend>,
+    provider: Option<Provider>,
     offset: usize,
     limit: Option<usize>,
     expected_revision: Option<&str>,
 ) -> Result<TranscriptResult, Error> {
-    transcript_at_hooked(ctx, id, backend, offset, limit, expected_revision, || {})
+    transcript_at_hooked(ctx, id, provider, offset, limit, expected_revision, || {})
 }
 
 /// [`transcript_at`] that runs `after_read` between the read and the final check. Public
@@ -475,13 +477,13 @@ pub fn transcript_at(
 pub fn transcript_at_hooked(
     ctx: &Ctx,
     id: &str,
-    backend: Option<Backend>,
+    provider: Option<Provider>,
     offset: usize,
     limit: Option<usize>,
     expected_revision: Option<&str>,
     after_read: impl FnOnce(),
 ) -> Result<TranscriptResult, Error> {
-    let e = archive::find_session(&ctx.paths, id, backend)?;
+    let e = archive::find_session(&ctx.paths, id, provider)?;
     let read = begin_read(ctx, &e, expected_revision)?;
     let page =
         transcript::page(&read.entry, offset, limit, &ctx.limits).map_err(|source| Error::Io {
@@ -498,7 +500,7 @@ pub fn transcript_at_hooked(
         "transcript page"
     );
     Ok(TranscriptResult {
-        backend: e.backend,
+        provider: e.provider,
         session_id: e.session_id,
         revision: read.rev.id,
         grown: read.grown,
@@ -510,10 +512,10 @@ pub fn transcript_at_hooked(
 pub fn text(
     ctx: &Ctx,
     id: &str,
-    backend: Option<Backend>,
+    provider: Option<Provider>,
     offset: usize,
 ) -> Result<crate::text::SessionText, Error> {
-    text_at(ctx, id, backend, offset, None)
+    text_at(ctx, id, provider, offset, None)
 }
 
 /// One part of a session as plain text, for the caller to read or summarize. See
@@ -522,11 +524,11 @@ pub fn text(
 pub fn text_at(
     ctx: &Ctx,
     id: &str,
-    backend: Option<Backend>,
+    provider: Option<Provider>,
     offset: usize,
     expected_revision: Option<&str>,
 ) -> Result<crate::text::SessionText, Error> {
-    text_at_hooked(ctx, id, backend, offset, expected_revision, || {})
+    text_at_hooked(ctx, id, provider, offset, expected_revision, || {})
 }
 
 /// [`text_at`] with the same test-only hook as [`transcript_at_hooked`], public for the
@@ -535,12 +537,12 @@ pub fn text_at(
 pub fn text_at_hooked(
     ctx: &Ctx,
     id: &str,
-    backend: Option<Backend>,
+    provider: Option<Provider>,
     offset: usize,
     expected_revision: Option<&str>,
     after_read: impl FnOnce(),
 ) -> Result<crate::text::SessionText, Error> {
-    let e = archive::find_session(&ctx.paths, id, backend)?;
+    let e = archive::find_session(&ctx.paths, id, provider)?;
     let read = begin_read(ctx, &e, expected_revision)?;
     let mut part =
         crate::text::part(&read.entry, offset, &read.rev.id, &ctx.limits).map_err(|source| {
@@ -556,10 +558,10 @@ pub fn text_at_hooked(
     Ok(part)
 }
 
-type MetaCache = HashMap<(Backend, String), (u64, i64, SessionMeta)>;
+type MetaCache = HashMap<(Provider, String), (u64, i64, SessionMeta)>;
 
 fn cached_meta(cache: &MetaCache, e: &ArchiveEntry) -> Option<SessionMeta> {
-    let (size, mtime, meta) = cache.get(&(e.backend, e.session_id.clone()))?;
+    let (size, mtime, meta) = cache.get(&(e.provider, e.session_id.clone()))?;
     let now = e
         .mtime
         .duration_since(std::time::UNIX_EPOCH)
@@ -725,9 +727,9 @@ fn search_inner(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         .search(opts, &vis, limit, per_session, ctx.limits.redact)
         .map_err(|e| search_error(e, opts))?;
 
-    let entries: HashMap<(Backend, String), ArchiveEntry> = archive::scan_all(&ctx.paths)
+    let entries: HashMap<(Provider, String), ArchiveEntry> = archive::scan_all(&ctx.paths)
         .into_iter()
-        .map(|e| ((e.backend, e.session_id.clone()), e))
+        .map(|e| ((e.provider, e.session_id.clone()), e))
         .collect();
     if readonly_note.is_some() {
         refresh.sessions = entries.len();
@@ -738,7 +740,7 @@ fn search_inner(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         .hits
         .into_iter()
         .filter_map(|h| {
-            let e = entries.get(&(h.backend, h.session_id.clone()))?;
+            let e = entries.get(&(h.provider, h.session_id.clone()))?;
             // Issue #36: a complete final title without a newline is display metadata,
             // so search must use the same bounded read as list and show.
             let meta = idx.read_meta_entry(e, &ctx.limits).unwrap_or(h.meta);
@@ -782,7 +784,7 @@ fn search_inner(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
     });
     let unrecognized_note = (hidden.unrecognized > 0).then(|| {
         format!(
-            "{} matching sessions are indexed under a backend this version does not know and were not returned; run `trovador index --rebuild`",
+            "{} matching sessions are indexed under a provider this version does not know and were not returned; run `trovador index --rebuild`",
             hidden.unrecognized
         )
     });

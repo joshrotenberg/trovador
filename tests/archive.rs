@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use trovador::Backend;
+use trovador::Provider;
 use trovador::archive::{self, LookupError, TitleSource};
 use trovador::sessions::{self, ListOpts};
 use trovador::transcript::RecordKind;
@@ -355,8 +355,8 @@ fn an_ambiguous_prefix_names_every_candidate() {
         }
         other => panic!("expected ambiguity, got {other:?}"),
     }
-    // Narrowing by backend resolves it.
-    assert!(archive::find_session(&f.paths, "a", Some(Backend::Claude)).is_ok());
+    // Narrowing by provider resolves it.
+    assert!(archive::find_session(&f.paths, "a", Some(Provider::Claude)).is_ok());
 }
 
 // --- listing ---------------------------------------------------------------

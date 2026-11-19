@@ -12,7 +12,7 @@
 //! state it names: the size `S` the read was cut at, the file's mtime, hashes of the first
 //! and last 4 KB of the first `S` bytes (the samples the index uses to tell an append from
 //! a rewrite, #25), a kind (plain, plain with an unresolved fork, compressed) and a hash
-//! of everything else that shapes the projection. That hash covers the backend, session id,
+//! of everything else that shapes the projection. That hash covers the provider, session id,
 //! file path, the archived flag, `PROJECTION_VERSION`, the record and tool character caps
 //! and the redact setting. The redaction rules are not versioned separately: they are
 //! covered only through `PROJECTION_VERSION`, so a change to them must bump it. Producing a
@@ -71,7 +71,7 @@ use std::time::SystemTime;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::archive::{self, ArchiveEntry, Backend};
+use crate::archive::{self, ArchiveEntry, Provider};
 use crate::index::{bytes_hash, region_hashes};
 use crate::limits::Limits;
 use crate::transcript::PROJECTION_VERSION;
@@ -174,7 +174,7 @@ fn settings_hash(e: &ArchiveEntry, limits: &Limits, compressed: bool) -> u64 {
     bytes_hash(
         format!(
             "{}/{}|file={}|archived={}|projection={PROJECTION_VERSION}|record_chars={}|tool_chars={}|unrecognized_chars={}|redact={}|compressed={compressed}",
-            e.backend,
+            e.provider,
             e.session_id,
             e.file.display(),
             e.archived,
@@ -190,7 +190,7 @@ fn settings_hash(e: &ArchiveEntry, limits: &Limits, compressed: bool) -> u64 {
 /// Whether the first `e.size_bytes` bytes are a Codex fork whose boundary a later line
 /// could still resolve. Reads the header line, and for a fork the lines up to the boundary.
 fn fork_unresolved(e: &ArchiveEntry) -> std::io::Result<bool> {
-    if e.backend != Backend::Codex {
+    if e.provider != Provider::Codex {
         return Ok(false);
     }
     let mut reader = std::io::Read::take(archive::open_archive(&e.file, 0)?, e.size_bytes);

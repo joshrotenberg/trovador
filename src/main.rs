@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
-use trovador::Backend;
+use trovador::Provider;
 use trovador::index::{Order, SearchOpts};
 use trovador::sessions::{self, Ctx, ListOpts};
 
@@ -42,7 +42,7 @@ enum Command {
         #[arg(long)]
         regex: bool,
         #[arg(long)]
-        backend: Option<Backend>,
+        provider: Option<Provider>,
         /// Only sessions whose project path contains this text (ASCII case-insensitive).
         #[arg(long)]
         project: Option<String>,
@@ -133,8 +133,12 @@ enum HookCmd {
     /// and always exits 0, so it can never block a session from starting.
     SessionStart {
         /// The host: claude or codex. Inferred from the transcript path when omitted.
-        #[arg(long)]
-        backend: Option<Backend>,
+        // `--backend` was this flag's name before 0.1. Hook command lines live in host
+        // configuration trovador does not rewrite (~/.codex/hooks.json, an older plugin
+        // install), and an unknown flag there fails under `|| true`, silently dropping
+        // the session's self-exclusion, so the old name stays accepted.
+        #[arg(long, alias = "backend")]
+        provider: Option<Provider>,
     },
 }
 
@@ -143,7 +147,7 @@ enum SessionsCmd {
     /// Sessions newest first.
     List {
         #[arg(long)]
-        backend: Option<Backend>,
+        provider: Option<Provider>,
         /// Only sessions whose project path contains this text (ASCII case-insensitive).
         #[arg(long)]
         project: Option<String>,
@@ -178,13 +182,13 @@ enum SessionsCmd {
         /// Session id or unambiguous prefix.
         id: String,
         #[arg(long)]
-        backend: Option<Backend>,
+        provider: Option<Provider>,
     },
     /// One page of a session's projected transcript.
     Transcript {
         id: String,
         #[arg(long)]
-        backend: Option<Backend>,
+        provider: Option<Provider>,
         #[arg(long, default_value_t = 0)]
         offset: usize,
         #[arg(long)]
@@ -199,7 +203,7 @@ enum SessionsCmd {
     Text {
         id: String,
         #[arg(long)]
-        backend: Option<Backend>,
+        provider: Option<Provider>,
         /// The character to start from, for the next part (truncated.next_offset).
         #[arg(long, default_value_t = 0)]
         offset: usize,
@@ -328,7 +332,7 @@ fn main() -> ExitCode {
         ),
         Command::Sessions { action } => match action {
             SessionsCmd::List {
-                backend,
+                provider,
                 project,
                 limit,
                 offset,
@@ -341,7 +345,7 @@ fn main() -> ExitCode {
             } => match sessions::list(
                 &ctx,
                 &ListOpts {
-                    backend,
+                    provider,
                     project,
                     limit,
                     offset,
@@ -356,20 +360,20 @@ fn main() -> ExitCode {
                 Ok(r) => print(&r),
                 Err(e) => fail(e),
             },
-            SessionsCmd::Show { id, backend } => match sessions::show(&ctx, &id, backend) {
+            SessionsCmd::Show { id, provider } => match sessions::show(&ctx, &id, provider) {
                 Ok(d) => print(&d),
                 Err(e) => fail(e),
             },
             SessionsCmd::Transcript {
                 id,
-                backend,
+                provider,
                 offset,
                 limit,
                 expected_revision,
             } => match sessions::transcript_at(
                 &ctx,
                 &id,
-                backend,
+                provider,
                 offset,
                 limit,
                 expected_revision.as_deref(),
@@ -379,11 +383,11 @@ fn main() -> ExitCode {
             },
             SessionsCmd::Text {
                 id,
-                backend,
+                provider,
                 offset,
                 expected_revision,
             } => {
-                match sessions::text_at(&ctx, &id, backend, offset, expected_revision.as_deref()) {
+                match sessions::text_at(&ctx, &id, provider, offset, expected_revision.as_deref()) {
                     Ok(t) => print(&t),
                     Err(e) => fail(e),
                 }
@@ -393,7 +397,7 @@ fn main() -> ExitCode {
             query,
             fts,
             regex,
-            backend,
+            provider,
             project,
             origin,
             include_subagents,
@@ -412,7 +416,7 @@ fn main() -> ExitCode {
                 query,
                 fts,
                 regex,
-                backend,
+                provider,
                 project,
                 origin,
                 include_subagents,
@@ -441,11 +445,11 @@ fn main() -> ExitCode {
             Err(e) => fail(e),
         },
         Command::Hook {
-            event: HookCmd::SessionStart { backend },
+            event: HookCmd::SessionStart { provider },
         } => {
             let mut input = String::new();
             let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
-            if let Some(out) = trovador::hook::session_start(&input, backend) {
+            if let Some(out) = trovador::hook::session_start(&input, provider) {
                 println!("{out}");
             }
             ExitCode::SUCCESS

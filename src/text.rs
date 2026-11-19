@@ -9,14 +9,14 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::archive::{ArchiveEntry, Backend};
+use crate::archive::{ArchiveEntry, Provider};
 use crate::limits::Limits;
 use crate::output::{self, Truncated};
 use crate::transcript::{self, Projection, RecordKind};
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SessionText {
-    pub backend: Backend,
+    pub provider: Provider,
     pub session_id: String,
     /// One part of the session's text: one line block per record, oldest first.
     pub text: String,
@@ -71,14 +71,14 @@ pub fn part(
     let whole = render(e, limits)?;
     let source = output::source(&whole, limits);
     let id = e.session_id.clone();
-    let backend = e.backend;
+    let provider = e.provider;
     let (text, truncated) = output::part(&source, offset, limits.response_max_chars, |n| {
         format!(
-            "sessions action=text session_id={id} backend={backend} offset={n} expected_revision={revision}; CLI: trovador sessions text {id} --backend {backend} --offset {n} --expected-revision {revision}"
+            "sessions action=text session_id={id} provider={provider} offset={n} expected_revision={revision}; CLI: trovador sessions text {id} --provider {provider} --offset {n} --expected-revision {revision}"
         )
     });
     Ok(SessionText {
-        backend,
+        provider,
         session_id: e.session_id.clone(),
         text,
         revision: revision.to_string(),

@@ -3,7 +3,6 @@
 //! answer.
 
 pub mod archive;
-mod backend;
 mod codex;
 pub mod doctor;
 pub mod hook;
@@ -14,6 +13,7 @@ pub mod mcp;
 pub mod output;
 pub mod paths;
 mod private;
+mod provider;
 pub mod redact;
 pub mod revision;
 pub mod sessions;
@@ -27,7 +27,7 @@ pub mod transcript;
 /// under `TROVADOR_LOG`.
 pub const PROGRESS: &str = "trovador::progress";
 
-pub use archive::Backend;
+pub use archive::Provider;
 pub use limits::Limits;
 pub use paths::Paths;
 pub use sessions::Ctx;

@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::limits::Limits;
 use crate::paths::Paths;
 
-pub use crate::backend::Backend;
+pub use crate::provider::Provider;
 
 pub(crate) fn is_compressed(path: &Path) -> bool {
     path.extension().is_some_and(|ext| ext == "zst")
@@ -37,7 +37,7 @@ pub(crate) fn open_archive(path: &Path, offset: u64) -> std::io::Result<Box<dyn 
 /// One session file, as found on disk, before anything inside it is read.
 #[derive(Clone, Debug)]
 pub struct ArchiveEntry {
-    pub backend: Backend,
+    pub provider: Provider,
     pub session_id: String,
     pub file: PathBuf,
     pub size_bytes: u64,
@@ -64,12 +64,12 @@ impl ArchiveEntry {
 /// deeper under `<session>/subagents/` and are deliberately not listed as sessions: they
 /// cannot be resumed on their own.
 pub fn scan_claude(root: &Path) -> Vec<ArchiveEntry> {
-    scan_root(root, Backend::Claude, false, &mut Vec::new())
+    scan_root(root, Provider::Claude, false, &mut Vec::new())
 }
 
 /// Codex nests active sessions by date and keeps archived sessions in a flat directory.
 pub fn scan_codex(root: &Path, archived: bool) -> Vec<ArchiveEntry> {
-    scan_root(root, Backend::Codex, archived, &mut Vec::new())
+    scan_root(root, Provider::Codex, archived, &mut Vec::new())
 }
 
 pub(crate) struct ScanFailure {
@@ -79,7 +79,7 @@ pub(crate) struct ScanFailure {
 
 fn scan_root(
     root: &Path,
-    backend: Backend,
+    provider: Provider,
     archived: bool,
     failures: &mut Vec<ScanFailure>,
 ) -> Vec<ArchiveEntry> {
@@ -120,27 +120,27 @@ fn scan_root(
             };
             // Issue #8: a dangling project link is not an archive directory and must
             // not prevent cleanup of sessions that were actually deleted.
-            if backend == Backend::Claude && depth == 0 && ft.is_symlink() && !path.is_dir() {
+            if provider == Provider::Claude && depth == 0 && ft.is_symlink() && !path.is_dir() {
                 continue;
             }
-            if (backend == Backend::Claude && depth == 0 && (ft.is_dir() || ft.is_symlink()))
-                || (backend == Backend::Codex && ft.is_dir())
+            if (provider == Provider::Claude && depth == 0 && (ft.is_dir() || ft.is_symlink()))
+                || (provider == Provider::Codex && ft.is_dir())
             {
                 stack.push((path, depth + 1));
                 continue;
             }
-            if backend == Backend::Claude && depth != 1 {
+            if provider == Provider::Claude && depth != 1 {
                 continue;
             }
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            let id = match backend {
-                Backend::Claude => name.strip_suffix(".jsonl"),
-                Backend::Codex => trailing_uuid(name),
+            let id = match provider {
+                Provider::Claude => name.strip_suffix(".jsonl"),
+                Provider::Codex => trailing_uuid(name),
             };
             if let Some(id) = id {
-                match entry(backend, id, &path, archived, failures) {
+                match entry(provider, id, &path, archived, failures) {
                     Ok(Some(e)) => out.push(e),
                     Ok(None) => {}
                     Err(error) => failures.push(ScanFailure {
@@ -167,7 +167,7 @@ fn trailing_uuid(name: &str) -> Option<&str> {
 }
 
 fn entry(
-    backend: Backend,
+    provider: Provider,
     id: &str,
     path: &Path,
     archived: bool,
@@ -185,7 +185,7 @@ fn entry(
         SystemTime::UNIX_EPOCH
     });
     Ok(Some(ArchiveEntry {
-        backend,
+        provider,
         session_id: id.to_string(),
         file: path.to_path_buf(),
         size_bytes: md.len(),
@@ -208,14 +208,14 @@ pub fn scan_all(paths: &Paths) -> Vec<ArchiveEntry> {
 pub(crate) fn scan_all_with_failures(paths: &Paths) -> (Vec<ArchiveEntry>, Vec<ScanFailure>) {
     let mut failures = Vec::new();
     let mut all = Vec::new();
-    for (root, backend, archived) in [
-        (&paths.claude_archive, Backend::Claude, false),
-        (&paths.codex_archive, Backend::Codex, false),
-        (&paths.codex_archived, Backend::Codex, true),
+    for (root, provider, archived) in [
+        (&paths.claude_archive, Provider::Claude, false),
+        (&paths.codex_archive, Provider::Codex, false),
+        (&paths.codex_archived, Provider::Codex, true),
     ] {
         let t = std::time::Instant::now();
         let before = failures.len();
-        let found = scan_root(root, backend, archived, &mut failures);
+        let found = scan_root(root, provider, archived, &mut failures);
         tracing::debug!(
             root = %root.display(),
             files = found.len(),
@@ -246,7 +246,7 @@ pub(crate) fn scan_all_with_failures(paths: &Paths) -> (Vec<ArchiveEntry>, Vec<S
             .then(a.file.cmp(&b.file))
     });
     let mut seen = std::collections::HashSet::new();
-    all.retain(|e| seen.insert((e.backend, e.session_id.clone())));
+    all.retain(|e| seen.insert((e.provider, e.session_id.clone())));
     (all, failures)
 }
 
@@ -254,10 +254,10 @@ pub(crate) fn scan_all_with_failures(paths: &Paths) -> (Vec<ArchiveEntry>, Vec<S
 
 #[derive(Debug, thiserror::Error)]
 pub enum LookupError {
-    #[error("no {} session matches \"{id}\"", backend.map(|b| b.as_str()).unwrap_or("archived"))]
+    #[error("no {} session matches \"{id}\"", provider.map(|b| b.as_str()).unwrap_or("archived"))]
     NotFound {
         id: String,
-        backend: Option<Backend>,
+        provider: Option<Provider>,
     },
     #[error("\"{id}\" matches {} sessions ({}); use a longer prefix", candidates.len(), candidates.join(", "))]
     Ambiguous { id: String, candidates: Vec<String> },
@@ -268,11 +268,11 @@ pub enum LookupError {
 pub fn find_session(
     paths: &Paths,
     id: &str,
-    backend: Option<Backend>,
+    provider: Option<Provider>,
 ) -> Result<ArchiveEntry, LookupError> {
     let candidates: Vec<ArchiveEntry> = scan_all(paths)
         .into_iter()
-        .filter(|e| backend.is_none_or(|b| e.backend == b))
+        .filter(|e| provider.is_none_or(|b| e.provider == b))
         .collect();
     if let Some(exact) = candidates.iter().find(|e| e.session_id == id) {
         return Ok(exact.clone());
@@ -288,14 +288,14 @@ pub fn find_session(
     match prefixed.len() {
         0 => Err(LookupError::NotFound {
             id: id.to_string(),
-            backend,
+            provider,
         }),
         1 => Ok(prefixed.remove(0)),
         _ => Err(LookupError::Ambiguous {
             id: id.to_string(),
             candidates: prefixed
                 .iter()
-                .map(|e| format!("{}/{}", e.backend, e.session_id))
+                .map(|e| format!("{}/{}", e.provider, e.session_id))
                 .collect(),
         }),
     }
@@ -384,16 +384,16 @@ fn read_meta_inner(e: &ArchiveEntry, limits: &Limits, scan_titles: bool) -> Sess
                 break;
             }
         };
-        meta = match e.backend {
-            Backend::Claude => parse_claude_head(&head),
-            Backend::Codex => parse_codex_head(&head, e.finished(), complete),
+        meta = match e.provider {
+            Provider::Claude => parse_claude_head(&head),
+            Provider::Codex => parse_codex_head(&head, e.finished(), complete),
         };
         covered = step as u64;
         if complete || (meta.cwd.is_some() && meta.snippet.is_some()) {
             break;
         }
     }
-    if e.backend == Backend::Claude && covered < e.size_bytes {
+    if e.provider == Provider::Claude && covered < e.size_bytes {
         let tail_from = e.size_bytes.saturating_sub(TAIL_BYTES as u64).max(covered);
         if let Ok((tail, _)) = read_range(&e.file, tail_from, TAIL_BYTES) {
             apply_claude_latest(&mut meta, lines_after_first(&tail));
@@ -764,10 +764,10 @@ pub fn resumability(e: &ArchiveEntry, limits: &Limits) -> Resumability {
 }
 
 /// The command a person would paste to pick the session up in a terminal.
-pub fn open_with(backend: Backend, project: Option<&str>, id: &str) -> String {
-    let cmd = match backend {
-        Backend::Claude => format!("claude --resume {id}"),
-        Backend::Codex => format!("codex resume {id}"),
+pub fn open_with(provider: Provider, project: Option<&str>, id: &str) -> String {
+    let cmd = match provider {
+        Provider::Claude => format!("claude --resume {id}"),
+        Provider::Codex => format!("codex resume {id}"),
     };
     match project {
         Some(p) => format!("cd {} && {cmd}", shell_quote(p)),
@@ -801,7 +801,7 @@ mod tests {
     fn open_with_quotes_a_project_path_that_a_shell_would_split() {
         assert_eq!(
             open_with(
-                Backend::Claude,
+                Provider::Claude,
                 Some("/Users/me/Application Support/it's"),
                 "abc"
             ),
