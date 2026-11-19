@@ -79,7 +79,7 @@ fn with_index_redaction_no_byte_of_the_index_holds_the_secret() {
     assert!(!home_holds(&f, "abcdefghijklmnopqrstuvwxyz0123456789"));
     let idx = Index::open(&c.paths, &c.limits).unwrap();
     let rows = idx
-        .session_records(trovador::Backend::Claude, ID_A)
+        .session_records(trovador::Provider::Claude, ID_A)
         .unwrap();
     assert_eq!(
         rows[0].2,

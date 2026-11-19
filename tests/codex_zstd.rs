@@ -12,7 +12,7 @@ use trovador::archive;
 use trovador::index::{Index, RefreshOpts, SearchOpts};
 use trovador::sessions::{self, ListOpts};
 use trovador::transcript::Projection;
-use trovador::{Backend, Ctx, Limits};
+use trovador::{Ctx, Limits, Provider};
 
 fn records() -> Vec<Value> {
     vec![
@@ -67,7 +67,7 @@ fn logical_output(value: impl Serialize) -> Value {
 fn indexed(ctx: &Ctx) -> Vec<(usize, String, String)> {
     Index::open(&ctx.paths, &ctx.limits)
         .unwrap()
-        .session_records(Backend::Codex, ID_A)
+        .session_records(Provider::Codex, ID_A)
         .unwrap()
 }
 

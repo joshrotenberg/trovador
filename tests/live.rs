@@ -19,7 +19,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use serde_json::{Value, json};
-use trovador::archive::{self, ArchiveEntry, Backend, SessionMeta};
+use trovador::archive::{self, ArchiveEntry, Provider, SessionMeta};
 use trovador::index::{Index, RefreshOpts, RefreshReport, SearchOpts};
 use trovador::sessions::{self, Ctx, ListOpts};
 use trovador::transcript::{Projection, Record, RecordKind};
@@ -85,9 +85,9 @@ fn live() -> &'static Live {
             limits: Limits::from_env(),
         };
         let build = sessions::reindex(&ctx, false).expect("build the index");
-        let entries: HashMap<(Backend, String), ArchiveEntry> = archive::scan_all(&ctx.paths)
+        let entries: HashMap<(Provider, String), ArchiveEntry> = archive::scan_all(&ctx.paths)
             .into_iter()
-            .map(|e| ((e.backend, e.session_id.clone()), e))
+            .map(|e| ((e.provider, e.session_id.clone()), e))
             .collect();
         let listed = sessions::list(
             &ctx,
@@ -102,7 +102,7 @@ fn live() -> &'static Live {
             .sessions
             .into_iter()
             .filter_map(|r| {
-                let e = entries.get(&(r.backend, r.session_id.clone()))?.clone();
+                let e = entries.get(&(r.provider, r.session_id.clone()))?.clone();
                 Some((e, r.meta))
             })
             .collect();
@@ -156,21 +156,21 @@ impl Rng {
     }
 }
 
-/// Format variety lives at the edges, so for every backend and origin the largest,
+/// Format variety lives at the edges, so for every provider and origin the largest,
 /// smallest, newest, and oldest session are always included, plus `n` at random.
 fn choose_sample(all: &[(ArchiveEntry, SessionMeta)], seed: u64, n: usize) -> Vec<ArchiveEntry> {
     let mut groups: BTreeMap<(String, String), Vec<&ArchiveEntry>> = BTreeMap::new();
     for (e, m) in all {
         let origin = m.origin.clone().unwrap_or_else(|| "none".into());
         groups
-            .entry((e.backend.to_string(), origin))
+            .entry((e.provider.to_string(), origin))
             .or_default()
             .push(e);
     }
     let mut picked: Vec<ArchiveEntry> = Vec::new();
     let mut seen = HashSet::new();
     let mut take = |e: &ArchiveEntry, picked: &mut Vec<ArchiveEntry>| {
-        if seen.insert((e.backend, e.session_id.clone())) {
+        if seen.insert((e.provider, e.session_id.clone())) {
             picked.push(e.clone());
         }
     };
@@ -198,7 +198,7 @@ fn choose_sample(all: &[(ArchiveEntry, SessionMeta)], seed: u64, n: usize) -> Ve
 fn who(e: &ArchiveEntry) -> String {
     format!(
         "{}/{} ({} KB)",
-        e.backend,
+        e.provider,
         e.session_id,
         e.size_bytes / 1024
     )
@@ -261,7 +261,7 @@ fn prefix_hash(p: &Path) -> Option<u64> {
 }
 
 /// Independent of `archive::scan_*`: what a session file is, written out again.
-fn walk_sessions(paths: &Paths) -> HashSet<(Backend, String)> {
+fn walk_sessions(paths: &Paths) -> HashSet<(Provider, String)> {
     let mut out = HashSet::new();
     if let Ok(projects) = std::fs::read_dir(&paths.claude_archive) {
         for p in projects.flatten() {
@@ -270,7 +270,7 @@ fn walk_sessions(paths: &Paths) -> HashSet<(Backend, String)> {
                 if f.path().is_file()
                     && let Some(id) = name.strip_suffix(".jsonl")
                 {
-                    out.insert((Backend::Claude, id.to_string()));
+                    out.insert((Provider::Claude, id.to_string()));
                 }
             }
         }
@@ -287,7 +287,7 @@ fn walk_sessions(paths: &Paths) -> HashSet<(Backend, String)> {
             if path.is_dir() {
                 stack.push(path);
             } else if let Some(c) = uuid.captures(&f.file_name().to_string_lossy()) {
-                out.insert((Backend::Codex, c[1].to_string()));
+                out.insert((Provider::Codex, c[1].to_string()));
             }
         }
     }
@@ -301,10 +301,10 @@ fn walk_sessions(paths: &Paths) -> HashSet<(Backend, String)> {
 fn every_session_file_is_listed_exactly_once_newest_first() {
     let l = live();
     let walked = walk_sessions(&l.ctx.paths);
-    let listed: Vec<(Backend, String)> = l
+    let listed: Vec<(Provider, String)> = l
         .all
         .iter()
-        .map(|(e, _)| (e.backend, e.session_id.clone()))
+        .map(|(e, _)| (e.provider, e.session_id.clone()))
         .collect();
     let unique: HashSet<_> = listed.iter().cloned().collect();
     assert_eq!(
@@ -347,14 +347,14 @@ fn every_session_file_is_listed_exactly_once_newest_first() {
     .unwrap()
     .sessions
     .into_iter()
-    .map(|r| (r.backend, r.session_id))
+    .map(|r| (r.provider, r.session_id))
     .collect();
     assert!(top.is_subset(&unique));
     assert!(
         top.iter().all(|k| {
             l.all
                 .iter()
-                .find(|(e, _)| (e.backend, e.session_id.clone()) == *k)
+                .find(|(e, _)| (e.provider, e.session_id.clone()) == *k)
                 .is_some_and(|(_, m)| !m.subagent)
         }),
         "the default list contains a subagent"
@@ -366,13 +366,13 @@ fn every_session_file_is_listed_exactly_once_newest_first() {
 fn every_sampled_session_resolves_by_id_and_by_prefix() {
     let l = live();
     for e in &l.sample {
-        let found = archive::find_session(&l.ctx.paths, &e.session_id, Some(e.backend))
+        let found = archive::find_session(&l.ctx.paths, &e.session_id, Some(e.provider))
             .unwrap_or_else(|err| panic!("{}: {err}", who(e)));
         assert_eq!(found.file, e.file);
         match archive::find_session(&l.ctx.paths, &e.session_id[..8], None) {
             Ok(f) => assert_eq!(f.session_id, e.session_id, "{}", who(e)),
             Err(archive::LookupError::Ambiguous { candidates, .. }) => assert!(
-                candidates.contains(&format!("{}/{}", e.backend, e.session_id)),
+                candidates.contains(&format!("{}/{}", e.provider, e.session_id)),
                 "{}: ambiguity does not name it",
                 who(e)
             ),
@@ -488,7 +488,7 @@ fn indexed_records_equal_the_transcript_for_sampled_sessions() {
             continue;
         }
         let meta = archive::read_meta(e, &l.ctx.limits);
-        let indexed = idx.session_records(e.backend, &e.session_id).unwrap();
+        let indexed = idx.session_records(e.provider, &e.session_id).unwrap();
         if meta.origin.as_deref() == Some("guardian") {
             assert!(indexed.is_empty(), "{}: guardian text was indexed", who(e));
             continue;
@@ -555,7 +555,7 @@ fn a_phrase_from_any_indexed_record_finds_its_session() {
         if probes >= 20 || written_during_run(e, l.started) {
             continue;
         }
-        let records = idx.session_records(e.backend, &e.session_id).unwrap();
+        let records = idx.session_records(e.provider, &e.session_id).unwrap();
         if records.is_empty() {
             continue;
         }
@@ -660,8 +660,8 @@ fn a_rebuild_elsewhere_gives_the_same_records_per_session() {
             continue;
         }
         assert_eq!(
-            a.session_records(e.backend, &e.session_id).unwrap().len(),
-            b.session_records(e.backend, &e.session_id).unwrap().len(),
+            a.session_records(e.provider, &e.session_id).unwrap().len(),
+            b.session_records(e.provider, &e.session_id).unwrap().len(),
             "{}",
             who(e)
         );
@@ -693,7 +693,7 @@ fn listing_is_the_same_with_and_without_the_index() {
             .into_iter()
             .map(|r| {
                 (
-                    format!("{}/{}", r.backend, r.session_id),
+                    format!("{}/{}", r.provider, r.session_id),
                     serde_json::to_value(r).unwrap(),
                 )
             })
@@ -810,20 +810,20 @@ async fn the_cli_and_mcp_return_the_library_answer_on_real_data() {
         .filter(|e| !written_during_run(e, since))
         .take(5)
     {
-        let lib = served(sessions::show(&ctx, &e.session_id, Some(e.backend)).unwrap());
+        let lib = served(sessions::show(&ctx, &e.session_id, Some(e.provider)).unwrap());
         let args = [
             "sessions",
             "show",
             &e.session_id,
-            "--backend",
-            e.backend.as_str(),
+            "--provider",
+            e.provider.as_str(),
         ];
         assert_eq!(cli(&ctx, &args), lib, "{}", who(e));
         assert_eq!(
             client
                 .call_tool_json(
                     "sessions",
-                    json!({"action": "show", "session_id": e.session_id, "backend": e.backend})
+                    json!({"action": "show", "session_id": e.session_id, "provider": e.provider})
                 )
                 .await,
             lib,
@@ -862,7 +862,7 @@ fn archive_files_idle_before_the_run_are_untouched() {
     // Exercise the reading paths over the whole sample first.
     for e in &l.sample {
         let _ = projection(e, &l.ctx.limits);
-        let _ = sessions::show(&l.ctx, &e.session_id, Some(e.backend));
+        let _ = sessions::show(&l.ctx, &e.session_id, Some(e.provider));
     }
     // A client can resume an old session during the run and append to it; that is not
     // trovador. Anything else, a file shrinking or its existing bytes changing, would be.
@@ -913,7 +913,7 @@ fn report_record_categories_and_snippet_coverage() {
                 *omitted
                     .entry(format!(
                         "{}:{}",
-                        e.backend,
+                        e.provider,
                         r.name.clone().unwrap_or_default()
                     ))
                     .or_default() += r.count.unwrap_or(1);
@@ -922,12 +922,12 @@ fn report_record_categories_and_snippet_coverage() {
                 *unrecognized
                     .entry(format!(
                         "{}:{}",
-                        e.backend,
+                        e.provider,
                         r.name.clone().unwrap_or_default()
                     ))
                     .or_default() += 1;
             }
-            *kinds.entry(format!("{}:{kind}", e.backend)).or_default() += 1;
+            *kinds.entry(format!("{}:{kind}", e.provider)).or_default() += 1;
         }
     }
     let mut coverage: BTreeMap<String, (usize, usize)> = BTreeMap::new();
@@ -935,7 +935,7 @@ fn report_record_categories_and_snippet_coverage() {
         let c = coverage
             .entry(format!(
                 "{}:{}",
-                e.backend,
+                e.provider,
                 m.origin.as_deref().unwrap_or("none")
             ))
             .or_default();
@@ -953,7 +953,7 @@ fn report_record_categories_and_snippet_coverage() {
     for (k, n) in &unrecognized {
         eprintln!("    {k}: {n}");
     }
-    eprintln!("  sessions with a snippet, by backend and origin:");
+    eprintln!("  sessions with a snippet, by provider and origin:");
     for (k, (n, with)) in &coverage {
         eprintln!("    {k}: {with}/{n}");
     }

@@ -59,7 +59,7 @@ reloaded.
 `hooks.SessionStart` in `~/.codex/hooks.json`:
 
 ```json
-{"hooks": [{"type": "command", "command": "/path/to/trovador hook session-start --backend codex || true"}]}
+{"hooks": [{"type": "command", "command": "/path/to/trovador hook session-start --provider codex || true"}]}
 ```
 
 **MCP server only**, without the plugin:
@@ -85,7 +85,7 @@ trovador search "connection reset by peer" --since 2w
 trovador sessions transcript 79892eda --offset 6070 --limit 20
 
 # "What did Codex say about the migration?"
-trovador search migration --backend codex --project payments
+trovador search migration --provider codex --project payments
 
 # "What was I doing yesterday?"
 trovador sessions list --since 1d
@@ -111,14 +111,14 @@ $ trovador search rate-limit --per-session 1
   "sessions_matched": 2,
   "hits": [
     {
-      "backend": "claude",
+      "provider": "claude",
       "session_id": "3f2a9c1e-…",
       "title": "api client retries",
       "matches": [{"index": 412, "type": "tool_result",
         "excerpt": "...the server returned 429 with a [rate-limit] header of 30 seconds..."}]
     },
     {
-      "backend": "codex",
+      "provider": "codex",
       "session_id": "019f4b7d-…",
       "matches": [{"index": 88, "type": "assistant",
         "excerpt": "...backing off on [rate-limit] responses before retrying..."}]
@@ -176,7 +176,7 @@ Filters for `sessions list` and `search`:
 
 | Option | Meaning |
 |---|---|
-| `--backend claude\|codex` | One provider |
+| `--provider claude\|codex` | One provider only |
 | `--project <text>` | Project path contains this text |
 | `--origin <origin>` | `cli`, `claude-desktop`, `sdk-cli`, `exec`, `vscode`, ... |
 | `--since`, `--until` | Last written at/after or before: RFC 3339 time, date (midnight UTC), or duration back from now (`36h`, `2d`, `1w`) |
@@ -198,10 +198,10 @@ the CLI:
 
 | Tool or resource | Inputs |
 |---|---|
-| `search` | As `trovador search`: `query`, `fts`, `regex`, `backend`, `project`, `origin`, `include_active`, `include_automated`, `include_subagents`, `exclude_session`, `since`, `until`, `archived`, `limit`, `offset`, `per_session`, `order` |
+| `search` | As `trovador search`: `query`, `fts`, `regex`, `provider`, `project`, `origin`, `include_active`, `include_automated`, `include_subagents`, `exclude_session`, `since`, `until`, `archived`, `limit`, `offset`, `per_session`, `order` |
 | `sessions` | `action` (`list`, `show`, `transcript`, `text`) plus that command's inputs: `session_id`, `offset`, `limit`, `expected_revision`, list filters |
-| `session://{backend}/{id}` | Same as `sessions` `show` |
-| `session://{backend}/{id}/transcript` | First transcript page |
+| `session://{provider}/{id}` | Same as `sessions` `show` |
+| `session://{provider}/{id}/transcript` | First transcript page |
 
 The server tells clients that transcript text is historical data, not instructions. Only
 `trovador serve --no-redact` turns redaction off; no tool argument can.

@@ -130,7 +130,7 @@ fn package(binary: &Path) -> Vec<(String, Vec<u8>)> {
     let bin = binary.display().to_string();
     let claude = with_version(CLAUDE_MANIFEST);
     let description = claude["description"].clone();
-    let hook = format!("\"{bin}\" hook session-start --backend claude || true");
+    let hook = format!("\"{bin}\" hook session-start --provider claude || true");
     vec![
         (
             "plugins/trovador/.claude-plugin/plugin.json".into(),
@@ -333,7 +333,7 @@ fn codex_hook(paths: &Paths, binary: &Path) -> CodexHook {
     CodexHook {
         add: (!present).then(|| {
             json!({"hooks": [{"type": "command", "command":
-                format!("{} hook session-start --backend codex || true", binary.display())}]})
+                format!("{} hook session-start --provider codex || true", binary.display())}]})
         }),
         path,
         present,

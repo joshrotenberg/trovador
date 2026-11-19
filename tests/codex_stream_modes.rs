@@ -152,7 +152,7 @@ fn identical_users_in_different_tasks_remain_separate() {
 fn response_copy_eligibility_survives_index_resume_and_tracks_each_stream() {
     use std::io::Write;
     use trovador::{
-        archive::{ArchiveEntry, Backend},
+        archive::{ArchiveEntry, Provider},
         transcript::Projection,
     };
     let f = Fixture::new();
@@ -165,7 +165,7 @@ fn response_copy_eligibility_survives_index_resume_and_tracks_each_stream() {
         0,
     );
     let mut entry = ArchiveEntry {
-        backend: Backend::Codex,
+        provider: Provider::Codex,
         session_id: ID_A.into(),
         file: path.clone(),
         size_bytes: std::fs::metadata(&path).unwrap().len(),
@@ -206,7 +206,7 @@ fn response_copy_eligibility_survives_index_resume_and_tracks_each_stream() {
 fn filtered_copy_hash_survives_reopening_the_index() {
     use std::io::Write;
     use trovador::{
-        Backend,
+        Provider,
         index::{Index, RefreshOpts},
     };
     let f = Fixture::new();
@@ -254,7 +254,7 @@ fn filtered_copy_hash_survives_reopening_the_index() {
         .refresh(&ctx.paths, &ctx.limits, &RefreshOpts::default())
         .unwrap();
     assert_eq!((report.appended, report.reindexed), (1, 0));
-    let indexed = index.session_records(Backend::Codex, ID_A).unwrap();
+    let indexed = index.session_records(Provider::Codex, ID_A).unwrap();
     assert_eq!(
         indexed.iter().filter(|(_, kind, _)| kind == "user").count(),
         1

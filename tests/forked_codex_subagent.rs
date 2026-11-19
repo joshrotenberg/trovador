@@ -81,7 +81,7 @@ fn incremental_indexing_inside_a_fork_prefix_never_indexes_parent_text() {
     let opts = RefreshOpts::default();
     idx.refresh(&ctx.paths, &ctx.limits, &opts).unwrap();
     assert!(
-        idx.session_records(trovador::Backend::Codex, ID_B)
+        idx.session_records(trovador::Provider::Codex, ID_B)
             .unwrap()
             .is_empty()
     );
@@ -91,7 +91,9 @@ fn incremental_indexing_inside_a_fork_prefix_never_indexes_parent_text() {
         writeln!(file, "{record}").unwrap();
     }
     idx.refresh(&ctx.paths, &ctx.limits, &opts).unwrap();
-    let indexed = idx.session_records(trovador::Backend::Codex, ID_B).unwrap();
+    let indexed = idx
+        .session_records(trovador::Provider::Codex, ID_B)
+        .unwrap();
     assert_eq!(indexed.len(), 2);
     assert_eq!(indexed[0].2, "child-only task");
     assert_eq!(indexed[1].2, "child-only answer");
@@ -424,7 +426,7 @@ fn known_fork_boundaries_survive_projection_resumes_and_index_reopens() {
         .unwrap();
     assert_eq!(report.appended, 1);
     assert!(
-        idx.session_records(trovador::Backend::Codex, ID_B)
+        idx.session_records(trovador::Provider::Codex, ID_B)
             .unwrap()
             .iter()
             .any(|r| r.2 == "child follow-up answer")
@@ -553,7 +555,7 @@ fn copied_parent_completion_never_persists_a_zero_boundary_before_child_history_
         idx.refresh(&ctx.paths, &ctx.limits, &RefreshOpts::default())
             .unwrap();
         assert!(
-            idx.session_records(trovador::Backend::Codex, ID_B)
+            idx.session_records(trovador::Provider::Codex, ID_B)
                 .unwrap()
                 .is_empty()
         );
@@ -577,7 +579,9 @@ fn copied_parent_completion_never_persists_a_zero_boundary_before_child_history_
             .refresh(&ctx.paths, &ctx.limits, &RefreshOpts::default())
             .unwrap();
         assert_eq!(report.appended, 1);
-        let indexed = idx.session_records(trovador::Backend::Codex, ID_B).unwrap();
+        let indexed = idx
+            .session_records(trovador::Provider::Codex, ID_B)
+            .unwrap();
         assert_eq!(indexed.len(), 2);
         assert_eq!(indexed[0].2, "child-only task");
         assert_eq!(indexed[1].2, "child-only answer");
@@ -618,7 +622,7 @@ fn a_finished_fork_with_an_impossible_boundary_is_indexed_as_its_transcript_show
         idx.refresh(&ctx.paths, &ctx.limits, &RefreshOpts::default())
             .unwrap();
         let rows: Vec<String> = idx
-            .session_records(trovador::Backend::Codex, ID_B)
+            .session_records(trovador::Provider::Codex, ID_B)
             .unwrap()
             .into_iter()
             .map(|r| r.2)
