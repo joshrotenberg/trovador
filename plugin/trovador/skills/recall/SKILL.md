@@ -12,7 +12,9 @@ they are deferred. Neither runs a model or costs tokens.
 ## Find
 
 Call `search` with the distinctive words: an error message, a function or file name,
-an issue number, a phrase the user remembers. Words are all required; quote exact
+an issue number, a phrase the user remembers. Every word must occur in the same
+record (one message or tool output), not just somewhere in the session, so use two or
+three distinctive words and run more searches rather than adding words. Quote exact
 phrases. Narrow with `project` (path substring), `provider` (`claude` or `codex`), and
 `since`/`until` (`2d`, `1w`, `2026-10-01`). Use `regex=true` only for patterns and
 `fts=true` only for FTS5 syntax.

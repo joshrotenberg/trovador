@@ -166,7 +166,7 @@ trovador sessions list --archived true        # only archived Codex threads (fal
 trovador sessions list --offset 20            # next page, from next_offset
 trovador sessions transcript 27d1f434 --offset 200 --limit 50
 trovador sessions text 27d1f434 --offset 100000 --expected-revision <revision>
-trovador search idempotency_key               # words and "quoted phrases", all required
+trovador search idempotency_key               # words and "quoted phrases", all in one record
 trovador search 'redact NOT summary' --fts    # FTS5 syntax
 trovador search 'retry_after:\s*\d+' --regex  # regular expression
 trovador search parser --recent --per-session 5
@@ -260,6 +260,11 @@ matching record.
 `expected_revision` when continuing. If the session was only appended to, it is read as it
 was and the result carries `grown`. Any other change (rewritten, moved, compressed,
 different settings) is refused with the current revision; start again at offset 0.
+
+**Matching.** Every word or phrase must occur in the same record (one message, tool call or
+tool result), not just somewhere in the session; that is what lets a hit name the record to
+open. Two or three distinctive words work best. A query of three or more words that matches
+nothing says so in `note`.
 
 **Search hits** list matching records with an `index` (the transcript offset to open) and
 an excerpt with the match in brackets. `hidden` counts matching sessions left out by a

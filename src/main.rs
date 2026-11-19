@@ -33,7 +33,7 @@ enum Command {
     /// Full-text search across every session. Brings the index up to date first, within
     /// TROVADOR_INDEX_BUDGET_MS.
     Search {
-        /// Words and "quoted phrases", all required.
+        /// Words and "quoted phrases", all required in the same record.
         query: String,
         /// Treat the query as an FTS5 expression.
         #[arg(long, conflicts_with = "regex")]
