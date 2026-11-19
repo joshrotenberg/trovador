@@ -1578,6 +1578,12 @@ pub struct Match {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub excerpt: String,
+    /// Present when the match lies past what a transcript shows of this record: the index
+    /// keeps more of a tool call or result (`TROVADOR_INDEX_TOOL_CHARS`) than a transcript
+    /// displays (`TROVADOR_TOOL_CHARS`). The character of the record's text where the match
+    /// starts; read it with `sessions action=record` from a little before (#107).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<usize>,
 }
 
 pub struct SessionHits {
@@ -1765,6 +1771,7 @@ impl Index {
         limit: usize,
         per_session: usize,
         redact: bool,
+        display_tool_chars: usize,
     ) -> Result<RawSearch> {
         let expression = if opts.regex || opts.fts {
             opts.query.clone()
@@ -1943,11 +1950,17 @@ impl Index {
                     params![expression, id << 32, (id << 32) | 0xffff_ffff],
                     |r| {
                         let text: String = r.get(3)?;
+                        let kind: String = r.get(1)?;
+                        let tool = matches!(kind.as_str(), "tool_call" | "tool_result");
+                        let offset = match_chars(&text, re.as_ref(), redact)
+                            .filter(|(_, end)| tool && *end > display_tool_chars)
+                            .map(|(start, _)| start);
                         Ok(Match {
                             index: r.get::<_, i64>(0)? as usize,
-                            kind: r.get(1)?,
+                            kind,
                             name: r.get(2)?,
                             excerpt: excerpt(&text, re.as_ref(), redact),
+                            offset,
                         })
                     },
                 )?
@@ -2080,6 +2093,19 @@ pub fn fts_highlighter(expression: &str) -> Option<regex::Regex> {
 /// neither a bracket inside a key nor the window's edge can keep a key from being caught.
 /// A match that lay inside a secret is gone from the redacted text, and the excerpt shows
 /// the start of the record instead.
+/// Where the first match falls in a record's text, as character offsets, in the text a
+/// caller reads: redacted when output is, as [`excerpt`] and the record action both are.
+fn match_chars(text: &str, re: Option<&regex::Regex>, redact: bool) -> Option<(usize, usize)> {
+    let text: std::borrow::Cow<str> = if redact {
+        crate::redact::redact_str(text)
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    };
+    let m = re?.find(&text)?;
+    let start = text[..m.start()].chars().count();
+    Some((start, start + m.as_str().chars().count()))
+}
+
 pub fn excerpt(text: &str, re: Option<&regex::Regex>, redact: bool) -> String {
     let text: std::borrow::Cow<str> = if redact {
         crate::redact::redact_str(text)

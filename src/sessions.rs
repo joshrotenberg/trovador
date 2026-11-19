@@ -60,6 +60,8 @@ pub enum Error {
         provider: Provider,
         session_id: String,
     },
+    #[error("{0}")]
+    Record(String),
     #[error("invalid offset: {0}")]
     Offset(String),
     #[error("reading {path}: {source}")]
@@ -706,6 +708,101 @@ pub fn text_at_hooked(
     Ok(part)
 }
 
+/// One record of a session, whole, in parts. A transcript cuts a tool call or result at
+/// `TROVADOR_TOOL_CHARS` (600) and other records at `TROVADOR_RECORD_CHARS`; search finds
+/// text further in, and this reads it (#107).
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct RecordText {
+    pub provider: Provider,
+    pub session_id: String,
+    /// The record's index, as in transcripts and search matches.
+    pub index: usize,
+    #[serde(rename = "type")]
+    pub kind: crate::transcript::RecordKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Part of the record's text, from `truncated.offset` (or 0).
+    pub text: String,
+    /// The revision this part was read from. Pass it as `expected_revision` for the next
+    /// part, as for transcripts and text.
+    pub revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grown: Option<revision::Grown>,
+    /// Set when `text` is not the whole record. Read the rest from `next_offset`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<crate::output::Truncated>,
+}
+
+/// Record `index` of a session, its text from character `offset`, at most
+/// `TROVADOR_RESPONSE_MAX_CHARS` of it. A search match's `offset` says where the matched
+/// text starts. Redacted as a whole before it is cut, like session text, so a part never
+/// starts or ends inside a secret and offsets count characters of the redacted text.
+pub fn record_at(
+    ctx: &Ctx,
+    id: &str,
+    provider: Option<Provider>,
+    index: usize,
+    offset: usize,
+    expected_revision: Option<&str>,
+) -> Result<RecordText, Error> {
+    let e = archive::find_session(&ctx.paths, id, provider)?;
+    let read = begin_read(ctx, &e, expected_revision)?;
+    let io = |source| Error::Io {
+        path: e.file.display().to_string(),
+        source,
+    };
+    // Every cap off but the one on unrecognized records, whose text is a copy of raw JSON
+    // rather than something the provider wrote to be read. Caps change only text, never
+    // which records exist, so the index is the transcript's.
+    let whole = Limits {
+        record_chars: usize::MAX,
+        tool_chars: usize::MAX,
+        ..ctx.limits.clone()
+    };
+    let mut projection = transcript::Projection::open_snapshot(&read.entry, &whole).map_err(io)?;
+    let mut seen = 0usize;
+    let found = projection.by_ref().find(|r| {
+        seen = r.index + 1;
+        r.index == index
+    });
+    if let Some(error) = projection.take_read_error() {
+        return Err(io(error));
+    }
+    end_read(&read)?;
+    let Some(r) = found else {
+        return Err(Error::Record(format!(
+            "record {index} is past the end of {} session {}, which has {seen} records",
+            e.provider, e.session_id
+        )));
+    };
+    let source = crate::output::source(r.text.as_deref().unwrap_or(""), &ctx.limits);
+    let sid = e.session_id.clone();
+    let p = e.provider;
+    let rev = read.rev.id.clone();
+    let (text, truncated) = crate::output::part(
+        &source,
+        offset,
+        ctx.limits.response_max_chars,
+        |n| {
+            format!(
+                "sessions action=record session_id={sid} provider={p} index={index} offset={n} expected_revision={rev}; CLI: trovador sessions record {sid} {index} --provider {p} --offset {n} --expected-revision {rev}"
+            )
+        },
+    );
+    tracing::debug!(file = %e.file.display(), index, offset, "record");
+    Ok(RecordText {
+        provider: e.provider,
+        session_id: e.session_id,
+        index,
+        kind: r.kind,
+        name: r.name,
+        text,
+        revision: read.rev.id,
+        grown: read.grown,
+        truncated,
+    })
+}
+
 type MetaCache = HashMap<(Provider, String), (u64, i64, SessionMeta)>;
 
 fn cached_meta(cache: &MetaCache, e: &ArchiveEntry) -> Option<SessionMeta> {
@@ -886,7 +983,14 @@ fn search_inner(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         archived_root: Some(ctx.paths.codex_archived.display().to_string()),
     };
     let raw = idx
-        .search(opts, &vis, limit, per_session, ctx.limits.redact)
+        .search(
+            opts,
+            &vis,
+            limit,
+            per_session,
+            ctx.limits.redact,
+            ctx.limits.tool_chars,
+        )
         .map_err(|e| search_error(e, opts))?;
 
     let entries: HashMap<(Provider, String), ArchiveEntry> = archive::scan_all(&ctx.paths)

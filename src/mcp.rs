@@ -39,7 +39,9 @@ follow next_offset, passed as offset, for the next page. \
 sessions(action=show) gives one session's metadata, resumability, and the command to resume \
 it in a terminal. sessions(action=transcript) pages through a projected transcript; follow \
 next_offset while has_more is true. sessions(action=text) returns the whole session as plain \
-text in parts, for reading or summarizing it yourself; follow truncated.next_offset. Each \
+text in parts, for reading or summarizing it yourself; follow truncated.next_offset. \
+sessions(action=record) returns one record's whole text, for a search match with an offset, \
+which lies past what the transcript shows of that record. Each \
 page reports a revision of the session; pass it back as expected_revision when continuing, \
 and every page of one walk reports the same revision. A session that has only been appended \
 to since is still read as it was, and the end of that walk is the end of the session as it \
@@ -72,13 +74,17 @@ enum SessionsAction {
     Show,
     Transcript,
     Text,
+    Record,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SessionsInput {
     /// list: find sessions. show: one session's metadata. transcript: one page of records.
-    /// text: one part of the whole session as plain text.
+    /// text: one part of the whole session as plain text. record: one record's whole text,
+    /// for a search match whose `offset` lies past what the transcript shows.
     action: SessionsAction,
+    /// For record: the record index, as a search match's `index` gives it.
+    index: Option<usize>,
     /// For show, transcript, and text: a session id or an unambiguous prefix.
     session_id: Option<String>,
     /// Restrict to one provider.
@@ -104,8 +110,8 @@ struct SessionsInput {
     /// not read from it (false). Both when omitted.
     archived: Option<bool>,
     /// For list: matching sessions to skip (follow next_offset). For transcript: the
-    /// record index to start from. For text: the character to start from (follow
-    /// truncated.next_offset).
+    /// record index to start from. For text and record: the character to start from
+    /// (follow truncated.next_offset; for record, a little before a match's offset).
     offset: Option<usize>,
     /// For transcript and text continuations: the `revision` the previous page reported.
     /// Pass it unchanged on every page. If the session was only appended to, the page is
@@ -199,6 +205,21 @@ fn sessions_call(
             .map(|t| json_result(&t, opts))
             .map_err(|e| e.to_string())
         }),
+        SessionsAction::Record => need_id().and_then(|id| {
+            let index = input
+                .index
+                .ok_or_else(|| "index is required for record".to_string())?;
+            sessions::record_at(
+                ctx,
+                id,
+                input.provider,
+                index,
+                input.offset.unwrap_or(0),
+                input.expected_revision.as_deref(),
+            )
+            .map(|r| json_result(&r, opts))
+            .map_err(|e| e.to_string())
+        }),
         SessionsAction::Text => need_id().and_then(|id| {
             sessions::text_at(
                 ctx,
@@ -282,8 +303,9 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
              sessions newest first (follow next_offset as offset); action=show gives one session's metadata and resume \
              command; action=transcript pages through its records (follow next_offset); \
              action=text returns the whole session as plain text in parts, to read or \
-             summarize yourself (follow truncated.next_offset). Reads only; costs no model \
-             tokens.{UNTRUSTED}"
+             summarize yourself (follow truncated.next_offset); action=record returns one \
+             record's whole text from a search match's offset, for a match past what the \
+             transcript shows. Reads only; costs no model tokens.{UNTRUSTED}"
         ))
         .read_only_safe()
         .handler(move |input: SessionsInput| {
@@ -293,6 +315,7 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
                 SessionsAction::Show => "sessions show",
                 SessionsAction::Transcript => "sessions transcript",
                 SessionsAction::Text => "sessions text",
+                SessionsAction::Record => "sessions record",
             };
             async move { blocking(call, move || sessions_call(&ctx, input, opts)).await? }
         })

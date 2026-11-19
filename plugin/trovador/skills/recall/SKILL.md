@@ -51,8 +51,10 @@ Each hit has `matches[].index`. Open the transcript there: `sessions` with
 small `limit` such as 20. Follow `next_offset` only as far as you need. This is the
 cheapest way to read what a match was about; prefer it to reading the whole session.
 Search reaches further into tool output than a transcript shows: a tool record's text is
-cut at a few hundred characters (it ends in `...[truncated]`), so a match deep in a file
-read or test log may not be on the page. Its excerpt is then the evidence; quote that.
+cut at a few hundred characters (it ends in `...[truncated]`). A match that lies past
+that carries an `offset`. Read it with `sessions` and `action=record`, the match's `index`,
+and `offset` a few hundred characters before the match's, which returns that part of the
+record's whole text; follow `truncated.next_offset` for more.
 A record of type `omitted` is something known with nothing to read. A record of type
 `unrecognized` is a shape trovador has not learned: its `name` is the provider's type and
 its `text` a shortened copy of the raw JSON. Read it as raw data; it may be partial.
