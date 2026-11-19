@@ -43,6 +43,10 @@ pub struct Limits {
     /// there. The first build of a large archive takes longer; `trovador index` has no
     /// budget.
     pub index_budget_ms: usize,
+    /// How long an index refresh runs before it prints progress (when progress is on), so
+    /// the few grown files a search usually finds stay silent and a long build says what it
+    /// is doing.
+    pub progress_after_ms: usize,
     /// Default number of sessions a search returns.
     pub search_default: usize,
     /// Default number of matching records shown per session.
@@ -101,6 +105,7 @@ impl Default for Limits {
             resume_limit_bytes: 900_000,
             list_default: 20,
             index_budget_ms: 15_000,
+            progress_after_ms: 1_000,
             search_default: 20,
             per_session_default: 3,
             list_lookahead: 500,
@@ -163,6 +168,7 @@ impl Limits {
             resume_limit_bytes: num("TROVADOR_RESUME_LIMIT", d.resume_limit_bytes as usize) as u64,
             list_default: num("TROVADOR_LIST_DEFAULT", d.list_default).max(1),
             index_budget_ms: num("TROVADOR_INDEX_BUDGET_MS", d.index_budget_ms),
+            progress_after_ms: num("TROVADOR_PROGRESS_AFTER_MS", d.progress_after_ms),
             search_default: num("TROVADOR_SEARCH_DEFAULT", d.search_default).max(1),
             per_session_default: num("TROVADOR_PER_SESSION", d.per_session_default).max(1),
             list_lookahead: num("TROVADOR_LIST_LOOKAHEAD", d.list_lookahead),

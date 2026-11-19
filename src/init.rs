@@ -197,6 +197,29 @@ struct Output {
 /// Runs a host command with no stdin and a deadline. A host that hangs on a prompt must
 /// not hang init.
 fn run(exe: &Path, args: &[String]) -> Result<Output, String> {
+    let start = Instant::now();
+    let out = run_inner(exe, args);
+    let ms = start.elapsed().as_millis() as u64;
+    match &out {
+        Ok(o) => tracing::debug!(
+            exe = %exe.display(),
+            args = %args.join(" "),
+            ok = o.ok,
+            ms,
+            "host command"
+        ),
+        Err(error) => tracing::warn!(
+            exe = %exe.display(),
+            args = %args.join(" "),
+            %error,
+            ms,
+            "host command did not run to completion"
+        ),
+    }
+    out
+}
+
+fn run_inner(exe: &Path, args: &[String]) -> Result<Output, String> {
     let mut child = Command::new(exe)
         .args(args)
         .stdin(Stdio::null())
@@ -390,17 +413,41 @@ pub fn init(paths: &Paths, opts: &InitOpts) -> InitReport {
         report.ok = true;
         return report;
     }
+    tracing::info!(target: crate::PROGRESS, "writing the plugin to {}", dir.display());
     if let Err(e) = write_package(&dir, &files) {
         report.status = "failed";
         report.issues.push(e);
         return report;
     }
     for command in report.commands.clone() {
+        tracing::info!(
+            target: crate::PROGRESS,
+            "{}: {} ({} {})",
+            command.host,
+            command.step.replace('_', " "),
+            command
+                .executable
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default(),
+            command.args.join(" ")
+        );
+        let started = Instant::now();
         match run(&command.executable, &command.args) {
-            Ok(out) if out.ok => report.completed.push(command),
+            Ok(out) if out.ok => {
+                tracing::info!(
+                    target: crate::PROGRESS,
+                    "{}: {} done in {:.1} s",
+                    command.host,
+                    command.step.replace('_', " "),
+                    started.elapsed().as_secs_f64()
+                );
+                report.completed.push(command)
+            }
             Ok(out) => {
                 let mut error = out.stderr.trim().to_string();
                 error.truncate(MAX_STDERR);
+                tracing::warn!(host = %command.host, step = %command.step, %error, "host command failed");
                 report.status = "failed";
                 report.failed = Some(Failed { command, error });
                 return report;
@@ -414,6 +461,7 @@ pub fn init(paths: &Paths, opts: &InitOpts) -> InitReport {
     }
     report.status = "installed";
     report.ok = true;
+    tracing::info!(target: crate::PROGRESS, "installed; restart Claude Code and Codex to load it");
     report
 }
 
@@ -425,6 +473,10 @@ fn plan_host(report: &mut InitReport, name: &str, exe: &Path, dir: &Path) {
         executable: exe.to_path_buf(),
         args: args(a),
     };
+    tracing::info!(
+        target: crate::PROGRESS,
+        "{name}: checking registered marketplaces, plugins and MCP servers"
+    );
     let json_of = |a: &[&str]| -> Result<Value, String> {
         let out = run(exe, &args(a))?;
         if !out.ok {

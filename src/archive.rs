@@ -207,19 +207,27 @@ pub fn scan_all(paths: &Paths) -> Vec<ArchiveEntry> {
 // Issue #8: GC needs failures from the same traversal as entries before deleting paid summaries.
 pub(crate) fn scan_all_with_failures(paths: &Paths) -> (Vec<ArchiveEntry>, Vec<ScanFailure>) {
     let mut failures = Vec::new();
-    let mut all = scan_root(&paths.claude_archive, Backend::Claude, false, &mut failures);
-    all.extend(scan_root(
-        &paths.codex_archive,
-        Backend::Codex,
-        false,
-        &mut failures,
-    ));
-    all.extend(scan_root(
-        &paths.codex_archived,
-        Backend::Codex,
-        true,
-        &mut failures,
-    ));
+    let mut all = Vec::new();
+    for (root, backend, archived) in [
+        (&paths.claude_archive, Backend::Claude, false),
+        (&paths.codex_archive, Backend::Codex, false),
+        (&paths.codex_archived, Backend::Codex, true),
+    ] {
+        let t = std::time::Instant::now();
+        let before = failures.len();
+        let found = scan_root(root, backend, archived, &mut failures);
+        tracing::debug!(
+            root = %root.display(),
+            files = found.len(),
+            failures = failures.len() - before,
+            ms = t.elapsed().as_millis() as u64,
+            "scanned archive root"
+        );
+        for f in &failures[before..] {
+            tracing::debug!(path = %f.path.display(), kind = ?f.kind, "could not read under archive root");
+        }
+        all.extend(found);
+    }
     // Issue #8: archived_sessions is optional, but only an accessible active root
     // lets GC distinguish a never-created archive from unavailable Codex storage.
     let active_unavailable = failures.iter().any(|f| f.path == paths.codex_archive);
