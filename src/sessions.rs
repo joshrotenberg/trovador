@@ -216,6 +216,23 @@ fn automated_hidden(meta: &SessionMeta) -> bool {
 /// is read from the archives as they are at that moment; there is no snapshot between
 /// pages (see the README for how to page steadily while sessions are being written).
 pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
+    let started = std::time::Instant::now();
+    let r = list_inner(ctx, opts);
+    match &r {
+        Ok(l) => tracing::debug!(
+            total = l.total_sessions,
+            examined = l.examined,
+            returned = l.returned,
+            offset = l.offset,
+            ms = started.elapsed().as_millis() as u64,
+            "list"
+        ),
+        Err(error) => tracing::debug!(%error, "list failed"),
+    }
+    r
+}
+
+fn list_inner(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
     let offset = check_offset(opts.offset, &ctx.limits)?;
     let (since, until) = window(opts.since.as_deref(), opts.until.as_deref())?;
     let all: Vec<ArchiveEntry> = archive::scan_all(&ctx.paths)
@@ -334,6 +351,7 @@ pub struct SessionDetail {
 
 pub fn show(ctx: &Ctx, id: &str, backend: Option<Backend>) -> Result<SessionDetail, Error> {
     let e = archive::find_session(&ctx.paths, id, backend)?;
+    tracing::debug!(id, file = %e.file.display(), "show");
     let meta = Index::open_existing(&ctx.paths, &ctx.limits)
         .and_then(|i| i.read_meta_entry(&e, &ctx.limits))
         .unwrap_or_else(|| archive::read_meta(&e, &ctx.limits));
@@ -472,6 +490,13 @@ pub fn transcript_at_hooked(
         })?;
     after_read();
     end_read(&read)?;
+    tracing::debug!(
+        file = %e.file.display(),
+        offset,
+        records = page.records.len(),
+        grown = read.grown.is_some(),
+        "transcript page"
+    );
     Ok(TranscriptResult {
         backend: e.backend,
         session_id: e.session_id,
@@ -526,6 +551,7 @@ pub fn text_at_hooked(
         })?;
     after_read();
     end_read(&read)?;
+    tracing::debug!(file = %e.file.display(), offset, grown = read.grown.is_some(), "text part");
     part.grown = read.grown;
     Ok(part)
 }
@@ -597,6 +623,28 @@ pub struct SearchResult {
 
 /// Brings the index up to date within the search budget, then queries it.
 pub fn search(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
+    let started = std::time::Instant::now();
+    let r = search_inner(ctx, opts);
+    // The query is the caller's own text, but it may hold a secret they searched for.
+    let query = crate::redact::redact_str(&opts.query);
+    match &r {
+        Ok(s) => tracing::debug!(
+            %query,
+            fts = opts.fts,
+            regex = opts.regex,
+            matched = s.sessions_matched,
+            returned = s.returned,
+            exhaustive = s.exhaustive,
+            refresh_ms = s.coverage.refresh.ms,
+            ms = started.elapsed().as_millis() as u64,
+            "search"
+        ),
+        Err(error) => tracing::debug!(%query, %error, "search failed"),
+    }
+    r
+}
+
+fn search_inner(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
     if opts.query.trim().is_empty() {
         return Err(Error::Query("query is empty".into()));
     }

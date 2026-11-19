@@ -21,6 +21,12 @@ pub mod text;
 pub mod timespec;
 pub mod transcript;
 
+/// The `tracing` target for progress a person at a terminal reads: what init is running,
+/// how far indexing has got. The CLI prints it as plain lines on stderr when stderr is a
+/// terminal or `TROVADOR_PROGRESS` is set; everything else in the library is a diagnostic
+/// under `TROVADOR_LOG`.
+pub const PROGRESS: &str = "trovador::progress";
+
 pub use archive::Backend;
 pub use limits::Limits;
 pub use paths::Paths;

@@ -167,6 +167,16 @@ $ trovador search rate-limit --per-session 1
 
 Every command prints one JSON document on stdout. Diagnostics go to stderr.
 
+At a terminal, `init` prints each host command it runs and how long it took, and an index
+refresh that runs longer than a second (the first build, or a search after many sessions
+changed) prints what it is indexing and how far it has got, also on stderr:
+
+```text
+trovador: indexing 9017 session files (9017 new)
+trovador: indexed 3462 of 9017 (38%)
+trovador: indexed 9017 session files in 17.0 s
+```
+
 ### CLI
 
 | Command | What it does |
@@ -309,7 +319,15 @@ in.
 | `TROVADOR_CODEX_ARCHIVE` | `~/.codex/sessions` |
 | `TROVADOR_CODEX_ARCHIVED` | `archived_sessions` beside the Codex archive (`~/.codex/archived_sessions`) |
 | `TROVADOR_HOME` | `~/.trovador`, which holds the index and the plugin marketplace |
-| `TROVADOR_LOG` | `warn`; a `tracing` filter for diagnostics on stderr |
+
+**What goes to stderr.** stdout carries only the JSON result, or the MCP stream under
+`serve`.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `TROVADOR_LOG` | `warn` | A `tracing` filter for diagnostics. `debug` adds archive scans, the index refresh plan and summary, each command's inputs and result counts, MCP call times, and init's host commands; `trace` adds one line per file indexed |
+| `TROVADOR_PROGRESS` | on at a terminal | Progress lines for `init` and long index refreshes; `1` or `0` forces it either way. Never under `serve` |
+| `TROVADOR_PROGRESS_AFTER_MS` | 1000 | How long an index refresh runs before it prints progress |
 
 **What search and list show.** Each takes `1`, `true`, `yes`, `on`, or `0`, `false`, `no`,
 `off`; any other value keeps the default. A call's own `include_*` input always wins, in

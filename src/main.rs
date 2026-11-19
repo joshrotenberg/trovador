@@ -241,17 +241,81 @@ fn fail(e: impl std::fmt::Display) -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn main() -> ExitCode {
-    // stdout belongs to JSON: the MCP stream under serve, the result everywhere else.
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("TROVADOR_LOG")
-                .unwrap_or_else(|_| "warn".into()),
-        )
-        .init();
+/// Progress lines as a person reads them: the message alone, no time, level, or target.
+struct Plain;
 
+impl<S, N> tracing_subscriber::fmt::FormatEvent<S, N> for Plain
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    N: for<'a> tracing_subscriber::fmt::FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &tracing_subscriber::fmt::FmtContext<'_, S, N>,
+        mut w: tracing_subscriber::fmt::format::Writer<'_>,
+        event: &tracing::Event<'_>,
+    ) -> std::fmt::Result {
+        write!(w, "trovador: ")?;
+        ctx.field_format().format_fields(w.by_ref(), event)?;
+        writeln!(w)
+    }
+}
+
+/// Whether progress lines are printed: TROVADOR_PROGRESS when it is a recognized boolean,
+/// otherwise when stderr is a terminal. Never under serve, whose stderr is a host's log.
+fn progress_on(serving: bool) -> bool {
+    if serving {
+        return false;
+    }
+    match std::env::var("TROVADOR_PROGRESS")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "1" | "true" | "yes" | "on" => true,
+        "0" | "false" | "no" | "off" => false,
+        _ => std::io::IsTerminal::is_terminal(&std::io::stderr()),
+    }
+}
+
+/// Two outputs on stderr, never stdout, which belongs to JSON: the MCP stream under serve,
+/// the result everywhere else. Diagnostics follow TROVADOR_LOG (default warn). Progress
+/// (the `trovador::progress` target) gets its own plain layer when it is on, and is then
+/// kept out of the diagnostic layer so TROVADOR_LOG=info at a terminal does not print each
+/// line twice.
+fn init_tracing(serving: bool) {
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::filter::{FilterExt, filter_fn};
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let progress = progress_on(serving);
+    let env = tracing_subscriber::EnvFilter::try_from_env("TROVADOR_LOG")
+        .unwrap_or_else(|_| "warn".into());
+    let diagnostics = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+        .with_filter(env.and(filter_fn(move |m| {
+            !(progress && m.target() == trovador::PROGRESS)
+        })));
+    let plain = progress.then(|| {
+        tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .event_format(Plain)
+            .with_filter(filter_fn(|m| {
+                m.target() == trovador::PROGRESS && *m.level() <= tracing::Level::INFO
+            }))
+    });
+    tracing_subscriber::registry()
+        .with(diagnostics)
+        .with(plain)
+        .init();
+}
+
+fn main() -> ExitCode {
     let cli = Cli::parse();
+    init_tracing(matches!(cli.command, Command::Serve));
     let _ = REDACT.set(!cli.no_redact);
     let mut ctx = Ctx::from_env();
     ctx.limits.redact = !cli.no_redact;
@@ -422,6 +486,10 @@ fn serve(ctx: Ctx, opts: trovador::mcp::ServeOpts) -> ExitCode {
         Err(e) => return fail(e),
     };
     let router = trovador::mcp::router_with(ctx, opts);
+    tracing::debug!(
+        version = env!("CARGO_PKG_VERSION"),
+        "serving MCP over stdio"
+    );
     match runtime.block_on(tower_mcp::StdioTransport::new(router).run()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(e),

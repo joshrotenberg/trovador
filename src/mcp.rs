@@ -234,13 +234,23 @@ fn template_args(vars: &HashMap<String, String>) -> tower_mcp::Result<(Option<Ba
     Ok((backend, id))
 }
 
-/// Runs blocking archive I/O off the async runtime.
+/// Runs blocking archive I/O off the async runtime. `call` names the tool or resource for
+/// the diagnostic that times it.
 async fn blocking<T: Send + 'static>(
+    call: &'static str,
     f: impl FnOnce() -> T + Send + 'static,
 ) -> tower_mcp::Result<T> {
-    tokio::task::spawn_blocking(f)
+    let started = std::time::Instant::now();
+    let out = tokio::task::spawn_blocking(f)
         .await
-        .map_err(|e| tower_mcp::Error::internal(e.to_string()))
+        .map_err(|e| tower_mcp::Error::internal(e.to_string()));
+    tracing::debug!(
+        call,
+        ms = started.elapsed().as_millis() as u64,
+        ok = out.is_ok(),
+        "mcp call"
+    );
+    out
 }
 
 /// The server with every tool and redaction on.
@@ -267,7 +277,13 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
         .read_only_safe()
         .handler(move |input: SessionsInput| {
             let ctx = c.clone();
-            async move { blocking(move || sessions_call(&ctx, input, opts)).await? }
+            let call = match input.action {
+                SessionsAction::List => "sessions list",
+                SessionsAction::Show => "sessions show",
+                SessionsAction::Transcript => "sessions transcript",
+                SessionsAction::Text => "sessions text",
+            };
+            async move { blocking(call, move || sessions_call(&ctx, input, opts)).await? }
         })
         .build();
 
@@ -287,7 +303,7 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
         .handler(move |input: SearchOpts| {
             let ctx = c.clone();
             async move {
-                blocking(move || match sessions::search(&ctx, &input) {
+                blocking("search", move || match sessions::search(&ctx, &input) {
                     Ok(r) => json_result(&r, opts),
                     Err(e) => error_result(e, opts),
                 })
@@ -305,7 +321,10 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
             let ctx = c.clone();
             async move {
                 let (backend, id) = template_args(&vars)?;
-                let detail = blocking(move || sessions::show(&ctx, &id, backend)).await?;
+                let detail = blocking("session resource", move || {
+                    sessions::show(&ctx, &id, backend)
+                })
+                .await?;
                 match detail {
                     Ok(d) => resource_json(uri, &d, opts),
                     Err(e) => Err(tower_mcp::Error::invalid_params(e.to_string())),
@@ -322,8 +341,10 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
             let ctx = c.clone();
             async move {
                 let (backend, id) = template_args(&vars)?;
-                let page =
-                    blocking(move || sessions::transcript(&ctx, &id, backend, 0, None)).await?;
+                let page = blocking("transcript resource", move || {
+                    sessions::transcript(&ctx, &id, backend, 0, None)
+                })
+                .await?;
                 match page {
                     Ok(p) => resource_json(uri, &p, opts),
                     Err(e) => Err(tower_mcp::Error::invalid_params(e.to_string())),

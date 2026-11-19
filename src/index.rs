@@ -122,6 +122,8 @@ pub(crate) fn bytes_hash(bytes: &[u8]) -> u64 {
 }
 
 const REGION: u64 = 4096;
+/// How often a refresh that has announced itself reports how far it has got.
+const PROGRESS_EVERY: Duration = Duration::from_secs(2);
 
 /// Hashes of the first 4 KB of JSONL and of the 4 KB before its decompressed `offset`. An append leaves
 /// both alone; a rewrite of the indexed part, even one that keeps or grows the size,
@@ -313,6 +315,11 @@ impl Index {
         // Reindexing row by row after a projection change left a 456 MB file and took
         // 20.4 s, against 415 MB and 9.8 s fresh (2026-10-07).
         if path.is_file() && stored_versions(&path) != Some(built_with(limits)) {
+            tracing::info!(
+                target: crate::PROGRESS,
+                "the index was built by another version or with other settings; building it again"
+            );
+            tracing::debug!(path = %path.display(), "discarding index built with other versions or settings");
             for suffix in ["", "-wal", "-shm"] {
                 let mut p = path.clone().into_os_string();
                 p.push(suffix);
@@ -323,6 +330,9 @@ impl Index {
                     Err(e) => return Err(io_error(&p, e)),
                 }
             }
+        }
+        if !path.is_file() {
+            tracing::debug!(path = %path.display(), "creating index");
         }
         // SQLite gives the -wal and -shm files the database file's mode, so the file is
         // created 0600 before SQLite sees it, and an older 0644 one is tightened.
@@ -1027,6 +1037,13 @@ impl Index {
         // One file per session, the newest; scan_all chooses.
         let entries: Vec<ArchiveEntry> = archive::scan_all(paths);
         let stored = self.stored_rows()?;
+        tracing::debug!(
+            files = entries.len(),
+            indexed = stored.len(),
+            ms = started.elapsed().as_millis() as u64,
+            "scanned archives and index"
+        );
+        let mut new = 0usize;
         let mut report = RefreshReport {
             sessions: entries.len(),
             ..Default::default()
@@ -1076,7 +1093,11 @@ impl Index {
                         Work::Metadata(s.id, s.state.clone())
                     }
                 }
-                _ => Work::Full,
+                Some(_) => Work::Full,
+                None => {
+                    new += 1;
+                    Work::Full
+                }
             };
             jobs.push(Job {
                 entry: e.clone(),
@@ -1150,6 +1171,10 @@ impl Index {
             .map(|(_, s)| (s.id, s.file.as_str()))
             .collect();
         if !gone.is_empty() {
+            tracing::debug!(
+                rows = gone.len(),
+                "removing index rows whose files are gone"
+            );
             let tx = self
                 .conn
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -1170,15 +1195,50 @@ impl Index {
 
         let deadline = opts.budget.map(|b| started + b);
         let total = jobs.len();
+        // Grown files continue where they stopped; every other job not new is reread.
+        let grown = jobs
+            .iter()
+            .filter(|j| matches!(j.work, Work::Resume(..)))
+            .count();
+        let changed = total - new - grown;
+        tracing::debug!(
+            new,
+            changed,
+            grown,
+            unchanged = report.unchanged,
+            budget_ms = opts.budget.map(|b| b.as_millis() as u64),
+            "refresh plan"
+        );
+        // Announced only once a refresh has run for `progress_after_ms`, so the few grown files a
+        // search usually finds stay silent and a long build says what it is doing.
+        let plan_line = {
+            let parts: Vec<String> = [(new, "new"), (changed, "changed"), (grown, "grown")]
+                .into_iter()
+                .filter(|(n, _)| *n > 0)
+                .map(|(n, what)| format!("{n} {what}"))
+                .collect();
+            let mut line = format!("indexing {total} session files ({})", parts.join(", "));
+            if report.unchanged > 0 {
+                line.push_str(&format!("; {} already up to date", report.unchanged));
+            }
+            if let Some(b) = opts.budget {
+                line.push_str(&format!("; for up to {:.0} s", b.as_secs_f64()));
+            }
+            line
+        };
         let queue = Mutex::new(jobs.into_iter());
         let started_jobs = AtomicUsize::new(0);
         let workers = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4)
             .clamp(1, 8);
-        let (tx, rx) = mpsc::sync_channel::<Option<Done>>(workers * 2);
+        // The file and how long projecting it took travel with the result, so a file that
+        // could not be projected can be named and slow files found.
+        let (tx, rx) = mpsc::sync_channel::<(PathBuf, Duration, Option<Done>)>(workers * 2);
 
         let mut write_error = None;
+        let mut announced = false;
+        let progress_after = Duration::from_millis(limits.progress_after_ms as u64);
         std::thread::scope(|scope| {
             for _ in 0..workers {
                 let tx = tx.clone();
@@ -1193,22 +1253,51 @@ impl Index {
                             break;
                         };
                         started_jobs.fetch_add(1, Ordering::Relaxed);
-                        if tx.send(project(job, limits)).is_err() {
+                        let file = job.entry.file.clone();
+                        let t = Instant::now();
+                        let done = project(job, limits);
+                        if tx.send((file, t.elapsed(), done)).is_err() {
                             break;
                         }
                     }
                 });
             }
             drop(tx);
-            for done in rx {
+            let mut finished = 0usize;
+            let mut last_note = Instant::now();
+            for (file, took, done) in rx {
+                finished += 1;
+                if !announced && started.elapsed() >= progress_after {
+                    announced = true;
+                    last_note = Instant::now();
+                    tracing::info!(target: crate::PROGRESS, "{plan_line}");
+                } else if announced && last_note.elapsed() >= PROGRESS_EVERY && finished < total {
+                    last_note = Instant::now();
+                    tracing::info!(
+                        target: crate::PROGRESS,
+                        "indexed {finished} of {total} ({}%)",
+                        finished * 100 / total
+                    );
+                }
                 if write_error.is_some() {
                     continue;
                 }
                 match done {
-                    None => report.failed += 1,
+                    None => {
+                        report.failed += 1;
+                        tracing::debug!(file = %file.display(), "could not read or project; counted as failed");
+                    }
                     Some(d) => {
                         let resumed = d.resumed_from.is_some();
                         let metadata_refresh = d.metadata_refresh;
+                        tracing::trace!(
+                            file = %file.display(),
+                            work = if metadata_refresh { "metadata" } else if resumed { "append" } else { "full" },
+                            records = d.records.len(),
+                            text = d.text,
+                            ms = took.as_millis() as u64,
+                            "projected"
+                        );
                         match self.write(d) {
                             Ok(true) if metadata_refresh => report.metadata_refreshed += 1,
                             Ok(true) if resumed => report.appended += 1,
@@ -1225,6 +1314,34 @@ impl Index {
         }
         report.pending = total - started_jobs.load(Ordering::Relaxed);
         report.ms = started.elapsed().as_millis() as u64;
+        tracing::debug!(
+            reindexed = report.reindexed,
+            appended = report.appended,
+            metadata_refreshed = report.metadata_refreshed,
+            unchanged = report.unchanged,
+            removed = report.removed,
+            pending = report.pending,
+            failed = report.failed,
+            ms = report.ms,
+            "refresh done"
+        );
+        if announced {
+            let mut line = format!(
+                "indexed {} session files in {:.1} s",
+                total - report.pending - report.failed,
+                report.ms as f64 / 1000.0
+            );
+            if report.failed > 0 {
+                line.push_str(&format!("; {} could not be read", report.failed));
+            }
+            if report.pending > 0 {
+                line.push_str(&format!(
+                    "; {} left when the time budget ran out (run `trovador index` to finish)",
+                    report.pending
+                ));
+            }
+            tracing::info!(target: crate::PROGRESS, "{line}");
+        }
         Ok(report)
     }
 

@@ -387,6 +387,77 @@ fn the_cli_prints_the_same_plan_as_the_library() {
     assert_eq!(cli, lib);
 }
 
+fn cli_init(f: &Fixture, h: &Hosts, progress: &str) -> std::process::Output {
+    let opts = h.opts(f, Host::Both, false);
+    std::process::Command::new(env!("CARGO_BIN_EXE_trovador"))
+        .args(["init", "--binary"])
+        .arg(opts.binary.as_ref().unwrap())
+        .arg("--claude-bin")
+        .arg(opts.claude_bin.as_ref().unwrap())
+        .arg("--codex-bin")
+        .arg(opts.codex_bin.as_ref().unwrap())
+        .env("TROVADOR_CLAUDE_ARCHIVE", &f.paths.claude_archive)
+        .env("TROVADOR_CODEX_ARCHIVE", &f.paths.codex_archive)
+        .env("TROVADOR_CODEX_ARCHIVED", &f.paths.codex_archived)
+        .env("TROVADOR_HOME", &f.paths.home)
+        .env("TROVADOR_PROGRESS", progress)
+        .env_remove("TROVADOR_LOG")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn the_cli_names_each_host_step_on_stderr_as_it_runs() {
+    // init runs host commands for seconds; without these lines it looked hung.
+    let f = Fixture::new();
+    let h = Hosts::new(&f);
+    let out = cli_init(&f, &h, "1");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    let report: Value = serde_json::from_slice(&out.stdout).expect("stdout is one JSON document");
+    assert_eq!(report["status"], "installed");
+    let dir = init::install_dir(&f.paths);
+    let want = [
+        "trovador: claude: checking registered marketplaces, plugins and MCP servers".to_string(),
+        "trovador: codex: checking registered marketplaces, plugins and MCP servers".to_string(),
+        format!("trovador: writing the plugin to {}", dir.display()),
+        format!(
+            "trovador: claude: add marketplace (claude plugin marketplace add {} --scope user)",
+            dir.display()
+        ),
+        "trovador: claude: install (claude plugin install trovador@trovador-local --scope user)"
+            .to_string(),
+        "trovador: codex: install (codex plugin add trovador@trovador-local)".to_string(),
+        "trovador: installed; restart Claude Code and Codex to load it".to_string(),
+    ];
+    let lines: Vec<&str> = stderr.lines().collect();
+    for w in &want {
+        assert!(lines.contains(&w.as_str()), "no {w:?} in\n{stderr}");
+    }
+    let done = lines
+        .iter()
+        .filter(|l| l.contains(" done in ") && l.ends_with(" s"))
+        .count();
+    assert_eq!(done, 4, "one timing line per change\n{stderr}");
+}
+
+#[test]
+fn a_failing_host_step_is_a_warning_even_with_progress_off() {
+    let f = Fixture::new();
+    let h = Hosts::new(&f);
+    fs::write(h.bin.join("codex.fail"), "plugin add").unwrap();
+    let out = cli_init(&f, &h, "0");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(stderr.contains("WARN"), "{stderr}");
+    assert!(stderr.contains("host command failed"), "{stderr}");
+    assert!(stderr.contains("refused: plugin add"), "{stderr}");
+    assert!(
+        !stderr.contains("trovador: "),
+        "no progress lines when off\n{stderr}"
+    );
+}
+
 #[tokio::test]
 async fn the_skill_names_only_tools_and_actions_the_server_offers() {
     // The skill is what an agent reads first; a tool or action it names that does not
