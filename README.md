@@ -236,13 +236,21 @@ rather than everything from the last 10 minutes.
 - `reasoning`: only where the provider kept readable text.
 - A Claude prompt typed while a turn was running is a `user` record named `queued`.
 
-Text is capped per record (4,000 characters; 600 for tool calls and results) and per page
-(100,000).
+Text is capped per record (4,000 characters; 600 for tool calls and results).
 
 **Paging.** `sessions list`, `search`, and `sessions transcript` return one page. Pass
 `next_offset` as `offset` for the next; no `next_offset` means the last page. Search pages
 count sessions, and its totals (`sessions_matched`, `hidden`, `exhaustive`) cover the whole
 result. Each page is a fresh query; pass the same `--until` on every page for a stable walk.
+
+**Size.** Every response is held to about 40,000 characters, measured as the JSON of its
+sessions, hits or records, or as the characters of a text part. Claude Code saves an MCP
+result over 50,000 characters to a file and shows the model only its path. A page stops at
+the item that would pass the budget, always returns at least one, and names the cause in
+`truncated_by`. `limit` and `per_session` above their ceilings (100 sessions per list, 50 per
+search, 10 matches per session) are lowered, not refused, and also reported in
+`truncated_by`. Nothing is lost: `next_offset` continues, and `match_count` counts every
+matching record.
 
 **Revisions.** Transcript pages and text parts report a `revision`. Pass it back as
 `expected_revision` when continuing. If the session was only appended to, it is read as it
@@ -257,7 +265,7 @@ proves absence. Read `note` when either is false.
 
 **Session text** has user and assistant turns, tool calls and results, attachments, and
 system records; not omitted, reasoning, or unrecognized. It is redacted as a whole, then
-split into 100,000-character parts, so no part starts or ends inside a secret. Continue from
+split into 40,000-character parts, so no part starts or ends inside a secret. Continue from
 `truncated.next_offset`.
 
 ## Configuration
@@ -304,14 +312,14 @@ the MCP server, set them where the host starts it.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `TROVADOR_RESPONSE_MAX_CHARS` | 100000 | Characters per transcript page or text part |
+| `TROVADOR_RESPONSE_MAX_CHARS` | 40000 | Characters per response: list sessions, search hits and transcript records as JSON, or a text part |
 | `TROVADOR_RECORD_CHARS` | 4000 | Per-record cap |
 | `TROVADOR_TOOL_CHARS` | 600 | Tool call and result cap |
 | `TROVADOR_UNRECOGNIZED_CHARS` | 1000 | `unrecognized` cap; `0` shows them as `omitted`, unindexed |
 | `TROVADOR_PAGE_SIZE` | 200 | Records per transcript page |
-| `TROVADOR_LIST_DEFAULT` | 20 | Sessions per list page |
-| `TROVADOR_SEARCH_DEFAULT` | 20 | Sessions per search page |
-| `TROVADOR_PER_SESSION` | 3 | Matching records per session |
+| `TROVADOR_LIST_DEFAULT`, `TROVADOR_LIST_MAX` | 20, 100 | Sessions per list page; most a `limit` can ask for |
+| `TROVADOR_SEARCH_DEFAULT`, `TROVADOR_SEARCH_MAX` | 20, 50 | Sessions per search page; most a `limit` can ask for |
+| `TROVADOR_PER_SESSION`, `TROVADOR_PER_SESSION_MAX` | 3, 10 | Matching records per session; most `per_session` can ask for |
 | `TROVADOR_LIST_LOOKAHEAD` | 500 | Sessions a list reads past a full page to find out if there is another |
 | `TROVADOR_OFFSET_MAX` | 1000000 | Largest offset accepted |
 | `TROVADOR_RESUME_LIMIT` | 900000 | Bytes above which a session is not resumable |

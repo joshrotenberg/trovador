@@ -10,9 +10,12 @@ use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Limits {
-    /// Ceiling on the content of one response: the characters of transcript records in a
-    /// page, or of a session's text. The fields around them are extra.
-    /// Model text past it is cut, and the response says how to read the rest.
+    /// Ceiling on the items of one response, in characters: sessions in a list, hits in a
+    /// search and records in a transcript page, each measured as its JSON, or the text of a
+    /// session part. The fields around them are extra, a few hundred characters. A page
+    /// stops at the item that would pass it, keeps at least one, and says how to read the
+    /// rest. Claude Code saves an MCP result over 50,000 characters to a file and shows the
+    /// model only its path, so the default leaves room under that.
     pub response_max_chars: usize,
     /// Head read steps for session metadata, smallest first. Each step is used only when
     /// the previous one left cwd or the first user message missing. Codex writes a large
@@ -39,6 +42,9 @@ pub struct Limits {
     pub resume_limit_bytes: u64,
     /// Default number of sessions a list returns.
     pub list_default: usize,
+    /// Most sessions a list returns, whatever `limit` asks for. A larger `limit` is
+    /// lowered to this rather than rejected.
+    pub list_max: usize,
     /// How long a search may spend bringing the index up to date before it queries what is
     /// there. The first build of a large archive takes longer; `trovador index` has no
     /// budget.
@@ -49,8 +55,13 @@ pub struct Limits {
     pub progress_after_ms: usize,
     /// Default number of sessions a search returns.
     pub search_default: usize,
+    /// Most sessions a search returns, whatever `limit` asks for.
+    pub search_max: usize,
     /// Default number of matching records shown per session.
     pub per_session_default: usize,
+    /// Most matching records shown per session, whatever `per_session` asks for.
+    /// `match_count` still counts them all, and a transcript reads the rest.
+    pub per_session_max: usize,
     /// Sessions a list reads past a full page while it looks for one more match. It decides
     /// whether `next_offset` is present, and with a selective `project` or `origin` filter
     /// each one read costs a metadata read. When it runs out first, the list reports that
@@ -95,7 +106,7 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            response_max_chars: 100_000,
+            response_max_chars: 40_000,
             head_steps: vec![64 * 1024, 512 * 1024, 4 * 1024 * 1024],
             title_scan_max_bytes: 4 * 1024 * 1024,
             record_chars: 4_000,
@@ -104,10 +115,13 @@ impl Default for Limits {
             page_size: 200,
             resume_limit_bytes: 900_000,
             list_default: 20,
+            list_max: 100,
             index_budget_ms: 15_000,
             progress_after_ms: 1_000,
             search_default: 20,
+            search_max: 50,
             per_session_default: 3,
+            per_session_max: 10,
             list_lookahead: 500,
             offset_max: 1_000_000,
             active_window_s: 600,
@@ -167,10 +181,13 @@ impl Limits {
             page_size: num("TROVADOR_PAGE_SIZE", d.page_size).max(1),
             resume_limit_bytes: num("TROVADOR_RESUME_LIMIT", d.resume_limit_bytes as usize) as u64,
             list_default: num("TROVADOR_LIST_DEFAULT", d.list_default).max(1),
+            list_max: num("TROVADOR_LIST_MAX", d.list_max).max(1),
             index_budget_ms: num("TROVADOR_INDEX_BUDGET_MS", d.index_budget_ms),
             progress_after_ms: num("TROVADOR_PROGRESS_AFTER_MS", d.progress_after_ms),
             search_default: num("TROVADOR_SEARCH_DEFAULT", d.search_default).max(1),
+            search_max: num("TROVADOR_SEARCH_MAX", d.search_max).max(1),
             per_session_default: num("TROVADOR_PER_SESSION", d.per_session_default).max(1),
+            per_session_max: num("TROVADOR_PER_SESSION_MAX", d.per_session_max).max(1),
             list_lookahead: num("TROVADOR_LIST_LOOKAHEAD", d.list_lookahead),
             offset_max: num("TROVADOR_OFFSET_MAX", d.offset_max),
             active_window_s: num("TROVADOR_ACTIVE_WINDOW_S", d.active_window_s),
@@ -204,6 +221,26 @@ mod tests {
     fn an_unparseable_override_keeps_the_default_instead_of_becoming_zero() {
         let l = Limits::from_lookup(lookup(&[("TROVADOR_PAGE_SIZE", "lots")]));
         assert_eq!(l.page_size, 200);
+    }
+
+    #[test]
+    fn request_ceilings_default_to_values_that_fit_a_context_and_can_be_raised() {
+        let d = Limits::default();
+        assert_eq!(
+            (
+                d.response_max_chars,
+                d.list_max,
+                d.search_max,
+                d.per_session_max
+            ),
+            (40_000, 100, 50, 10)
+        );
+        let l = Limits::from_lookup(lookup(&[
+            ("TROVADOR_LIST_MAX", "500"),
+            ("TROVADOR_SEARCH_MAX", "200"),
+            ("TROVADOR_PER_SESSION_MAX", "0"),
+        ]));
+        assert_eq!((l.list_max, l.search_max, l.per_session_max), (500, 200, 1));
     }
 
     #[test]

@@ -1533,7 +1533,9 @@ pub fn page(
         if r.index < offset {
             continue;
         }
-        let size = r.text.as_deref().map(str::len).unwrap_or(0) + 64;
+        // Measured as the JSON the caller receives: a page of 200 short records once came
+        // to 55 KB against a budget that counted their text and a flat 64 per record.
+        let size = crate::output::json_chars(&r);
         let full = records.len() == limit;
         let over = !records.is_empty() && chars + size > limits.response_max_chars;
         if full || over {
@@ -1545,7 +1547,7 @@ pub fn page(
                 total: None,
                 truncated_by: (over && !full).then(|| {
                     format!(
-                        "response_max_chars ({}); continue from next_offset",
+                        "TROVADOR_RESPONSE_MAX_CHARS ({}); continue from next_offset",
                         limits.response_max_chars
                     )
                 }),

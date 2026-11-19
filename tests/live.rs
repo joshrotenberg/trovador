@@ -549,6 +549,10 @@ fn phrase_from(text: &str, rng: &mut Rng) -> Option<(String, String)> {
 fn a_phrase_from_any_indexed_record_finds_its_session() {
     let l = live();
     let idx = Index::open(&l.ctx.paths, &l.ctx.limits).unwrap();
+    // Every matching session on one page, past the context ceilings a caller gets.
+    let mut wide = l.ctx.clone();
+    wide.limits.search_max = usize::MAX;
+    wide.limits.response_max_chars = usize::MAX;
     let mut rng = Rng(l.seed ^ 0xfeed);
     let mut probes = 0;
     for e in &l.sample {
@@ -567,7 +571,7 @@ fn a_phrase_from_any_indexed_record_finds_its_session() {
         };
         for (query, regex) in [(terms.clone(), false), (regex::escape(&literal), true)] {
             let r = sessions::search(
-                &l.ctx,
+                &wide,
                 &SearchOpts {
                     query: query.clone(),
                     regex,
