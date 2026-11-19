@@ -493,7 +493,7 @@ fn indexed_records_equal_the_transcript_for_sampled_sessions() {
             assert!(indexed.is_empty(), "{}: guardian text was indexed", who(e));
             continue;
         }
-        let expected: Vec<(usize, String, String)> = projection(e, &l.ctx.limits)
+        let expected: Vec<(usize, String, String)> = projection(e, &l.ctx.limits.for_index())
             .into_iter()
             .filter(|r| r.kind != RecordKind::Omitted && r.text.is_some())
             .filter(|r| l.ctx.limits.index_reasoning || r.kind != RecordKind::Reasoning)

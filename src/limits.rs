@@ -8,6 +8,13 @@
 
 use serde::Serialize;
 
+/// Default for `index_tool_chars`. Index size and full build time on the development
+/// machine (9,100 sessions, 2026-11-19), by this cap: 600, 643 MB in 86 s; 4,000, 1.60 GB
+/// in 114 s; 16,000, 2.18 GB in 115 s; 64,000, 2.72 GB in 170 s. 4,000 matches
+/// `record_chars` and reached two of the three words that motivated #101 (at 2,278 and
+/// 3,309 characters; the third was at 6,200).
+const INDEX_TOOL_CHARS: usize = 4_000;
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Limits {
     /// Ceiling on the items of one response, in characters: sessions in a list, hits in a
@@ -28,8 +35,14 @@ pub struct Limits {
     pub title_scan_max_bytes: usize,
     /// Per-record cap in a transcript projection, so one huge message cannot dominate.
     pub record_chars: usize,
-    /// Cap for tool results and tool call arguments, which are rarely worth more.
+    /// Cap for tool results and tool call arguments in transcripts and session text,
+    /// which are rarely worth more to read.
     pub tool_chars: usize,
+    /// Cap for tool results and tool call arguments in the index, so search finds what
+    /// they say past `tool_chars`. File reads, grep output and test logs put error
+    /// messages and code thousands of characters in; with the index at `tool_chars` a
+    /// search for a word 2,278 characters into a tool result found nothing (#101).
+    pub index_tool_chars: usize,
     /// Cap for the JSON kept from a record, block or item of a type the projection does not
     /// know (an `unrecognized` record). Enough to show its type, field names and the start
     /// of its text, and to make that text searchable. Zero shows such records as `omitted`
@@ -111,6 +124,7 @@ impl Default for Limits {
             title_scan_max_bytes: 4 * 1024 * 1024,
             record_chars: 4_000,
             tool_chars: 600,
+            index_tool_chars: INDEX_TOOL_CHARS,
             unrecognized_chars: 1_000,
             page_size: 200,
             resume_limit_bytes: 900_000,
@@ -136,6 +150,16 @@ impl Default for Limits {
 }
 
 impl Limits {
+    /// These limits as the index applies them: tool records capped at `index_tool_chars`
+    /// instead of `tool_chars`. Only text changes, never which records exist, so a match
+    /// index still opens the same record in a transcript.
+    pub fn for_index(&self) -> Self {
+        Self {
+            tool_chars: self.index_tool_chars,
+            ..self.clone()
+        }
+    }
+
     /// Defaults overridden by any `TROVADOR_*` variable that parses. A value that does not
     /// parse is ignored rather than silently becoming zero.
     pub fn from_env() -> Self {
@@ -177,6 +201,7 @@ impl Limits {
             title_scan_max_bytes: num("TROVADOR_TITLE_SCAN_MAX_BYTES", d.title_scan_max_bytes),
             record_chars: num("TROVADOR_RECORD_CHARS", d.record_chars),
             tool_chars: num("TROVADOR_TOOL_CHARS", d.tool_chars),
+            index_tool_chars: num("TROVADOR_INDEX_TOOL_CHARS", d.index_tool_chars),
             unrecognized_chars: num("TROVADOR_UNRECOGNIZED_CHARS", d.unrecognized_chars),
             page_size: num("TROVADOR_PAGE_SIZE", d.page_size).max(1),
             resume_limit_bytes: num("TROVADOR_RESUME_LIMIT", d.resume_limit_bytes as usize) as u64,
