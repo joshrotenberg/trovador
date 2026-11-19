@@ -1,246 +1,159 @@
 # trovador
 
-Search and read local Claude Code and Codex session history, from a CLI or an MCP server.
+Search and read your local Claude Code and Codex session history, from the command line or
+from an agent over MCP.
 
-Both CLIs write their sessions to disk as JSONL. trovador reads those archives, lists, pages
-through, and searches them, and serves the same answers to a terminal and to an agent over
-MCP. It runs no model and costs no tokens.
+Both CLIs keep every session on disk as JSONL. trovador indexes those files and lets you list
+sessions, search across all of them at once, page through a transcript, and read a whole
+session as plain text. The same library answers both the CLI and the MCP server, so a person
+and an agent get identical results.
 
-Codex 0.165 compresses finished rollouts to `rollout-*.jsonl.zst`; trovador reads those the
-same as plain `.jsonl` files, and a session keeps its index row when Codex compresses it. On
-the development machine on 2026-11-02, 5,307 of 5,804 Codex rollouts were compressed.
-
-What is on disk is what the providers kept. Claude Code removes old transcripts according
-to its `cleanupPeriodDays` setting, and Codex moves archived threads to
-`~/.codex/archived_sessions`, which trovador also reads. A transcript the provider deleted is
-gone from trovador's list; its index rows are removed on the next refresh that can read
-its configured root.
-
-Search only considers rows under its currently configured archive roots. It keeps rows
-outside those roots in the shared index, so CLI and MCP processes with different archive
-settings can search without deleting each other's rows. `trovador index` removes rows
-outside the configured roots only when every configured root is readable or does not
-exist, and reports the number removed. Otherwise its report includes
-`cleanup_skipped_reason`, naming the roots that blocked cleanup and their read errors.
-Refresh removes missing sessions under readable configured roots;
-rows under an unavailable configured root are retained and search reports that root as
-unavailable. If a configured root cannot be read and the index contains out-of-root rows
-that could use another spelling of that root, search reports the root as unavailable
-and does not claim absence proof. Missing roots without indexed rows under their spelling
-do not prevent absence proof.
-
-It only reads: past sessions are history. Going back into a session is a person's
-`claude --resume` or `codex resume`, which `sessions show` prints as `open_with`. Running
-new agent work is a separate tool's job.
-
-It is the Rust successor to [spike](https://github.com/joshrotenberg/spike). It lived for a
-while in a workspace called bottega as `crates/trovador`; that history is on the
-`archive/bottega` branch.
-
-## Status
-
-| Slice | State |
-|---|---|
-| Archive reading: list, show, transcript, text | Done |
-| Full-text index and search | Done |
-| Running turns, summaries, consent | Removed: trovador runs no model |
-
-## Install
-
-From crates.io once published, or from a checkout:
-
-```sh
-cargo install trovador --locked        # or: cargo install --path . --locked
-trovador index                 # build the search index once; searches keep it current
-trovador init --dry-run        # what init would write and which host commands it would run
-trovador init                  # install the plugin into Claude Code and Codex
-```
-
-`trovador doctor` checks the setup: it reads the archives and reports the index, with a
-fix for each problem.
+- **Read-only.** It never writes to `~/.claude` or `~/.codex`. Its only state is a search
+  index under `~/.trovador`; delete that directory and trovador is gone.
+- **No model.** It runs no model and costs no tokens. An agent that wants a summary reads
+  the session text and summarizes it itself.
+- **History, not control.** It does not continue, resume, or start sessions. It prints the
+  command to resume one (`claude --resume`, `codex resume`) for a person to run.
 
 Supported on macOS and Linux. Windows is untested.
 
-### The plugin
+## Install
 
-`trovador init` installs a plugin that gives an agent three things:
+Install the binary with the release installer:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/joshrotenberg/trovador/releases/latest/download/trovador-installer.sh | sh
+```
+
+or from crates.io, or from a checkout:
+
+```sh
+cargo install trovador --locked
+cargo install --path . --locked
+```
+
+All three put `trovador` in `~/.cargo/bin`. Then:
+
+```sh
+trovador index        # build the search index once; searches keep it current after that
+trovador doctor       # check the archives, the index, and the settings in effect
+trovador init         # install the plugin into Claude Code and Codex
+```
+
+### The agent plugin
+
+`trovador init` gives Claude Code and Codex three things:
 
 - the MCP server (`trovador serve`), with the `search` and `sessions` tools;
-- a `recall` skill that says when to look in past sessions and how to read what it finds;
-- on Claude Code, a SessionStart hook that tells the session its own id, so search can
-  leave out exactly this conversation instead of every session active in the last 10
-  minutes.
+- a `recall` skill that tells the agent when to look in past sessions and how to read what
+  it finds;
+- on Claude Code, a SessionStart hook that tells each session its own id, so a search can
+  leave out exactly the current conversation.
 
-It writes a local marketplace to `~/.trovador/plugin` and registers it with each host's own
-commands: `claude plugin marketplace add` and `claude plugin install` (or `update`) at user
-scope, and `codex plugin marketplace add` and `codex plugin add`. It edits no host
-configuration file itself. `--host claude` or `--host codex` limits it to one host; under
-the default `both`, a host that is not on PATH is skipped. Run it again after upgrading
-trovador to update the plugin, and restart the host: a stdio server is started once per
-session and never reloads.
+It writes a local plugin marketplace to `~/.trovador/plugin` and registers it through each
+host's own commands (`claude plugin marketplace add` and `claude plugin install`, `codex
+plugin marketplace add` and `codex plugin add`). It edits no host configuration file.
 
-The plugin starts the binary by absolute path, the one `init` ran as unless `--binary`
-says otherwise, because a host started from the desktop may not have `~/.cargo/bin` on its
-`PATH`.
+```sh
+trovador init --dry-run          # show what it would write and which commands it would run
+trovador init --host claude      # one host only (default: both; a host not on PATH is skipped)
+trovador init --binary /path/to/trovador   # the binary the plugin starts (default: this one)
+```
 
-The plugin carries the MCP server, not only a skill that runs the CLI, because an agent's
-sandbox usually cannot write `~/.trovador`. Under `codex sandbox -c
-'sandbox_mode="workspace-write"'`, `trovador search` cannot update the index
-(2026-11-02); it searches the existing one read-only and says the result is not exhaustive.
-A host starts its MCP servers outside the agent's sandbox, so the server keeps the index
-current.
+Run `trovador init` again after upgrading, then restart the host: an MCP server started over
+stdio is never reloaded. The plugin starts the binary by absolute path, because a host
+launched from the desktop may not have `~/.cargo/bin` on its `PATH`.
 
-Codex does not load hooks from plugins (`codex features list` shows `plugin_hooks` as
-removed in 0.165), so on Codex the hook is an entry in `~/.codex/hooks.json`. `init`
-reports whether one is there and, if not, the entry to add under `hooks.SessionStart`:
+Codex does not load hooks from plugins, so on Codex the session-id hook is an entry in
+`~/.codex/hooks.json` that you add yourself. `init` reports whether it is there and prints
+the entry to add under `hooks.SessionStart`:
 
 ```json
 {"hooks": [{"type": "command", "command": "/path/to/trovador hook session-start --backend codex || true"}]}
 ```
 
-`init` reports a `trovador` MCP server configured by hand in either host, since its tools
-would be offered twice; remove it with `claude mcp remove trovador` or `codex mcp remove
-trovador`. To uninstall, `claude plugin uninstall trovador@trovador-local` and `codex plugin
-remove trovador@trovador-local`, then remove the `trovador-local` marketplace from each.
-
-Without the plugin, register the server by hand:
+To register only the MCP server, without the plugin:
 
 ```sh
 claude mcp add --scope user trovador -- ~/.cargo/bin/trovador serve
 codex mcp add trovador -- ~/.cargo/bin/trovador serve
 ```
 
-## Coming from spike
+`init` warns if a `trovador` server is registered by hand as well, since its tools would be
+offered twice. To uninstall the plugin, run `claude plugin uninstall trovador@trovador-local`
+and `codex plugin remove trovador@trovador-local`, then remove the `trovador-local`
+marketplace from each host.
 
-trovador covers the parts of spike that were used, through fewer tools. On 2026-10-07 the
-local transcripts held 28 calls to spike's MCP tools across 6 sessions, all to `ask`,
-`search`, `list_sessions`, `whoami`, `digest`, `route`, `standing_list`, `surface`,
-`operations`, `board`, and `pad_set`.
+The plugin carries an MCP server, not only a skill that runs the CLI, because an agent's
+sandbox usually cannot write `~/.trovador`. Inside a Codex `workspace-write` sandbox,
+`trovador search` cannot update the index and searches the existing one read-only, saying
+the result is not exhaustive. A host starts its MCP servers outside the sandbox, so the
+server keeps the index current.
 
-| spike | trovador |
-|---|---|
-| `list_sessions`, `dump` | `sessions` with `action: list` or `show` |
-| `session://{backend}/{id}/transcript` | `sessions` with `action: transcript`, or the same resource |
-| `search` | `search`, over a full-text index rather than the newest 400 files |
-| `summarize`, `session://.../summary` | `sessions` with `action: text`; the caller summarizes |
-| `ask`, `consult`, `agent-sessions consent ...` | removed: trovador runs no model and continues nothing |
-| `diagnose` | `trovador doctor` (CLI) |
-| `gc`, `canvass`, `digest`, `board`, `activity`, `windows`, `pin`, `pad`, `pad_set`, `standing_*`, `route`, `runners`, `usage`, `whoami`, `surface`, `operations` | not ported |
+## Use cases
 
-`docs/parity-2026-10-07.md` compares the two on this machine's archive, produced by
-`scripts/parity.py`.
-
-## Use
-
-The `--project` filter for listing and searching matches path substrings ignoring ASCII
-case. Non-ASCII case remains significant. The MCP `project` parameters behave identically.
+**"We fixed this already."** Search both agents' history for the error message, function
+name, or issue number, then open the transcript where it matched:
 
 ```sh
-trovador sessions list                       # newest first, top-level sessions only
-trovador sessions list --project trovador    # project path contains this text (ASCII case-insensitive)
-trovador sessions list --origin cli          # how it was started
-trovador sessions list --include-subagents   # also sessions started by other sessions
-trovador sessions list --since 1d            # last written in the past day (also 36h, 1w, 2026-10-01)
-trovador sessions list --offset 20           # the next page, from next_offset of the last
-trovador sessions list --archived true       # only Codex threads in archived_sessions (false: only the rest)
-trovador sessions show 27d1f434              # id or unambiguous prefix
-trovador sessions transcript 27d1f434 --offset 200 --limit 50
-trovador sessions text 27d1f434              # the whole session as plain text, in parts
-trovador sessions text 27d1f434 --offset 100000 --expected-revision 1c8a.17a3f2b4c5d6e7f8.9f1e2d3c4b5a6978.1a2b3c4d5e6f7081.p.3f9a1c0b7d2e4a58  # as it was at that revision; fails unless it only grew
-trovador search idempotency_key              # words and "quoted phrases", all required
-trovador search "redact" --since 1w          # only sessions written in the last week
-trovador search redact --offset 20           # the next page of sessions, from next_offset
-trovador search 'redact NOT summary' --fts   # FTS5 syntax
-trovador search 'retry_after:\s*\d+' --regex # regular expression, newest first
-trovador index                               # bring the index fully up to date
-trovador index --rebuild                     # discard it and build again
-trovador doctor                              # archives and index
-trovador serve                               # MCP over stdio
+trovador search "connection reset by peer" --since 2w
+trovador sessions transcript 79892eda --offset 6070 --limit 20
 ```
 
-The `--since` and `--until` filters accept RFC 3339 times with `Z` or numeric offsets
-(for example, `2026-10-01T09:00:00-07:00`, equivalent to `2026-10-01T16:00:00Z`),
-dates at midnight UTC, and durations back from now. Times without a zone use UTC.
+**"What did Codex say about the migration?"** Narrow by backend and project:
 
-Every command prints one JSON document. The MCP `sessions` tool takes the same inputs as an
-`action` of `list`, `show`, `transcript`, or `text`, and the `search` tool takes the same inputs as
-`trovador search`; both return the same JSON as the CLI. Resources
-`session://{backend}/{id}` and `session://{backend}/{id}/transcript` return `show` and the
-first transcript page.
+```sh
+trovador search migration --backend codex --project payments
+```
 
-### Paging
+**"What was I doing yesterday?"** List recent sessions, newest first:
 
-`sessions list` and `search` return one page: `--limit` sessions (`TROVADOR_LIST_DEFAULT`,
-`TROVADOR_SEARCH_DEFAULT`), starting `--offset` sessions in. A result that has more after it
-carries `next_offset`; pass it as `offset`, with the same other inputs, for the next page.
-The last page has no `next_offset`. The MCP `sessions` tool (for `action: list`) and `search`
-take `offset` too, and the library computes both, so the doors return the same page.
+```sh
+trovador sessions list --since 1d
+```
 
-- **The unit is a session.** A search groups its matching records by session, and `offset`
-  counts sessions in that order: best match first, or newest first with `--recent` and for
-  `--regex`. Ties on score and time break by the index's session number, so the order is
-  total and two pages never split a tie differently. A list counts sessions that pass every
-  filter, so `--offset 20` means the same thing whatever the filters hide.
-- **Coverage is for the whole result.** `sessions_matched`, `exhaustive`, `coverage` and
-  the `hidden` counts for the defaults (`active`, `automated`, `subagents`, `excluded`)
-  describe the query, not the page, and are the same on every page. Two `hidden` counts
-  are for the page only: `unavailable` (a match whose file or archive root could not be
-  read) and `unrecognized` (shown only when above zero: a match indexed under a backend this version does not know;
-  `trovador index --rebuild` fixes it). `absence_is_proof` appears only on an empty page
-  and is false for any `offset` above zero, or when the page consumed matches it could not
-  show. A page past the last match says how many matched; a page with matches but nothing
-  showable says so and keeps `next_offset`. With zero matches and an offset above zero,
-  the note says to retry at offset 0.
-- **Look-ahead.** A list learns whether another page exists by reading past a full page
-  until it finds one more matching session, at most `TROVADOR_LIST_LOOKAHEAD` sessions
-  (500) so a selective `--project` or `--origin` filter does not read every remaining
-  session. A list's `truncated` is true when it found one, or when it stopped at that bound
-  with older sessions unread; `next_offset` is present exactly when `truncated` is, and the
-  next page can then be empty. `truncated` false means the list reached its end.
-- **No snapshot between pages.** Each page is a fresh query. Sessions written while paging
-  can shift later pages, so an item can repeat or be skipped, most visibly in a list, which
-  puts new sessions first. For a steady walk, pass the same `--until` (an RFC 3339 time
-  taken before the first page) on every page; sessions written afterwards are then outside
-  the window. A search that brings the index up to date between pages can also change bm25
-  scores, so a relevance order can move between pages where `--recent` does not.
-- **Bounds.** An offset above `TROVADOR_OFFSET_MAX` (1,000,000) is rejected with `invalid
-  offset`; a negative or non-numeric offset is rejected as an invalid number by both doors.
-  An offset past the last result is not an error: it returns an empty page.
-- **Archived threads.** `--archived true` keeps only Codex threads read from
-  `archived_sessions`, `--archived false` keeps only sessions not read from it (all Claude
-  sessions and Codex threads that are not archived), and leaving it out includes both, as
-  before. It is a filter you ask for, so what it excludes is not counted in `hidden`.
+**"Summarize that session."** An agent reads the session as plain text, in parts, and
+summarizes it with its own judgment of what matters:
 
-## Examples
+```sh
+trovador sessions text 27d1f434
+```
 
-Real output from the development machine on 2026-10-08, over 5,452 sessions, while working on
-trovador itself. Fields are trimmed (`…`), and home paths are shortened to `~`. Costs are as
-the provider reported them.
+**"Where did that PR come from?"** A session row carries the pull requests and artifacts it
+linked, its title and first prompt, and the command to resume it:
 
-**Where did that come from?** One search covers both agents. The session running the search
-had just mentioned the term, so it is left out and counted in `hidden`.
+```sh
+trovador sessions show 27d1f434
+```
+
+**From an agent.** With the plugin installed, ask in plain words ("didn't we decide this in
+an earlier session?"). The `recall` skill has the agent call `search`, open the matching
+transcript with `sessions`, and cite the session it found.
+
+The shape of a search result, with illustrative values and most fields trimmed. Here the
+session doing the search had just mentioned the term, so it is left out and counted in
+`hidden`:
 
 ```console
-$ trovador search stdout-check --per-session 1
+$ trovador search rate-limit --per-session 1
 {
-  "query": "stdout-check",
-  "sessions_matched": 3,
-  "returned": 3,
+  "query": "rate-limit",
+  "sessions_matched": 2,
+  "returned": 2,
   "hits": [
     {
       "backend": "claude",
-      "session_id": "baad058e-684e-417c-9c59-dbf351e2dc7b",
-      "title": "spike-dev",
-      "matches": [{"index": 6074, "type": "tool_result",
-        "excerpt": "14: \"verify\": \"npm run fmt:check && npm run lint && npm run check && npm run [stdout-check] && npm test\","}],
+      "session_id": "3f2a9c1e-…",
+      "title": "api client retries",
+      "matches": [{"index": 412, "type": "tool_result",
+        "excerpt": "...the server returned 429 with a [rate-limit] header of 30 seconds..."}],
       …
     },
-    { "backend": "claude", "session_id": "79892eda-…", "title": "spike-dev2", … },
     {
       "backend": "codex",
-      "session_id": "01a007a0-134e-70e2-84e5-a19ae6996317",
-      "matches": [{"index": 2987, "type": "system",
-        "excerpt": "...cal blocker: `npm run fmt:check` fails on `README.md`. Tests pass 449/0; typecheck, lint, [stdout-check], and `git diff --check` pass."}],
+      "session_id": "019f4b7d-…",
+      "matches": [{"index": 88, "type": "assistant",
+        "excerpt": "...backing off on [rate-limit] responses before retrying..."}],
       …
     }
   ],
@@ -250,300 +163,288 @@ $ trovador search stdout-check --per-session 1
 }
 ```
 
-**Open it where the match is.** `index` is the record to start a transcript page at.
+## Usage
 
-```console
-$ trovador sessions transcript 79892eda --limit 4
-{
-  "backend": "claude",
-  "session_id": "79892eda-e7f0-4ff6-a162-623ae8bc2718",
-  "offset": 0,
-  "records": [
-    {"index": 0, "type": "omitted", "name": "ai-title", "count": 1},
-    {"index": 1, "type": "omitted", "name": "queue-operation", "count": 2},
-    {"index": 2, "type": "user", "text": "```ini\n[wrap] main f528143 · 2 PRs open · 52 issues · working tree clean\n…"},
-    {"index": 3, "type": "omitted", "name": "attachment", "count": 4}
-  ],
-  "has_more": true,
-  "next_offset": 4
-}
+Every command prints one JSON document on stdout. Diagnostics go to stderr.
+
+### CLI
+
+| Command | What it does |
+|---|---|
+| `trovador sessions list` | Sessions newest first, one page at a time |
+| `trovador sessions show <id>` | One session's metadata, resumability, and resume command |
+| `trovador sessions transcript <id>` | One page of the session's projected transcript |
+| `trovador sessions text <id>` | The whole session as plain text, in parts |
+| `trovador search <query>` | Full-text search across every session |
+| `trovador index [--rebuild]` | Bring the index fully up to date, or discard and rebuild it |
+| `trovador doctor` | Archive paths and counts, the index, and every setting in effect |
+| `trovador init` | Install the plugin into Claude Code and Codex |
+| `trovador serve` | Run the MCP server over stdio |
+| `trovador hook session-start` | The SessionStart hook handler, run by a host, not by hand |
+
+A session id can be given in full or as any unambiguous prefix.
+
+```sh
+trovador sessions list --project trovador     # project path contains this text (ASCII case-insensitive)
+trovador sessions list --origin cli           # how the session was started
+trovador sessions list --include-subagents    # also sessions started by other sessions
+trovador sessions list --archived true        # only Codex threads in archived_sessions (false: only the rest)
+trovador sessions list --offset 20            # the next page, from next_offset of the last one
+trovador sessions transcript 27d1f434 --offset 200 --limit 50
+trovador sessions text 27d1f434 --offset 100000 --expected-revision <revision>
+trovador search idempotency_key               # words and "quoted phrases", all required
+trovador search 'redact NOT summary' --fts    # FTS5 syntax
+trovador search 'retry_after:\s*\d+' --regex  # regular expression, newest first
+trovador search parser --recent --per-session 5
 ```
 
-**What happened in it?** `sessions text` returns the session as plain text, one block per
-record, in parts of `TROVADOR_RESPONSE_MAX_CHARS`. An agent reads as many parts as it needs
-and summarizes them itself; `truncated.next_offset` says where the next part starts.
+Filters shared by `sessions list` and `search`:
 
-**Check a new machine.**
+| Option | Meaning |
+|---|---|
+| `--backend claude\|codex` | One provider only |
+| `--project <text>` | Project path contains this text, ignoring ASCII case |
+| `--origin <origin>` | How it was started: `cli`, `claude-desktop`, `sdk-cli`, `exec`, `vscode`, ... |
+| `--since`, `--until` | Last written at or after, or before: an RFC 3339 time (`Z` or a numeric offset), a date at midnight UTC, or a duration back from now (`36h`, `2d`, `1w`) |
+| `--archived true\|false` | Only archived Codex threads, or only everything else |
+| `--include-subagents[=false]` | Include, or with `=false` hide, sessions started by another session |
+| `--include-automated[=false]` | Include, or hide, `claude -p` and `codex exec` sessions |
+| `--limit`, `--offset` | Page size, and sessions to skip (follow `next_offset`) |
 
-```console
-$ trovador doctor
-{
-  "version": "0.1.0",
-  "ok": true,
-  "problems": [],
-  "archives": [
-    {"name": "claude", "path": "~/.claude/projects", "readable": true, "sessions": 1594},
-    {"name": "codex", "path": "~/.codex/sessions", "readable": true, "sessions": 3786},
-    {"name": "codex archived", "path": "~/.codex/archived_sessions", "readable": true, "sessions": 73}
-  ],
-  "index": {"size_bytes": 418643968, "sessions": 5452, "text_indexed": 3694, "records": 671135, …},
-  …
-}
-```
+`search` also takes `--include-active[=false]` (sessions written in the last 10 minutes),
+`--exclude-session <id>`, `--per-session <n>` (matching records shown per session), `--recent`
+(newest first instead of best match), `--fts`, and `--regex`.
 
-## What a session row carries
+`--no-redact`, before or after the command, shows secrets instead of `[redacted:<kind>]`.
+
+### MCP
+
+`trovador serve` offers two tools and two resources, all read-only, returning the same JSON
+as the CLI:
+
+| Tool or resource | Inputs |
+|---|---|
+| `search` | The same inputs as `trovador search`: `query`, `fts`, `regex`, `backend`, `project`, `origin`, `include_active`, `include_automated`, `include_subagents`, `exclude_session`, `since`, `until`, `archived`, `limit`, `offset`, `per_session`, `order` |
+| `sessions` | `action`: `list`, `show`, `transcript`, or `text`, with the inputs of the matching CLI command (`session_id`, `offset`, `limit`, `expected_revision`, and the list filters) |
+| `session://{backend}/{id}` | The same as `sessions` `show` |
+| `session://{backend}/{id}/transcript` | The first transcript page |
+
+The server tells clients that transcript text is historical data and not instructions.
+Redaction can only be turned off with `trovador serve --no-redact`; no tool argument can.
+
+A client that knows its own session id (the SessionStart hook provides it) should pass it as
+`exclude_session` together with `include_active: true`. That leaves out only the current
+conversation instead of every session written in the last 10 minutes.
+
+### Reading what comes back
+
+**Session rows.** `sessions list`, `sessions show`, and every search hit carry:
 
 | Field | Source |
 |---|---|
 | `project` | Where a resume runs from: Claude's latest `relocated` cwd, else the first `cwd` |
-| `snippet` | The first block the user typed, skipping injected `<...>` context and AGENTS.md; a forked Codex child uses its own first message, including an inter-agent assignment |
+| `snippet` | The first block the user typed, skipping injected `<...>` context and AGENTS.md |
 | `title`, `title_source` | Claude `custom-title` (typed) over `ai-title` (generated); latest wins |
 | `origin` | Claude `entrypoint` (`cli`, `claude-desktop`, `sdk-cli`); Codex `source` (`cli`, `vscode`, `exec`, `guardian`, `thread_spawn`) |
 | `subagent`, `parent_session_id` | Codex sessions started by another session |
 | `artifacts`, `pull_requests` | Claude `frame-link` and `pr-link` records |
 | `archived` | Codex moved the thread to `archived_sessions` |
-| `resumable` | Transcript size under the resume ceiling (900,000 bytes) |
-| `open_with` | The command to paste in a terminal |
+| `resumable` | The transcript is under the resume ceiling (900,000 bytes, decompressed) |
+| `open_with` | The command to paste in a terminal to resume it |
 
-Indexed Claude files retain the latest custom title across appends. Without an index,
-files up to `TROVADOR_TITLE_SCAN_MAX_BYTES` (4,194,304 bytes by default) are scanned for
-custom titles. Larger unindexed files use the head and tail windows, so a custom title
-between those windows can be missed. Run `trovador index` to recover it. Setting the limit
-to `0` disables the fallback scan. Between index refreshes, list and show scan appended
-bytes only when `size - stored offset` fits the same budget. Above it, they apply the
-stored custom title over the head/tail metadata until `trovador index` or search refreshes
-the file. Complete final JSON title records without a newline can be displayed within
-the budget, but enter the persisted title state only after their newline is written.
+**Transcript records** are `user`, `assistant`, `tool_call`, `tool_result`, `attachment`,
+`system`, `reasoning`, `unrecognized`, or `omitted`:
 
-Lists hide subagents by default. On the machine this was developed on, 2,950 of 5,292
-sessions were subagents, 1,694 of them Codex `guardian` approval reviewers.
+- `omitted` stands for records of a known type with nothing to read: client bookkeeping,
+  context injected for the model, images and other binary data, encrypted content. `name` is
+  the category, and consecutive ones collapse into one record with a `count`.
+- `unrecognized` is a record, content block, attachment subtype, or Codex item of a type
+  trovador has not been taught. `name` is the provider's type and `text` a shortened copy of
+  its raw JSON, with binary and encrypted values replaced by `"[binary]"`. Search indexes it,
+  so text in a shape a newer CLI introduced can still be found.
+- `reasoning` appears only where the provider kept readable text: Claude thinking, Codex
+  reasoning summaries.
+- A Claude prompt typed while a turn was running is a `user` record named `queued`.
 
-## Transcripts
+Text is capped per record (4,000 characters, 600 for tool calls and results) and per page
+(100,000 characters). A page that stopped early says so and gives `next_offset`.
 
-Records are `user`, `assistant`, `tool_call`, `tool_result`, `attachment`, `system`, `reasoning`,
-`unrecognized`, or `omitted` with a category. `reasoning` appears only when the provider kept
-readable text.
+**Paging.** `sessions list`, `search`, and `sessions transcript` return one page. When there
+is more, the result carries `next_offset`; pass it as `offset` with the same other inputs.
+No `next_offset` means that was the last page. A search counts sessions, not records, and its
+totals (`sessions_matched`, `hidden`, `exhaustive`) describe the whole result on every page.
+Each page is a fresh query, so sessions written while paging can shift later pages; pass the
+same `--until` on every page for a steady walk.
 
-`omitted` is for a known type with nothing to read: client bookkeeping, context injected for
-the model, binary images and documents, encrypted content. `unrecognized` is for a record,
-content block, attachment subtype or Codex item of a type trovador has not been taught. Its
-`name` is the type (`attachment:<subtype>` for an attachment), and its `text` is the
-record's JSON without the envelope fields, with binary and encrypted values replaced by
-`"[binary]"`, cut to `TROVADOR_UNRECOGNIZED_CHARS` (1,000) characters. Search indexes that
-text, so words in a shape the providers introduced after this release can still be found;
-the text is shown as data, not interpreted. Each unrecognized record stands alone and is
-never collapsed. `TROVADOR_UNRECOGNIZED_CHARS=0` shows them as `omitted` instead and keeps
-them out of the index.
+**Revisions.** Every transcript page and text part reports a `revision` of the session it
+was read from. Pass it back as `expected_revision` on each continuation. A session that has
+only been appended to since is still read as it was, so a walk through a live session stays
+consistent; the page then carries `grown` with the `current_revision`. A session changed in
+any other way (rewritten, moved, compressed, read with different settings) is refused with
+the current revision, and the caller starts again from offset 0.
 
-A Claude prompt typed while a turn is running is a `user` record named `queued` when Claude
-Code delivered it into that turn (a `queued_command` attachment), and an ordinary `user`
-record when it was dequeued as the next turn. A prompt removed from the queue before delivery
-never reached the model and stays in the omitted `queue-operation` run, as does `last-prompt`,
-a UI copy that is most often a shortened user prompt. Task notifications, which use the same
-attachment, stay omitted.
+**Search results.** Each hit lists matching records with an `index`, which is the transcript
+offset to open the match at, and an excerpt with the match in brackets. `hidden` counts
+matching sessions left out by a default (`active`, `automated`, `subagents`), by
+`exclude_session`, or because their archive could not be read. `exhaustive` is false when
+the index was not fully current, and `absence_is_proof` says whether an empty result means
+the text is not there. Read `note` when either is false.
 
-Forked Codex children collapse copied parent history into an `omitted` record named
-`forked_history`; it does not contribute turns, indexed text, or session text. An
-impossible boundary in a finished file (archived, or compressed, which Codex does only to
-finished rollouts) preserves the original transcript, and the index holds what it shows. A
-terminal-event fallback in a plain unarchived file is for display only; indexing waits for a
-known boundary, since Codex may still append the child's own records. On the development
-machine on 2026-11-18, all 1,528 forked children were in `history_mode: paginated`, and 540
-of them, every one compressed, never reach their start ordinal. Their transcripts include
-any history they copied, but only 5.1% of their text by characters also appears verbatim in
-the parent rollout, so indexing them adds 76,403 records (81 MB, 13.9%) that were not
-searchable before. They are subagents, which search hides unless `include_subagents` is set.
-Consecutive omitted records of one category collapse into one
-with a `count`. Text is capped per record (4,000 chars, 600 for tool calls and results) and
-per page (100,000 chars); a page says when it stopped early and where to continue.
+**Session text.** `sessions text` renders user and assistant turns, tool calls and results,
+attachments, and system records, without omitted, reasoning, or unrecognized records. The
+text is redacted as a whole and then cut into parts of 100,000 characters, so no part can
+begin or end inside a secret. `truncated.next_offset` says where the next part starts.
 
-**Revisions.** A transcript offset is a record index and a text offset is a character of
-the rendered, redacted text, so a session rewritten between two pages can make the second
-skip or repeat content. Every transcript page and text part therefore reports a
-`revision`, an opaque string naming the state of the session it was read from. Pass it
-unchanged as `expected_revision` (`--expected-revision` on the CLI) on every continuation;
-the first page and every continuation of one walk report the same string. The text
-`truncated.continue_with` already carries it. Without `expected_revision` the call reads the
-session as it is and reports the revision of that state.
+## Configuration
 
-The revision is one string that carries what a later call needs to recover the state it
-names: the size the read was cut at, the file's mtime, hashes of the first and last 4 KB of
-those bytes, a kind (plain, a Codex fork with an unresolved boundary, or compressed) and a
-hash of the file path, the archived flag, the projection version and the record and tool
-character limits and redact setting. Its format is not a promise. Producing it reads two
-4 KB regions, and for a Codex file a classification read: the header line for an unforked
-file, the lines up to the history boundary for a fork, and all the bytes up to the size for
-a fork whose boundary is not reached. On a 208 MB unresolved fork (release build, three
-runs) a refused continuation, which is classification only, took 0.10 to 0.11 s and a first
-page with `--limit 1` 0.25 s; a 208 MB unforked file took 0.00 s for both. A string that
-does not parse back to exactly itself is refused like a stale one.
+Everything is set with environment variables. `trovador doctor` reports the value of each in
+effect. For the MCP server, the variables must be set in the environment the host starts it
+in.
 
-**A session that has only grown.** If the file is larger than the revision's size and its
-first bytes still match the samples, the call is served the session as it was at that
-size: the read stops there, offsets and records are exactly what the revision described,
-and `total` and the end of the session are those of that state: the end of a pinned walk is
-the end of the session as it was at that revision, and `grown` says more exists. The response carries
-`grown`, with `current_revision` and `bytes_added`, so the caller can start a fresh read
-without `expected_revision` when it wants the new content. This is what lets an agent page
-through a session that is still being written. A torn final line at the cut is projected
-as it was on the first read, because the bytes are the same.
+**Where things are.**
 
-**What refuses.** Any other mismatch is an error on both doors, like a lookup that finds
-nothing, naming the revision the caller passed and the current one, and telling the caller
-to restart from offset 0 without `expected_revision`: a rewrite or truncation, a file
-moved between the active and archived roots, a file compressed or replaced, different
-`TROVADOR_*` limits or `--no-redact`, a touch that leaves the size unchanged, a malformed
-string, and any append to a Codex fork
-whose start ordinal has not been reached in the bytes read. For that fork a later line can
-resolve the boundary and turn records already shown into `forked_history`, so the append
-cannot be tolerated. The same root reached through a different path spelling or a symlink
-gives a different revision, so two doors configured with different spellings of a root
-never share one. A compressed rollout is revised by its stored size and mtime, so
-compressing a plain rollout changes the revision even though the records do not, and a
-compressed token never matches a grown file.
-
-**Limits of the check.** The mtime is compared only while the file is still the size the
-revision names, because an append moves it. At that size it catches a same-size rewrite
-with a new mtime. Once the file has grown, a rewrite of the first bytes that leaves the
-sampled first and last 4 KB as they were cannot be told from an append, and a rewrite that
-keeps the size, the mtime and the samples is not detected at all. A compressed rollout
-replaced in place with the same size and mtime is not detected. Reads of a plain file stop
-at the size the revision names, for the fork-boundary scan as well as the records, so
-bytes appended during a read are never returned under that revision. If a plain file is
-rewritten during a read, the call fails with a message to retry.
-
-Offsets into a compressed rollout count decompressed bytes. A zstd stream has no random
-access, so a page or index pass that starts partway through decodes from the beginning and
-discards what it skips. A rollout that stops decoding partway is a read error for that
-session, never a shorter transcript. `resumable` for a compressed rollout uses the
-decompressed size from the frame header: one measured at 749 KB on disk held 2,947 KB of
-JSONL.
-
-Codex writes each turn to more than one stream. trovador projects the one the user saw:
-`item_completed` events in current versions, `user_message` and `agent_message` events in
-older ones, and `response_item` records in the oldest files. In Items mode, user turns
-that exist only as response items are also retained, including guardian review turns.
-Copies across response, user-message event, and UserMessage item streams are projected
-once even when their text blocks were flattened. Response user blocks concatenate
-without adding separators. Separate identical turns remain separate. Injected response
-blocks stay excluded from the displayed user text.
-
-Files are streamed. A page from a 377 MB Codex session took 0.30 s and 6.8 MB of resident
-memory (release build, `/usr/bin/time -l`, 2026-10-07).
-
-## Search
-
-The index is SQLite with FTS5 at `~/.trovador/index.db`: one row of metadata per session and
-one full-text row per projected record that carries text, keyed so a hit's `index` is the
-transcript offset to open it at.
-
-- **Queries.** By default every word and "quoted phrase" is required and each matches as a
-  sequence of tokens, so a UUID or a `snake_case` name matches as written. `--fts` passes
-  FTS5 syntax through (`OR`, `NOT`, `NEAR`, `prefix*`). `--regex` runs a case-insensitive
-  regular expression over the indexed text. Terms are checked with the index's SQLite
-  tokenizer before opening or refreshing the index. A non-empty term that produces no
-  tokens is rejected because the AND query cannot match; use `--regex` to search
-  punctuation. Empty quoted phrases and stray quotes are ignored, but a query with no
-  remaining searchable terms is rejected. Valid FTS5 syntax runs unchanged, including
-  negated filters and OR branches. When an FTS query returns no hits and references the
-  unindexed `kind` or `name` columns or contains a phrase or word with no tokens,
-  `absence_is_proof` is false and a note explains why.
-- **Ranking.** Sessions are ordered by their best-matching record (bm25), or by recency with
-  `--recent`. Regex results are always newest first.
-- **Hidden matches.** `hidden` counts matching sessions left out: `active` for recent
-  writes, `automated` for automated sessions not started by trovador, `subagents` for
-  sessions started by another session, `excluded` for `exclude_session`, and `unavailable`
-  for unreadable archive roots. Counts can overlap. Use `--include-active`,
-  `--include-automated`, or `--include-subagents` to include the respective defaults.
-  An empty result with hidden matches has `absence_is_proof: false`; its note names
-  the options that can reveal those matches.
-- **Changing the defaults.** `TROVADOR_INCLUDE_ACTIVE`, `TROVADOR_INCLUDE_AUTOMATED`, and
-  `TROVADOR_INCLUDE_SUBAGENTS` set whether a call that does not say includes each group
-  (`1`, `true`, `yes`, `on`, or `0`, `false`, `no`, `off`; anything else keeps the
-  default, which is to hide). A call always wins: `--include-subagents` or
-  `include_subagents: true` includes, `--include-subagents=false` or
-  `include_subagents: false` hides, whatever the default. `trovador doctor` reports the
-  values in effect. For the MCP server the variables must be in the environment the host
-  starts it in. `list` applies the automated and subagent defaults; it never hides
-  active sessions.
-- **Freshness.** A search first brings the index up to date, for at most
-  `TROVADOR_INDEX_BUDGET_MS` (15,000). Files only appended to are read from where the last
-  pass stopped; anything else changed is read again. `exhaustive` is true only when nothing
-  was left out, and `absence_is_proof` says whether an empty result means the text is not
-  there.
-- **Not indexed.** Codex `guardian` approval reviewers keep their metadata but not their
-  text, which is a copy of their parent session's history. `coverage.text_excluded` counts
-  them.
-
-Measured on 5,366 local sessions (12.4 GB of JSONL) on 2026-10-07, release build:
-
-| Operation | Time |
+| Variable | Default |
 |---|---|
-| `trovador index --rebuild` | 8.65 s, 285 MB database, 511,568 records |
-| A search with nothing new to index | 94 to 107 ms |
-| A search that picks up two appended sessions | 234 ms |
-| `sessions list` over every session, index present | 0.09 s (8.8 s without) |
+| `TROVADOR_CLAUDE_ARCHIVE` | `~/.claude/projects` |
+| `TROVADOR_CODEX_ARCHIVE` | `~/.codex/sessions` |
+| `TROVADOR_CODEX_ARCHIVED` | `archived_sessions` beside the Codex archive (`~/.codex/archived_sessions`) |
+| `TROVADOR_HOME` | `~/.trovador`, which holds the index and the plugin marketplace |
+| `TROVADOR_LOG` | `warn`; a `tracing` filter for diagnostics on stderr |
 
+**What search and list show.** Each takes `1`, `true`, `yes`, `on`, or `0`, `false`, `no`,
+`off`; any other value keeps the default. A call's own `include_*` input always wins, in
+either direction.
 
-When the index cannot be updated, because its directory is not writable (an agent sandbox,
-a read-only filesystem), search reads the index as it is. `exhaustive` is false and `note`
-says why, since sessions written after the last refresh are not covered. With no index, or
-one built by another version, search fails and says to run `trovador index` where it can
-write, or to use the MCP server. The read-only path takes no locks when there is no WAL, so
-it checks after its last read that the file did not change under it and fails with a
-request to retry if it did. On a 482 MB index it took 0.10 s and 17 MB of memory.
+| Variable | Default | Effect |
+|---|---|---|
+| `TROVADOR_INCLUDE_ACTIVE` | off | Include sessions written within `TROVADOR_ACTIVE_WINDOW_S` (search only) |
+| `TROVADOR_INCLUDE_AUTOMATED` | off | Include `claude -p` and `codex exec` sessions |
+| `TROVADOR_INCLUDE_SUBAGENTS` | off | Include sessions started by another session |
+| `TROVADOR_ACTIVE_WINDOW_S` | 600 | What counts as active; `0` hides nothing for being recent |
 
-## Session text
+**What the index holds.**
 
-`sessions text` (MCP: `sessions` with `action: text`) renders a session the way a summary
-needs it: user and assistant turns, tool calls and results, attachments, and system
-records, without omitted records, reasoning headings, or unrecognized records (which are
-raw JSON; transcripts and search still show them). The text is redacted as a whole
-and then cut into parts of `TROVADOR_RESPONSE_MAX_CHARS` (100,000) characters, so no part
-can begin or end inside a secret. `offset` counts characters of the redacted text. A
-forked Codex child's text leaves out the parent history it copied.
+| Variable | Default | Effect |
+|---|---|---|
+| `TROVADOR_INDEX_REDACT` | off | Redact secrets before writing the index, not only on output |
+| `TROVADOR_INDEX_REASONING` | on | Index reasoning records; `0` leaves them out (416 MB to 290 MB on the development machine) |
+| `TROVADOR_INDEX_BUDGET_MS` | 15000 | How long a search may spend updating the index before it queries |
 
-trovador once made these summaries itself with haiku and cached them. The agent asking is
-already a model, with its own judgment of what matters for the question, so it is given the
-text instead. Each part renders the whole session again; there is no cache of rendered
-text, because it would be a second copy of transcript content, secrets included.
+**Sizes**, which are context budgets as much as anything: most of what trovador returns ends
+up in an agent's context window.
 
-## Where things live
+| Variable | Default | Effect |
+|---|---|---|
+| `TROVADOR_RESPONSE_MAX_CHARS` | 100000 | Characters of content in one transcript page or text part |
+| `TROVADOR_RECORD_CHARS` | 4000 | Per-record cap |
+| `TROVADOR_TOOL_CHARS` | 600 | Cap for tool calls and results |
+| `TROVADOR_UNRECOGNIZED_CHARS` | 1000 | Cap for `unrecognized` records; `0` shows them as `omitted` and keeps them out of the index |
+| `TROVADOR_PAGE_SIZE` | 200 | Records per transcript page, at most |
+| `TROVADOR_LIST_DEFAULT` | 20 | Sessions per list page |
+| `TROVADOR_SEARCH_DEFAULT` | 20 | Sessions per search page |
+| `TROVADOR_PER_SESSION` | 3 | Matching records shown per session |
+| `TROVADOR_LIST_LOOKAHEAD` | 500 | Sessions a list reads past a full page to learn whether another page exists |
+| `TROVADOR_OFFSET_MAX` | 1000000 | Largest offset accepted |
+| `TROVADOR_RESUME_LIMIT` | 900000 | Bytes above which a session is reported not resumable |
+| `TROVADOR_HEAD_BYTES`, `TROVADOR_HEAD_MAX_BYTES` | 65536, 4194304 | How far into a file metadata is looked for |
+| `TROVADOR_TITLE_SCAN_MAX_BYTES` | 4194304 | Size up to which an unindexed Claude file is scanned for its custom title; `0` disables it |
 
-trovador reads `~/.claude/projects`, `~/.codex/sessions`, and `~/.codex/archived_sessions`
-and never writes to any of them. Its own state is the search index, `~/.trovador/index.db`,
-which is derived and can be deleted at any time; the directory is 0700 and its files 0600.
-`sessions list` reads the index when it exists but never creates it. Override the paths with
-`TROVADOR_CLAUDE_ARCHIVE`, `TROVADOR_CODEX_ARCHIVE`, `TROVADOR_CODEX_ARCHIVED`,
-and `TROVADOR_HOME`. Limits are listed by `trovador doctor` and
-overridable with `TROVADOR_*` variables (see `src/limits.rs`). `TROVADOR_INDEX_REASONING=0`
-leaves reasoning records out of the index (416 MB to 290 MB on the development machine);
-transcripts still show them.
+Changing a setting that shapes what the index stores (the character caps, reasoning,
+redaction) starts a fresh index file on the next search or `trovador index`.
 
-By default the index holds transcript text as written, secrets included, so a search for a
-token finds its session; what is returned is redacted. `TROVADOR_INDEX_REDACT=1` applies
-the same redaction before writing, to record text, first prompts and titles, so no file
-under `~/.trovador` holds a secret the rules recognise. A search for a secret then finds
-nothing, and with `--no-redact` excerpts and indexed titles still show `[redacted:<kind>]`;
-transcripts and session text read the provider files and are unaffected. Changing the
-setting starts a fresh index file. On the development machine on 2026-11-18 it redacted
-about 2,300 of 1,078,470 records, and a full build took 16.2 s against 15.4 s.
+## Privacy and secrets
 
-## Testing on a new machine
+trovador reads `~/.claude/projects`, `~/.codex/sessions`, and `~/.codex/archived_sessions` and
+never writes to them. Its index at `~/.trovador/index.db` is derived and can be deleted at any
+time; the directory is 0700 and its files 0600. `sessions list` reads the index when it
+exists but never creates it.
 
-`cargo test` runs fixture archives only. `tests/live.rs` checks properties that must hold for
-any machine's real archives, whatever CLI versions wrote them: every session file listed
-once, transcripts contiguous and capped, the index equal to the transcript projection,
-search finding a phrase taken from any indexed record, CLI and MCP agreeing, and archive
-files left untouched. Its state goes to the cargo target directory, never `~/.trovador`.
+Output on both doors is redacted: API keys, tokens, private keys, and `NAME=value` secrets
+become `[redacted:<kind>]`, including in search excerpts and session text. Only
+`--no-redact` given when the process starts turns that off.
+
+By default the index holds transcript text as written, so a search for a token still finds
+its session. With `TROVADOR_INDEX_REDACT=1`, the same redaction is applied before anything is
+written, so no file under `~/.trovador` holds a secret the rules recognise. A search for a
+secret then finds nothing, and with `--no-redact` search excerpts and titles still show
+`[redacted:<kind>]`; transcripts and session text read the provider files and are unaffected.
+On the development machine on 2026-11-18 it redacted about 2,300 of 1,078,470 records, and a
+full index build took 16.2 s against 15.4 s.
+
+## How it works
+
+**What is on disk is what the providers kept.** Claude Code deletes old transcripts after
+its `cleanupPeriodDays`, and Codex moves archived threads to `~/.codex/archived_sessions`,
+which trovador also reads. A transcript the provider deleted disappears from trovador on the
+next index refresh that can read its archive. Codex 0.165 and later compress finished
+rollouts to `.jsonl.zst`; trovador reads those the same as plain files.
+
+**The index** is SQLite with FTS5: one metadata row per session and one full-text row per
+transcript record that carries text, keyed so a match's `index` is its transcript offset.
+Every search first brings it up to date for at most `TROVADOR_INDEX_BUDGET_MS`. Files that
+were only appended to are read from where the last pass stopped; anything else that changed
+is read again. When the index cannot be written (an agent sandbox, a read-only filesystem),
+search reads it as it is and says the result is not exhaustive. Codex `guardian` approval
+reviewers keep their metadata but not their text, which is a copy of their parent's history.
+
+Measured on the development machine, release build:
+
+| Operation | Result |
+|---|---|
+| Full index build, 9,008 sessions (2026-11-18) | 15.4 s, 670 MB, 1,078,470 records |
+| A search with nothing new to index (2026-10-07) | 94 to 107 ms |
+| A search that picks up two appended sessions (2026-10-07) | 234 ms |
+| `sessions list` over every session, index present (2026-10-07) | 0.09 s (8.8 s without) |
+| One page from a 377 MB Codex session (2026-10-07) | 0.30 s, 6.8 MB resident |
+
+**Codex streams.** Codex writes each turn more than once. trovador shows the copy the user
+saw: `item_completed` events in current versions, `user_message` and `agent_message` events
+in older ones, and `response_item` records in the oldest, and shows a turn copied across
+streams once.
+
+**Codex forks.** A Codex subagent started as a fork begins with a copy of its parent's
+history. That copy becomes one `omitted` record named `forked_history`, and contributes no
+turns, indexed text, or session text. When the file never reaches the boundary its header
+names, a finished file (archived, or compressed) keeps its whole transcript and is indexed
+as shown, while a file Codex may still append to waits for the boundary.
+
+**Revisions** carry the size the read was cut at, the file's mtime, hashes of the first and
+last 4 KB at that size, and a hash of the settings that shape the text; the format is not a
+promise. A rewrite that keeps the size, the mtime, and both sampled regions is not detected,
+and once a file has grown, a rewrite of its earlier bytes that leaves both samples unchanged
+looks like an append. A compressed rollout replaced in place with the same size and mtime is
+not detected either.
+
+**Titles.** Indexed Claude files keep their latest custom title across appends. Without an
+index, files up to `TROVADOR_TITLE_SCAN_MAX_BYTES` are scanned for it, and larger ones use
+their head and tail, so a title between them can be missed until `trovador index` runs.
+
+## Development
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+`cargo test` uses fixture archives built in temporary directories and never touches real
+state. `tests/live.rs` checks properties that must hold for any machine's real archives:
+every session file listed once, transcripts contiguous and capped, the index equal to the
+transcript projection, search finding a phrase from any indexed record, CLI and MCP agreeing,
+and archive files left untouched. Its state goes to the cargo target directory, never
+`~/.trovador`, and it sends nothing to a provider.
 
 ```sh
 cargo test --release --test live -- --ignored --nocapture
 ```
 
-No live test sends anything to a provider. Sampling is seeded and the seed is printed (`TROVADOR_LIVE_SEED` repeats a run). The
-output ends with a drift report of record kinds, omitted categories, and unrecognized types,
-where a record type a newer CLI introduced shows up as an unrecognized type.
+Sampling is seeded and the seed is printed (`TROVADOR_LIVE_SEED` repeats a run). The output
+ends with a drift report of record kinds, omitted categories, and unrecognized types; a type
+a newer CLI introduced shows up there as unrecognized.
+
+Releases are cut by release-plz, which publishes to crates.io and tags, and dist, which
+builds the binaries and the installer from the tag. `AGENTS.md` has the conventions for
+working in this repository.
 
 ## License
 
