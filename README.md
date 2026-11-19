@@ -189,6 +189,10 @@ Filters for `sessions list` and `search`:
 `--exclude-session <id>`, `--per-session <n>`, `--recent` (newest first instead of best
 match), `--fts`, and `--regex`.
 
+`--fields a,b,c` on `sessions list`, `sessions transcript` and `search` keeps only those
+fields in each item (see Fields below). `trovador schema <list|show|transcript|text|search>`
+prints the JSON schema of a command's output.
+
 `--no-redact` shows secrets instead of `[redacted:<kind>]`.
 
 ### MCP
@@ -198,8 +202,8 @@ the CLI:
 
 | Tool or resource | Inputs |
 |---|---|
-| `search` | As `trovador search`: `query`, `fts`, `regex`, `provider`, `project`, `origin`, `include_active`, `include_automated`, `include_subagents`, `exclude_session`, `since`, `until`, `archived`, `limit`, `offset`, `per_session`, `order` |
-| `sessions` | `action` (`list`, `show`, `transcript`, `text`) plus that command's inputs: `session_id`, `offset`, `limit`, `expected_revision`, list filters |
+| `search` | As `trovador search`: `query`, `fts`, `regex`, `provider`, `project`, `origin`, `include_active`, `include_automated`, `include_subagents`, `exclude_session`, `since`, `until`, `archived`, `limit`, `offset`, `per_session`, `order`, `fields` |
+| `sessions` | `action` (`list`, `show`, `transcript`, `text`) plus that command's inputs: `session_id`, `offset`, `limit`, `expected_revision`, list filters, `fields` (list and transcript) |
 | `session://{provider}/{id}` | Same as `sessions` `show` |
 | `session://{provider}/{id}/transcript` | First transcript page |
 
@@ -255,6 +259,16 @@ the item that would pass the budget, always returns at least one, and names the 
 search, 10 matches per session) are lowered, not refused, and also reported in
 `truncated_by`. Nothing is lost: `next_offset` continues, and `match_count` counts every
 matching record.
+
+**Fields.** Both tools publish an `outputSchema`, and `trovador schema` prints the same
+schemas. `fields` names the fields to keep in each session row (list), hit (search) or record
+(transcript); `matches.<field>` selects within a hit's matches. Each item keeps its identity
+(`provider` and `session_id`, or `index`), and envelope fields such as `next_offset`,
+`truncated_by`, `exhaustive` and `note` always stay. An unknown name is an error that lists
+the valid ones. The size budget counts the selected fields, so a lean request fits more
+items per page. For example, `"fields": ["title", "modified", "matches.excerpt"]` returns
+hits with just those. The schemas list no `required` fields, so a selected result still
+conforms.
 
 **Revisions.** Transcript pages and text parts report a `revision`. Pass it back as
 `expected_revision` when continuing. If the session was only appended to, it is read as it

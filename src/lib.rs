@@ -5,6 +5,7 @@
 pub mod archive;
 mod codex;
 pub mod doctor;
+pub mod fields;
 pub mod hook;
 pub mod index;
 pub mod init;
@@ -16,6 +17,7 @@ mod private;
 mod provider;
 pub mod redact;
 pub mod revision;
+pub mod schema;
 pub mod sessions;
 pub mod text;
 pub mod timespec;

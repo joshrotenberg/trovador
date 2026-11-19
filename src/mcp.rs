@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::fields::Shape;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tower_mcp::protocol::{ReadResourceResult, ResourceContent};
@@ -113,6 +114,10 @@ struct SessionsInput {
     /// other way, the call fails and names the current one; restart from offset 0 without
     /// it. Omit it on the first page.
     expected_revision: Option<String>,
+    /// For list and transcript: only these fields in each session row or record, plus its
+    /// identity (provider and session_id, or index). Envelope fields always stay. Unknown
+    /// names are an error listing the valid ones.
+    fields: Option<Vec<String>>,
 }
 
 /// Serializes a response the way the CLI does, so both doors return the same JSON.
@@ -130,7 +135,21 @@ fn to_json(value: &impl Serialize, opts: ServeOpts) -> tower_mcp::Result<serde_j
 /// against 25,940 compact, and hosts that cap results count the text. The MCP spec has a
 /// tool that returns structured content also return it as text, so both stay.
 fn json_result(value: &impl Serialize, opts: ServeOpts) -> tower_mcp::Result<CallToolResult> {
-    let v = to_json(value, opts)?;
+    selected_result(value, None, opts)
+}
+
+/// [`json_result`] with the caller's `fields` applied to the result's items.
+fn selected_result(
+    value: &impl Serialize,
+    select: Option<(Shape, &[String])>,
+    opts: ServeOpts,
+) -> tower_mcp::Result<CallToolResult> {
+    let mut v = to_json(value, opts)?;
+    if let Some((shape, names)) = select
+        && let Err(e) = crate::fields::select(&mut v, shape, names)
+    {
+        return error_result(format!("invalid fields: {e}"), opts);
+    }
     let text = compact(&v)?;
     let mut result = CallToolResult::text(text);
     result.structured_content = Some(v);
@@ -156,6 +175,7 @@ fn sessions_call(
     input: SessionsInput,
     opts: ServeOpts,
 ) -> tower_mcp::Result<CallToolResult> {
+    let select = |shape| input.fields.as_deref().map(|f| (shape, f));
     let need_id = || {
         input
             .session_id
@@ -176,11 +196,15 @@ fn sessions_call(
                 include_automated: input.include_automated,
                 since: input.since.clone(),
                 until: input.until.clone(),
+                fields: input.fields.clone(),
             };
             return match sessions::list(ctx, &list) {
-                Ok(r) => json_result(&r, opts),
+                Ok(r) => selected_result(&r, select(Shape::List), opts),
                 Err(e) => error_result(e, opts),
             };
+        }
+        SessionsAction::Show | SessionsAction::Text if input.fields.is_some() => {
+            Err("fields applies to list and transcript, whose results hold items".to_string())
         }
         SessionsAction::Show => need_id().and_then(|id| {
             sessions::show(ctx, id, input.provider)
@@ -196,7 +220,7 @@ fn sessions_call(
                 input.limit,
                 input.expected_revision.as_deref(),
             )
-            .map(|t| json_result(&t, opts))
+            .map(|t| selected_result(&t, select(Shape::Transcript), opts))
             .map_err(|e| e.to_string())
         }),
         SessionsAction::Text => need_id().and_then(|id| {
@@ -286,6 +310,7 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
              tokens.{UNTRUSTED}"
         ))
         .read_only_safe()
+        .output_schema(crate::schema::sessions_tool())
         .handler(move |input: SessionsInput| {
             let ctx = c.clone();
             let call = match input.action {
@@ -311,11 +336,16 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
              Costs no model tokens.{UNTRUSTED}"
         ))
         .read_only_safe()
+        .output_schema(crate::schema::of("search").expect("a published name"))
         .handler(move |input: SearchOpts| {
             let ctx = c.clone();
             async move {
                 blocking("search", move || match sessions::search(&ctx, &input) {
-                    Ok(r) => json_result(&r, opts),
+                    Ok(r) => selected_result(
+                        &r,
+                        input.fields.as_deref().map(|f| (Shape::Search, f)),
+                        opts,
+                    ),
                     Err(e) => error_result(e, opts),
                 })
                 .await?

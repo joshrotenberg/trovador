@@ -1567,6 +1567,10 @@ pub struct SearchOpts {
     pub per_session: Option<usize>,
     #[serde(default)]
     pub order: Order,
+    /// Only these fields in each hit; `matches.<field>` selects within matches, plus its identity (`provider`, `session_id`; `index` in matches).
+    /// Envelope fields always stay. Unknown names are an error listing the valid ones.
+    #[serde(default)]
+    pub fields: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

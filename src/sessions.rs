@@ -60,6 +60,8 @@ pub enum Error {
         provider: Provider,
         session_id: String,
     },
+    #[error("invalid fields: {0}")]
+    Fields(String),
     #[error("invalid offset: {0}")]
     Offset(String),
     #[error("reading {path}: {source}")]
@@ -147,6 +149,10 @@ pub struct ListOpts {
     pub since: Option<String>,
     /// Only sessions last written before this, in the same forms as `since`.
     pub until: Option<String>,
+    /// Only these fields in each item, plus its identity (`provider`, `session_id`).
+    /// Envelope fields always stay. Unknown names are an error listing the valid ones.
+    #[serde(default)]
+    pub fields: Option<Vec<String>>,
 }
 
 /// An offset within `limits.offset_max`, or the error to return for one beyond it. A
@@ -177,6 +183,22 @@ pub(crate) fn capped(
         (max, Some(format!("{name} {n} is above {setting} ({max})")))
     } else {
         (n, None)
+    }
+}
+
+/// The selection `fields` asks for, checked before any work so a typo fails fast.
+fn selection(
+    shape: crate::fields::Shape,
+    names: Option<&[String]>,
+) -> Result<Option<crate::fields::Fields>, Error> {
+    crate::fields::Fields::parse(shape, names.unwrap_or_default()).map_err(Error::Fields)
+}
+
+/// An item's size against the budget: as the caller will receive it, after selection.
+fn item_chars(fields: Option<&crate::fields::Fields>, item: &impl Serialize) -> usize {
+    match fields {
+        Some(f) => f.item_chars(item),
+        None => crate::output::json_chars(item),
     }
 }
 
@@ -351,6 +373,7 @@ pub fn list(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
 
 fn list_inner(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
     let offset = check_offset(opts.offset, &ctx.limits)?;
+    let fields = selection(crate::fields::Shape::List, opts.fields.as_deref())?;
     let (since, until) = window(opts.since.as_deref(), opts.until.as_deref())?;
     let all: Vec<ArchiveEntry> = archive::scan_all(&ctx.paths)
         .into_iter()
@@ -454,7 +477,7 @@ fn list_inner(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
             break;
         }
         let r = row(e, meta, &ctx.limits);
-        let size = crate::output::json_chars(&r);
+        let size = item_chars(fields.as_ref(), &r);
         if !sessions.is_empty() && chars + size > ctx.limits.response_max_chars {
             truncated = true;
             budget_note = Some(over_budget(&ctx.limits));
@@ -804,6 +827,7 @@ fn search_inner(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         return Err(Error::Query("query is empty".into()));
     }
     let offset = check_offset(opts.offset, &ctx.limits)?;
+    let fields = selection(crate::fields::Shape::Search, opts.fields.as_deref())?;
     if opts.regex && opts.fts {
         return Err(Error::Query("choose regex or fts, not both".into()));
     }
@@ -914,7 +938,7 @@ fn search_inner(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
             match_count: h.match_count,
             matches: h.matches,
         };
-        let size = crate::output::json_chars(&hit);
+        let size = item_chars(fields.as_ref(), &hit);
         if !hits.is_empty() && chars + size > ctx.limits.response_max_chars {
             // The page ends before this hit, so the next one starts at its row, and only
             // the hits before it count toward this page.
