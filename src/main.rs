@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
 use trovador::Provider;
+use trovador::fields::Shape;
 use trovador::index::{Order, SearchOpts};
 use trovador::sessions::{self, Ctx, ListOpts};
 
@@ -83,6 +84,15 @@ enum Command {
         /// Order sessions by most recent instead of best match.
         #[arg(long)]
         recent: bool,
+        /// Only these fields in each hit; matches.<field> selects within matches, comma-separated, plus its identity. Unknown
+        /// names are an error listing the valid ones.
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
+    },
+    /// The JSON schema a command's output follows, as the MCP server publishes it.
+    Schema {
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(trovador::schema::NAMES))]
+        command: String,
     },
     /// Bring the search index fully up to date, with no time budget.
     Index {
@@ -176,6 +186,10 @@ enum SessionsCmd {
         /// Only sessions last written before this, in the same forms.
         #[arg(long)]
         until: Option<String>,
+        /// Only these fields in each session row, comma-separated, plus its identity. Unknown
+        /// names are an error listing the valid ones.
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
     },
     /// One session's metadata, resumability, and resume command.
     Show {
@@ -197,6 +211,10 @@ enum SessionsCmd {
         /// it was at that revision; anything else fails.
         #[arg(long)]
         expected_revision: Option<String>,
+        /// Only these fields in each record, comma-separated, plus its identity. Unknown
+        /// names are an error listing the valid ones.
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
     },
     /// The whole session as plain text, in parts of TROVADOR_RESPONSE_MAX_CHARS, for
     /// reading or summarizing.
@@ -218,10 +236,21 @@ enum SessionsCmd {
 static REDACT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 fn print(value: &impl Serialize) -> ExitCode {
+    print_selected(value, Shape::List, None)
+}
+
+/// [`print`] with the caller's `--fields` applied to the result's items, by the same
+/// function the MCP server calls.
+fn print_selected(value: &impl Serialize, shape: Shape, fields: Option<Vec<String>>) -> ExitCode {
     let mut v = match serde_json::to_value(value) {
         Ok(v) => v,
         Err(e) => return fail(e),
     };
+    if let Some(names) = fields
+        && let Err(e) = trovador::fields::select(&mut v, shape, &names)
+    {
+        return fail(format!("invalid fields: {e}"));
+    }
     if *REDACT.get().unwrap_or(&true) {
         trovador::redact::redact_value(&mut v);
     }
@@ -342,6 +371,7 @@ fn main() -> ExitCode {
                 include_automated,
                 since,
                 until,
+                fields,
             } => match sessions::list(
                 &ctx,
                 &ListOpts {
@@ -355,9 +385,10 @@ fn main() -> ExitCode {
                     include_automated,
                     since,
                     until,
+                    fields: fields.clone(),
                 },
             ) {
-                Ok(r) => print(&r),
+                Ok(r) => print_selected(&r, Shape::List, fields),
                 Err(e) => fail(e),
             },
             SessionsCmd::Show { id, provider } => match sessions::show(&ctx, &id, provider) {
@@ -370,6 +401,7 @@ fn main() -> ExitCode {
                 offset,
                 limit,
                 expected_revision,
+                fields,
             } => match sessions::transcript_at(
                 &ctx,
                 &id,
@@ -378,7 +410,7 @@ fn main() -> ExitCode {
                 limit,
                 expected_revision.as_deref(),
             ) {
-                Ok(t) => print(&t),
+                Ok(t) => print_selected(&t, Shape::Transcript, fields),
                 Err(e) => fail(e),
             },
             SessionsCmd::Text {
@@ -411,6 +443,7 @@ fn main() -> ExitCode {
             archived,
             per_session,
             recent,
+            fields,
         } => {
             let opts = SearchOpts {
                 query,
@@ -434,12 +467,17 @@ fn main() -> ExitCode {
                 } else {
                     Order::Relevance
                 },
+                fields: fields.clone(),
             };
             match sessions::search(&ctx, &opts) {
-                Ok(r) => print(&r),
+                Ok(r) => print_selected(&r, Shape::Search, fields),
                 Err(e) => fail(e),
             }
         }
+        Command::Schema { command } => match trovador::schema::of(&command) {
+            Some(s) => print(&s),
+            None => fail(format!("no schema for {command}")),
+        },
         Command::Index { rebuild } => match sessions::reindex(&ctx, rebuild) {
             Ok(r) => print(&json!({ "refresh": r, "index": sessions::index_status(&ctx) })),
             Err(e) => fail(e),

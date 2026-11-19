@@ -36,7 +36,9 @@ was the last. An empty later page never proves absence.
 Results are held to about 40,000 characters, and `limit` and `per_session` have
 ceilings. When a page was cut short, `truncated_by` says why and `next_offset` goes on
 from there. Keep `per_session` small (the default 3 is usually enough): `match_count`
-says how many records matched, and the transcript shows the rest.
+says how many records matched, and the transcript shows the rest. To get less per hit,
+pass `fields`, for example `["title", "modified", "matches.index", "matches.excerpt"]`;
+each hit keeps its `provider` and `session_id`.
 
 To browse instead of search, `sessions` with `action=list` returns sessions newest
 first, with the same `project`, `provider`, and `since`/`until` filters, and pages the
