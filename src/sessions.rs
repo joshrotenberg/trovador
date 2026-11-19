@@ -1030,6 +1030,11 @@ fn search_inner(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         None
     };
     let query_is_proof = query_note.is_none();
+    // A hint, not a doubt about the result: no record holds every term, which is what the
+    // query asked, so absence is still proof of that.
+    let terms_note = (!opts.fts && !opts.regex && raw.sessions_matched == 0)
+        .then(|| crate::index::terms_absence_note(&opts.query))
+        .flatten();
     let note = [
         readonly_note,
         stale_note,
@@ -1039,6 +1044,7 @@ fn search_inner(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         hidden_note,
         page_note,
         query_note,
+        terms_note,
     ]
     .into_iter()
     .flatten()

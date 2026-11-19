@@ -303,7 +303,8 @@ pub fn router_with(mut ctx: Ctx, opts: ServeOpts) -> McpRouter {
         .title("Search sessions")
         .description(format!(
             "Full-text search across every local Claude Code and Codex session. query is \
-             words and \"quoted phrases\", all required; fts=true takes FTS5 syntax; \
+             words and \"quoted phrases\", all required in the same record, so use two or three \
+             distinctive ones; fts=true takes FTS5 syntax; \
              regex=true takes a regular expression. Returns sessions with match counts and \
              excerpts, a page at a time (follow next_offset as offset); each match has the record index to open the transcript at. Brings \
              the index up to date first, within a time budget; exhaustive=false means the \

@@ -1522,8 +1522,9 @@ pub enum Order {
 
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
 pub struct SearchOpts {
-    /// Words and "quoted phrases", all required. A word or phrase matches as a sequence of
-    /// tokens, so a UUID or a snake_case name matches as written.
+    /// Words and "quoted phrases", all required in the same record (one message or tool
+    /// output). A word or phrase matches as a sequence of tokens, so a UUID or a
+    /// snake_case name matches as written.
     pub query: String,
     /// Treat `query` as an FTS5 expression (AND, OR, NOT, NEAR, prefix*, column filters).
     #[serde(default)]
@@ -1677,6 +1678,18 @@ pub fn validate_terms(query: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// For a terms query of three or more terms that matched nothing: every term must occur
+/// in one record, which a natural description of a conversation rarely does. A search for
+/// five words a session discussed across different records found nothing (#103).
+pub fn terms_absence_note(query: &str) -> Option<String> {
+    let n = search_terms(query).len();
+    (n >= 3).then(|| {
+        format!(
+            "all {n} terms must occur in one record and no record has them all; search two or three distinctive terms, or run separate searches"
+        )
+    })
 }
 
 pub fn fts_absence_note(query: &str) -> Result<Option<String>> {
