@@ -179,7 +179,7 @@ Filters for `sessions list` and `search`:
 | `--provider claude\|codex` | One provider only |
 | `--project <text>` | Project path contains this text |
 | `--origin <origin>` | `cli`, `claude-desktop`, `sdk-cli`, `exec`, `vscode`, ... |
-| `--since`, `--until` | Last written at/after or before: RFC 3339 time, date (midnight UTC), or duration back from now (`36h`, `2d`, `1w`) |
+| `--since`, `--until` | Last active at/after or before (see `modified`): RFC 3339 time, date (midnight UTC), or duration back from now (`36h`, `2d`, `1w`) |
 | `--archived true\|false` | Only archived Codex threads, or only the rest |
 | `--include-subagents[=false]` | Sessions started by another session |
 | `--include-automated[=false]` | `claude -p` and `codex exec` sessions |
@@ -216,6 +216,7 @@ rather than everything from the last 10 minutes.
 
 | Field | Source |
 |---|---|
+| `modified` | When the session was last active: its last record's `timestamp`, else the file mtime; never later than the mtime, so a file another tool touched keeps its real time. Lists sort by it, and `since`, `until`, `--recent` and the active window use it |
 | `project` | Claude's latest `relocated` cwd, else the first `cwd`; where a resume runs |
 | `snippet` | First block the user typed, skipping injected `<...>` context and AGENTS.md |
 | `title`, `title_source` | Claude `custom-title` over `ai-title`; latest wins |

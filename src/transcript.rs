@@ -1135,6 +1135,10 @@ pub struct ProjectionState {
     pub last_user_filtered_hash: Option<u64>,
     /// Each stream can contribute one copy, including across an index resume.
     pub last_user_streams: u8,
+    /// The timestamp of the last record that had one, in nanoseconds since the epoch. A
+    /// session's activity time comes from it rather than from the file's mtime, which
+    /// other tools reset (#102).
+    pub last_record_ns: Option<i64>,
 }
 
 /// FNV-1a, 64-bit. Stable across Rust versions and platforms, unlike the std hasher,
@@ -1366,6 +1370,9 @@ impl Projection {
             let Ok(r) = parsed else {
                 continue;
             };
+            if let Some(t) = crate::archive::record_time_ns(&r) {
+                self.state.last_record_ns = Some(t);
+            }
             if self.provider == Provider::Claude
                 && let Some(title) = crate::archive::custom_title(&r)
             {
