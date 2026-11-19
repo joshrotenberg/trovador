@@ -236,7 +236,10 @@ rather than everything from the last 10 minutes.
 - `reasoning`: only where the provider kept readable text.
 - A Claude prompt typed while a turn was running is a `user` record named `queued`.
 
-Text is capped per record (4,000 characters; 600 for tool calls and results).
+Text is capped per record (4,000 characters; 600 for tool calls and results). The index keeps
+up to 4,000 characters of each tool call and result, so search finds words deep in file
+reads, grep output and test logs. Such a match's excerpt shows it; the transcript record at
+its `index` shows only the first 600 characters.
 
 **Paging.** `sessions list`, `search`, and `sessions transcript` return one page. Pass
 `next_offset` as `offset` for the next; no `next_offset` means the last page. Search pages
@@ -314,7 +317,8 @@ the MCP server, set them where the host starts it.
 |---|---|---|
 | `TROVADOR_RESPONSE_MAX_CHARS` | 40000 | Characters per response: list sessions, search hits and transcript records as JSON, or a text part |
 | `TROVADOR_RECORD_CHARS` | 4000 | Per-record cap |
-| `TROVADOR_TOOL_CHARS` | 600 | Tool call and result cap |
+| `TROVADOR_TOOL_CHARS` | 600 | Tool call and result cap in transcripts and text |
+| `TROVADOR_INDEX_TOOL_CHARS` | 4000 | Tool call and result cap in the index, for search (600 kept the index at 40% of the size on the development machine) |
 | `TROVADOR_UNRECOGNIZED_CHARS` | 1000 | `unrecognized` cap; `0` shows them as `omitted`, unindexed |
 | `TROVADOR_PAGE_SIZE` | 200 | Records per transcript page |
 | `TROVADOR_LIST_DEFAULT`, `TROVADOR_LIST_MAX` | 20, 100 | Sessions per list page; most a `limit` can ask for |

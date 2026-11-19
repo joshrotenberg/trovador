@@ -97,9 +97,9 @@ pub fn db_path(paths: &Paths) -> PathBuf {
 /// rows built with one record cap were otherwise served after it changed (#26).
 fn built_with(limits: &Limits) -> (i64, i64, i64) {
     let settings = format!(
-        "record_chars={} tool_chars={} unrecognized_chars={} head_steps={:?} reasoning={} redact={}",
+        "record_chars={} index_tool_chars={} unrecognized_chars={} head_steps={:?} reasoning={} redact={}",
         limits.record_chars,
-        limits.tool_chars,
+        limits.index_tool_chars,
         limits.unrecognized_chars,
         limits.head_steps,
         limits.index_reasoning,
@@ -893,6 +893,7 @@ fn kind_str(k: RecordKind) -> &'static str {
 }
 
 fn project(job: Job, limits: &Limits) -> Option<Done> {
+    let limits = &limits.for_index();
     // Issue #36: projection already reads new lines, so metadata must not scan them again.
     let mut meta = archive::read_meta_windows(&job.entry, limits);
     let text = text_eligible(&meta);

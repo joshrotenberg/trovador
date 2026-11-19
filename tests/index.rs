@@ -22,16 +22,11 @@ fn refresh(ctx: &Ctx) -> trovador::index::RefreshReport {
         .unwrap()
 }
 
-/// What the index holds for a session must be exactly the text-bearing records a full
-/// transcript read produces, with the same indexes, or a search hit's index would open the
-/// transcript at the wrong record.
-fn assert_index_matches_transcript(ctx: &Ctx, provider: Provider, id: &str) {
-    let idx = Index::open(&ctx.paths, &ctx.limits).unwrap();
-    let indexed = idx.session_records(provider, id).unwrap();
-    let page = sessions::transcript(ctx, id, Some(provider), 0, Some(200))
+/// The text-bearing records of a full transcript read, as (index, type, text).
+fn transcript_records(ctx: &Ctx, provider: Provider, id: &str) -> Vec<(usize, String, String)> {
+    sessions::transcript(ctx, id, Some(provider), 0, Some(200))
         .unwrap()
-        .page;
-    let expected: Vec<(usize, String, String)> = page
+        .page
         .records
         .into_iter()
         .filter(|r| r.kind != RecordKind::Omitted)
@@ -43,9 +38,30 @@ fn assert_index_matches_transcript(ctx: &Ctx, provider: Provider, id: &str) {
                 .to_string();
             (r.index, kind, r.text.unwrap_or_default())
         })
-        .collect();
+        .collect()
+}
+
+/// What the index holds for a session must be exactly the text-bearing records a full
+/// transcript read produces, with the same indexes, or a search hit's index would open the
+/// transcript at the wrong record. Only the text differs, where the index keeps more of a
+/// tool record (`index_tool_chars`) than a transcript shows (`tool_chars`).
+fn assert_index_matches_transcript(ctx: &Ctx, provider: Provider, id: &str) {
+    let idx = Index::open(&ctx.paths, &ctx.limits).unwrap();
+    let indexed = idx.session_records(provider, id).unwrap();
+    let wide = Ctx {
+        paths: ctx.paths.clone(),
+        limits: ctx.limits.for_index(),
+    };
+    let expected = transcript_records(&wide, provider, id);
     assert!(!expected.is_empty());
     assert_eq!(indexed, expected);
+    let shown = transcript_records(ctx, provider, id);
+    let positions = |v: &[(usize, String, String)]| {
+        v.iter()
+            .map(|(i, k, _)| (*i, k.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(positions(&indexed), positions(&shown));
 }
 
 fn search(ctx: &Ctx, query: &str) -> sessions::SearchResult {
