@@ -130,30 +130,30 @@ trovador sessions show 27d1f434
 an earlier session?"). The `recall` skill has the agent call `search`, open the matching
 transcript with `sessions`, and cite the session it found.
 
-A real search, trimmed. The session doing the search had just mentioned the term, so it is
-left out and counted in `hidden`:
+The shape of a search result, with illustrative values and most fields trimmed. Here the
+session doing the search had just mentioned the term, so it is left out and counted in
+`hidden`:
 
 ```console
-$ trovador search stdout-check --per-session 1
+$ trovador search rate-limit --per-session 1
 {
-  "query": "stdout-check",
-  "sessions_matched": 3,
-  "returned": 3,
+  "query": "rate-limit",
+  "sessions_matched": 2,
+  "returned": 2,
   "hits": [
     {
       "backend": "claude",
-      "session_id": "baad058e-684e-417c-9c59-dbf351e2dc7b",
-      "title": "spike-dev",
-      "matches": [{"index": 6074, "type": "tool_result",
-        "excerpt": "14: \"verify\": \"npm run fmt:check && npm run lint && npm run check && npm run [stdout-check] && npm test\","}],
+      "session_id": "3f2a9c1e-…",
+      "title": "api client retries",
+      "matches": [{"index": 412, "type": "tool_result",
+        "excerpt": "...the server returned 429 with a [rate-limit] header of 30 seconds..."}],
       …
     },
-    { "backend": "claude", "session_id": "79892eda-…", "title": "spike-dev2", … },
     {
       "backend": "codex",
-      "session_id": "01a007a0-134e-70e2-84e5-a19ae6996317",
-      "matches": [{"index": 2987, "type": "system",
-        "excerpt": "...cal blocker: `npm run fmt:check` fails on `README.md`. Tests pass 449/0; typecheck, lint, [stdout-check], and `git diff --check` pass."}],
+      "session_id": "019f4b7d-…",
+      "matches": [{"index": 88, "type": "assistant",
+        "excerpt": "...backing off on [rate-limit] responses before retrying..."}],
       …
     }
   ],
@@ -445,24 +445,6 @@ a newer CLI introduced shows up there as unrecognized.
 Releases are cut by release-plz, which publishes to crates.io and tags, and dist, which
 builds the binaries and the installer from the tag. `AGENTS.md` has the conventions for
 working in this repository.
-
-## History
-
-trovador is the Rust successor to [spike](https://github.com/joshrotenberg/spike), published
-there as `agent-sessions`, and covers the parts of it that were used with fewer tools:
-
-| spike | trovador |
-|---|---|
-| `list_sessions`, `dump` | `sessions` with `action: list` or `show` |
-| `session://{backend}/{id}/transcript` | `sessions` with `action: transcript`, or the same resource |
-| `search` | `search`, over a full-text index rather than the newest 400 files |
-| `summarize`, `session://.../summary` | `sessions` with `action: text`; the caller summarizes |
-| `ask`, `consult`, consent | removed: trovador runs no model and continues nothing |
-| `diagnose` | `trovador doctor` |
-
-The rest of spike's tools were not ported; `docs/parity-2026-10-07.md` compares the two. For a
-while trovador lived in a workspace called bottega as `crates/trovador`; that history is on
-the `archive/bottega` branch.
 
 ## License
 
