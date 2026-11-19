@@ -22,7 +22,10 @@ use crate::paths::Paths;
 use crate::transcript::{CodexMode, PROJECTION_VERSION, Projection, ProjectionState, RecordKind};
 
 // 4: the `backend` columns were renamed `provider`.
-const SCHEMA_VERSION: i64 = 4;
+// 5: `last_record_ns`, so activity time does not depend on the file mtime (#102).
+const SCHEMA_VERSION: i64 = 5;
+/// A session's activity time in SQL, as [`archive::activity`] computes it.
+const ACTIVITY: &str = "min(s.mtime_ns, coalesce(s.last_record_ns, s.mtime_ns))";
 // Issue #36: title state needs one backfill, but projected text and record indexes agree.
 const TITLE_METADATA_VERSION: i64 = 1;
 const TOKENIZER: &str = "unicode61 remove_diacritics 2";
@@ -613,6 +616,7 @@ impl Index {
                  custom_title TEXT,
                  title_offset INTEGER NOT NULL DEFAULT -1,
                  codex_inherited_end INTEGER,
+                 last_record_ns INTEGER,
                  UNIQUE (provider, session_id)
              );
              CREATE VIRTUAL TABLE records USING fts5(
@@ -952,6 +956,12 @@ fn project(job: Job, limits: &Limits) -> Option<Done> {
     };
     archive::apply_custom_title(&mut meta, state.custom_title.clone());
     let mut state = state;
+    // The projection saw every record, the metadata read only a tail; a session whose text
+    // is not projected has only the tail's.
+    if state.last_record_ns.is_none() {
+        state.last_record_ns = meta.last_record_ns;
+    }
+    meta.last_record_ns = state.last_record_ns;
     if limits.index_redact {
         redact_for_index(&mut meta, &mut state, &mut records);
     }
@@ -973,7 +983,7 @@ impl Index {
         let mut stmt = self.conn.prepare(
             "SELECT id, provider, session_id, file, size, mtime_ns, text_indexed,
                     projection_version, offset, next_index, codex_mode, head_hash, tail_hash,
-                    run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end, last_user_filtered_hash, last_user_streams
+                    run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end, last_user_filtered_hash, last_user_streams, last_record_ns
              FROM sessions",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -1005,6 +1015,7 @@ impl Index {
                         mode: CodexMode::from_i64(r.get(10)?),
                         run,
                         last_user_streams: r.get(22)?,
+                        last_record_ns: r.get(23)?,
                         last_user_filtered_hash: r.get::<_, Option<i64>>(21)?.map(|h| h as u64),
                         last_turn: match (
                             r.get::<_, Option<String>>(15)?,
@@ -1379,8 +1390,8 @@ impl Index {
         let id: i64 = tx.query_row(
             "INSERT INTO sessions (provider, session_id, file, size, mtime_ns, meta, paths, origin,
                  subagent, text_indexed, projection_version, offset, next_index, codex_mode,
-                 head_hash, tail_hash, run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end, last_user_filtered_hash, last_user_streams)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
+                 head_hash, tail_hash, run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end, last_user_filtered_hash, last_user_streams, last_record_ns)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
              ON CONFLICT (provider, session_id) DO UPDATE SET
                  file = excluded.file, size = excluded.size, mtime_ns = excluded.mtime_ns,
                  meta = excluded.meta, paths = excluded.paths, origin = excluded.origin,
@@ -1396,7 +1407,8 @@ impl Index {
                  title_offset = excluded.title_offset,
                  codex_inherited_end = excluded.codex_inherited_end,
                  last_user_filtered_hash = excluded.last_user_filtered_hash,
-                 last_user_streams = excluded.last_user_streams
+                 last_user_streams = excluded.last_user_streams,
+                 last_record_ns = excluded.last_record_ns
              RETURNING id",
             params![
                 k.0.as_str(),
@@ -1425,6 +1437,7 @@ impl Index {
                 s.codex_inherited_end.map(|n| n as i64),
                 s.last_user_filtered_hash.map(|h| h as i64),
                 s.last_user_streams,
+                s.last_record_ns,
             ],
             |r| r.get(0),
         )?;
@@ -1805,11 +1818,11 @@ impl Index {
         }
         if let Some(t) = vis.since_ns {
             args.push(t.into());
-            filters.push(format!("s.mtime_ns >= ?{}", args.len()));
+            filters.push(format!("{ACTIVITY} >= ?{}", args.len()));
         }
         if let Some(t) = vis.until_ns {
             args.push(t.into());
-            filters.push(format!("s.mtime_ns < ?{}", args.len()));
+            filters.push(format!("{ACTIVITY} < ?{}", args.len()));
         }
         // The defaults, each kept apart so what it hid can be counted.
         let mut defaults: Vec<(&str, String, rusqlite::types::Value)> = Vec::new();
@@ -1818,7 +1831,7 @@ impl Index {
             defaults.push(("subagents", "s.subagent = ?".into(), 0.into()));
         }
         if let Some(t) = vis.active_since_ns {
-            defaults.push(("active", "s.mtime_ns < ?".into(), t.into()));
+            defaults.push(("active", format!("{ACTIVITY} < ?"), t.into()));
         }
         if let Some(id) = &vis.exclude_session {
             defaults.push(("excluded", "s.session_id <> ?".into(), id.clone().into()));
@@ -1861,8 +1874,8 @@ impl Index {
         // The last key makes the order total. Offset paging re-runs the query for each page,
         // so two sessions that tie on score and time must not swap between pages.
         let order = match (opts.order, opts.regex) {
-            (Order::Relevance, false) => "best ASC, s.mtime_ns DESC, s.id ASC",
-            _ => "s.mtime_ns DESC, s.id ASC",
+            (Order::Relevance, false) => format!("best ASC, {ACTIVITY} DESC, s.id ASC"),
+            _ => format!("{ACTIVITY} DESC, s.id ASC"),
         };
 
         let sessions_matched: i64 = self.conn.query_row(

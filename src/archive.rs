@@ -344,6 +344,39 @@ pub struct SessionMeta {
     /// The session that started this one, when the provider records it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<String>,
+    /// The timestamp of the session's last record that had one, in nanoseconds since the
+    /// epoch. Stored with the index's copy of the metadata; rows report it through
+    /// `modified` instead (see [`activity`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub last_record_ns: Option<i64>,
+}
+
+/// When a session was last active: its last record's timestamp, or the file's mtime when
+/// no record has one. Never later than the mtime, which touching a file only moves
+/// forward: on the development machine 56 Claude session files shared one mtime from a
+/// bulk touch, one of them last written seven weeks earlier (#102). The clamp also keeps a
+/// record clock ahead of the filesystem's from reporting the future.
+pub fn activity(e: &ArchiveEntry, meta: &SessionMeta) -> SystemTime {
+    match meta.last_record_ns {
+        Some(ns) if ns >= 0 => {
+            let at = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(ns as u64);
+            at.min(e.mtime)
+        }
+        _ => e.mtime,
+    }
+}
+
+/// A record's own `timestamp`, which Claude and Codex both write on every line that
+/// describes an event.
+pub(crate) fn record_time_ns(r: &Value) -> Option<i64> {
+    let t = humantime::parse_rfc3339_weak(r.get("timestamp")?.as_str()?).ok()?;
+    let d = t.duration_since(std::time::UNIX_EPOCH).ok()?;
+    i64::try_from(d.as_nanos()).ok()
+}
+
+fn last_record_time(text: &str) -> Option<i64> {
+    records(text).filter_map(|r| record_time_ns(&r)).last()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -373,6 +406,9 @@ pub(crate) fn read_meta_windows(e: &ArchiveEntry, limits: &Limits) -> SessionMet
 fn read_meta_inner(e: &ArchiveEntry, limits: &Limits, scan_titles: bool) -> SessionMeta {
     let mut meta = SessionMeta::default();
     let mut covered = 0u64;
+    // The last head read, kept when it held the whole file so its last timestamp is the
+    // session's.
+    let mut whole = None;
     for &step in &limits.head_steps {
         if !is_compressed(&e.file) && covered >= e.size_bytes {
             break;
@@ -388,15 +424,36 @@ fn read_meta_inner(e: &ArchiveEntry, limits: &Limits, scan_titles: bool) -> Sess
             Provider::Claude => parse_claude_head(&head),
             Provider::Codex => parse_codex_head(&head, e.finished(), complete),
         };
+        if complete {
+            whole = Some(head);
+        }
         covered = step as u64;
         if complete || (meta.cwd.is_some() && meta.snippet.is_some()) {
             break;
         }
     }
+    if let Some(head) = &whole {
+        meta.last_record_ns = last_record_time(head);
+    } else if e.provider == Provider::Codex
+        && !is_compressed(&e.file)
+        && let Ok((tail, _)) = read_range(
+            &e.file,
+            e.size_bytes.saturating_sub(TAIL_BYTES as u64),
+            TAIL_BYTES,
+        )
+    {
+        // A compressed rollout cannot be read from the end; the index supplies its time,
+        // and without the index it falls back to the mtime.
+        meta.last_record_ns = last_record_time(lines_after_first(&tail));
+    }
     if e.provider == Provider::Claude && covered < e.size_bytes {
         let tail_from = e.size_bytes.saturating_sub(TAIL_BYTES as u64).max(covered);
         if let Ok((tail, _)) = read_range(&e.file, tail_from, TAIL_BYTES) {
-            apply_claude_latest(&mut meta, lines_after_first(&tail));
+            let tail = lines_after_first(&tail);
+            apply_claude_latest(&mut meta, tail);
+            if whole.is_none() {
+                meta.last_record_ns = last_record_time(tail);
+            }
         }
         if scan_titles && e.size_bytes <= limits.title_scan_max_bytes as u64 {
             let mut custom_title = None;

@@ -74,6 +74,8 @@ pub enum Error {
 pub struct SessionRow {
     pub provider: Provider,
     pub session_id: String,
+    /// When the session was last active: the timestamp of its last record, or the file's
+    /// mtime when no record has one, and never later than the mtime.
     pub modified: String,
     pub size_kb: u64,
     /// The directory a resume runs from: where the session lives now, else where it started.
@@ -91,12 +93,14 @@ pub struct SessionRow {
     pub open_with: String,
 }
 
-pub fn row(e: &ArchiveEntry, meta: SessionMeta, limits: &Limits) -> SessionRow {
+pub fn row(e: &ArchiveEntry, mut meta: SessionMeta, limits: &Limits) -> SessionRow {
     let project = meta.project().map(str::to_string);
+    let modified = humantime::format_rfc3339_millis(archive::activity(e, &meta)).to_string();
+    meta.last_record_ns = None;
     SessionRow {
         provider: e.provider,
         session_id: e.session_id.clone(),
-        modified: e.modified(),
+        modified,
         size_kb: e.size_bytes.div_ceil(1024),
         open_with: archive::open_with(e.provider, project.as_deref(), &e.session_id),
         resource: format!("session://{}/{}", e.provider, e.session_id),
@@ -230,6 +234,86 @@ pub struct ListResult {
     pub sessions: Vec<SessionRow>,
 }
 
+/// Sessions newest first by activity time ([`archive::activity`]), reading metadata only
+/// as far as that order needs. Entries arrive newest first by mtime, which bounds activity
+/// from above, so a session already read comes next once its activity is at least the
+/// mtime of the next unread entry: nothing unread can be newer. A run of touched files
+/// costs a read each and nothing more.
+struct ByActivity<'a, F> {
+    entries: std::iter::Peekable<std::slice::Iter<'a, ArchiveEntry>>,
+    ready: std::collections::BinaryHeap<Ready<'a>>,
+    read: F,
+    /// Metadata reads so far, reported as `examined`.
+    reads: usize,
+}
+
+struct Ready<'a> {
+    at: std::time::SystemTime,
+    /// Entries read earlier come first among equal activity, keeping the mtime order.
+    seq: std::cmp::Reverse<usize>,
+    entry: &'a ArchiveEntry,
+    meta: SessionMeta,
+}
+
+impl PartialEq for Ready<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        (self.at, self.seq) == (other.at, other.seq)
+    }
+}
+impl Eq for Ready<'_> {}
+impl PartialOrd for Ready<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Ready<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.at, self.seq).cmp(&(other.at, other.seq))
+    }
+}
+
+impl<'a, F: FnMut(&ArchiveEntry) -> SessionMeta> ByActivity<'a, F> {
+    fn new(entries: &'a [ArchiveEntry], read: F) -> Self {
+        Self {
+            entries: entries.iter().peekable(),
+            ready: std::collections::BinaryHeap::new(),
+            read,
+            reads: 0,
+        }
+    }
+}
+
+impl<F> ByActivity<'_, F> {
+    /// Nothing is left to return.
+    fn is_done(&mut self) -> bool {
+        self.ready.is_empty() && self.entries.peek().is_none()
+    }
+}
+
+impl<'a, F: FnMut(&ArchiveEntry) -> SessionMeta> Iterator for ByActivity<'a, F> {
+    type Item = (&'a ArchiveEntry, SessionMeta, std::time::SystemTime);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(top) = self.ready.peek()
+                && self.entries.peek().is_none_or(|e| top.at >= e.mtime)
+            {
+                let r = self.ready.pop()?;
+                return Some((r.entry, r.meta, r.at));
+            }
+            let e = self.entries.next()?;
+            let meta = (self.read)(e);
+            self.reads += 1;
+            self.ready.push(Ready {
+                at: archive::activity(e, &meta),
+                seq: std::cmp::Reverse(self.reads),
+                entry: e,
+                meta,
+            });
+        }
+    }
+}
+
 /// Whether the automated default leaves this session out.
 fn automated_hidden(meta: &SessionMeta) -> bool {
     meta.origin
@@ -300,38 +384,44 @@ fn list_inner(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
     let mut sessions = Vec::new();
     let mut chars = 0usize;
     let mut budget_note = None;
-    let mut examined = 0;
     let mut truncated = false;
     // Sessions that passed every filter so far, returned or skipped by the offset.
     let mut passed = 0usize;
     let mut looked_ahead = 0usize;
-    for e in &all {
-        // Newest first, so everything after this is older still.
-        if since.is_some_and(|s| e.mtime < s) {
-            break;
-        }
-        if until.is_some_and(|u| e.mtime >= u) {
-            continue;
-        }
-        // Past a full page the only question is whether another match exists. When the
-        // bound ends the search, report that more may follow and let `next_offset` resume
-        // at the first unreturned session; the next page fills before it looks ahead, so
-        // it always makes progress.
-        if sessions.len() == limit {
-            if looked_ahead == ctx.limits.list_lookahead {
-                truncated = true;
-                break;
-            }
-            looked_ahead += 1;
-        }
-        examined += 1;
-        let meta = cached_meta(&cached, e)
+    // A session's activity is never later than its mtime, so one written before `since`
+    // cannot qualify and its metadata is never read.
+    let horizon = since.map_or(all.len(), |s| all.partition_point(|e| e.mtime >= s));
+    let mut stream = ByActivity::new(&all[..horizon], |e| {
+        cached_meta(&cached, e)
             .or_else(|| {
                 index
                     .as_ref()
                     .and_then(|i| i.read_meta_entry(e, &ctx.limits))
             })
-            .unwrap_or_else(|| archive::read_meta(e, &ctx.limits));
+            .unwrap_or_else(|| archive::read_meta(e, &ctx.limits))
+    });
+    loop {
+        // Past a full page the only question is whether another match exists. When the
+        // bound ends the search, report that more may follow and let `next_offset` resume
+        // at the first unreturned session; the next page fills before it looks ahead, so
+        // it always makes progress. Checked before the next read, which is what it bounds.
+        if sessions.len() == limit {
+            if looked_ahead == ctx.limits.list_lookahead {
+                truncated = !stream.is_done();
+                break;
+            }
+            looked_ahead += 1;
+        }
+        let Some((e, meta, at)) = stream.next() else {
+            break;
+        };
+        // Newest first, so everything after this is older still.
+        if since.is_some_and(|s| at < s) {
+            break;
+        }
+        if until.is_some_and(|u| at >= u) {
+            continue;
+        }
         if meta.subagent && hide_subagents {
             continue;
         }
@@ -386,7 +476,7 @@ fn list_inner(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
     .collect::<Vec<_>>();
     Ok(ListResult {
         total_sessions: all.len(),
-        examined,
+        examined: stream.reads,
         returned: sessions.len(),
         offset,
         next_offset: truncated.then_some(offset + sessions.len()),
