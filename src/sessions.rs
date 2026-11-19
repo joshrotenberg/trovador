@@ -79,6 +79,7 @@ pub struct SessionRow {
     pub modified: String,
     pub size_kb: u64,
     /// The directory a resume runs from: where the session lives now, else where it started.
+    /// `cwd` and `relocated_cwd` appear only when they differ from it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     #[serde(flatten)]
@@ -87,23 +88,27 @@ pub struct SessionRow {
     /// Codex archived this thread. It is still readable here.
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
     pub archived: bool,
-    /// The MCP resource for this session.
-    pub resource: String,
-    /// What to paste in a terminal to pick the session up.
-    pub open_with: String,
 }
 
+/// One session as list, search and show return it. Rows used to repeat themselves: `cwd`
+/// and `relocated_cwd` usually equal `project`, and `resource` and `open_with` are
+/// derived from the provider, id and project. A 20-session list was 14,199 characters with
+/// them and 8,665 without (#104). `show` still gives `resource` and `open_with`.
 pub fn row(e: &ArchiveEntry, mut meta: SessionMeta, limits: &Limits) -> SessionRow {
     let project = meta.project().map(str::to_string);
     let modified = humantime::format_rfc3339_millis(archive::activity(e, &meta)).to_string();
     meta.last_record_ns = None;
+    if meta.relocated_cwd == project {
+        meta.relocated_cwd = None;
+    }
+    if meta.cwd == project {
+        meta.cwd = None;
+    }
     SessionRow {
         provider: e.provider,
         session_id: e.session_id.clone(),
         modified,
         size_kb: e.size_bytes.div_ceil(1024),
-        open_with: archive::open_with(e.provider, project.as_deref(), &e.session_id),
-        resource: format!("session://{}/{}", e.provider, e.session_id),
         resumable: archive::resumability(e, limits).resumable,
         archived: e.archived,
         project,
@@ -496,6 +501,10 @@ pub struct SessionDetail {
     /// Why the session cannot be resumed, when it cannot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_blocked_by: Option<String>,
+    /// What to paste in a terminal to pick the session up.
+    pub open_with: String,
+    /// The MCP resource for this session.
+    pub resource: String,
     pub transcript_resource: String,
 }
 
@@ -506,11 +515,14 @@ pub fn show(ctx: &Ctx, id: &str, provider: Option<Provider>) -> Result<SessionDe
         .and_then(|i| i.read_meta_entry(&e, &ctx.limits))
         .unwrap_or_else(|| archive::read_meta(&e, &ctx.limits));
     let r = row(&e, meta, &ctx.limits);
+    let resource = format!("session://{}/{}", e.provider, e.session_id);
     Ok(SessionDetail {
         file: e.file.display().to_string(),
         size_bytes: e.size_bytes,
         resume_blocked_by: archive::resumability(&e, &ctx.limits).reason,
-        transcript_resource: format!("{}/transcript", r.resource),
+        open_with: archive::open_with(e.provider, r.project.as_deref(), &e.session_id),
+        transcript_resource: format!("{resource}/transcript"),
+        resource,
         row: r,
     })
 }

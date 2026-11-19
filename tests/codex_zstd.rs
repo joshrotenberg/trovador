@@ -453,7 +453,8 @@ fn compressed_fork_boundaries_hide_parent_history_and_keep_child_metadata() {
             sessions::show(&plain_ctx, ID_A, None).unwrap().row.meta
         );
         assert_eq!(shown.row.meta.snippet.as_deref(), Some("child assignment"));
-        assert_eq!(shown.row.meta.cwd.as_deref(), Some("/child"));
+        assert_eq!(shown.row.project.as_deref(), Some("/child"));
+        assert_eq!(shown.row.meta.cwd, None, "the same as project");
         assert_eq!(refresh(&compressed_ctx).reindexed, 1);
         let indexed = indexed(&compressed_ctx);
         assert_eq!(indexed.len(), 2);

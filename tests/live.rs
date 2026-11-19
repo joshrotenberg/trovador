@@ -406,7 +406,9 @@ fn metadata_is_well_formed_for_every_session() {
         if row.resumable != (archive::transcript_bytes(e) < l.ctx.limits.resume_limit_bytes) {
             problems.push(format!("{}: resumable disagrees with size", who(e)));
         }
-        if !row.open_with.contains(&e.session_id) {
+        if !archive::open_with(e.provider, row.project.as_deref(), &e.session_id)
+            .contains(&e.session_id)
+        {
             problems.push(format!("{}: open_with lacks the id", who(e)));
         }
         if m.subagent && m.origin.is_none() {

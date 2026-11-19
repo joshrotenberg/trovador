@@ -218,6 +218,7 @@ rather than everything from the last 10 minutes.
 |---|---|
 | `modified` | When the session was last active: its last record's `timestamp`, else the file mtime; never later than the mtime, so a file another tool touched keeps its real time. Lists sort by it, and `since`, `until`, `--recent` and the active window use it |
 | `project` | Claude's latest `relocated` cwd, else the first `cwd`; where a resume runs |
+| `cwd`, `relocated_cwd` | Only when different from `project`, as for a relocated session's starting directory |
 | `snippet` | First block the user typed, skipping injected `<...>` context and AGENTS.md |
 | `title`, `title_source` | Claude `custom-title` over `ai-title`; latest wins |
 | `origin` | Claude `entrypoint`; Codex `source` (`cli`, `vscode`, `exec`, `guardian`, `thread_spawn`) |
@@ -225,7 +226,9 @@ rather than everything from the last 10 minutes.
 | `artifacts`, `pull_requests` | Claude `frame-link` and `pr-link` records |
 | `archived` | In Codex `archived_sessions` |
 | `resumable` | Under the resume ceiling (900,000 bytes, decompressed) |
-| `open_with` | Command to resume it |
+
+`sessions show` adds `file`, `size_bytes`, `resume_blocked_by`, `open_with` (the command to
+resume it), and the `resource` and `transcript_resource` URIs.
 
 **Transcript records** are `user`, `assistant`, `tool_call`, `tool_result`, `attachment`,
 `system`, `reasoning`, `unrecognized`, or `omitted`.
