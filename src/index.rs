@@ -1566,6 +1566,9 @@ pub struct Match {
 }
 
 pub struct SessionHits {
+    /// This session's position among the rows of the SQL page, counting rows not shown.
+    /// A caller that returns fewer hits continues the order from the first one it left out.
+    pub row: usize,
     pub backend: Backend,
     pub session_id: String,
     pub meta: SessionMeta,
@@ -1915,7 +1918,7 @@ impl Index {
 
         let mut hits = Vec::new();
         let row_count = rows.len();
-        for (id, backend, session_id, meta, n) in rows {
+        for (row, (id, backend, session_id, meta, n)) in rows.into_iter().enumerate() {
             let Ok(backend) = backend.parse::<Backend>() else {
                 hidden.unrecognized += 1;
                 continue;
@@ -1935,6 +1938,7 @@ impl Index {
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             hits.push(SessionHits {
+                row,
                 backend,
                 session_id,
                 meta: serde_json::from_str(&meta).unwrap_or_default(),

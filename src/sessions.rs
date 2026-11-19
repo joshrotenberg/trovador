@@ -156,6 +156,32 @@ pub(crate) fn check_offset(offset: usize, limits: &Limits) -> Result<usize, Erro
     Ok(offset)
 }
 
+/// A requested count, or its default, held to `max`, and what to report when it was
+/// lowered. A request above the ceiling is served at the ceiling rather than refused:
+/// the caller gets a useful page and `next_offset` for the rest.
+pub(crate) fn capped(
+    asked: Option<usize>,
+    default: usize,
+    max: usize,
+    name: &str,
+    setting: &str,
+) -> (usize, Option<String>) {
+    let n = asked.unwrap_or(default).max(1);
+    if n > max {
+        (max, Some(format!("{name} {n} is above {setting} ({max})")))
+    } else {
+        (n, None)
+    }
+}
+
+/// Why a list or search page stopped at the size budget.
+pub(crate) fn over_budget(limits: &Limits) -> String {
+    format!(
+        "TROVADOR_RESPONSE_MAX_CHARS ({}); continue from next_offset",
+        limits.response_max_chars
+    )
+}
+
 /// `since` and `until` as times, or the error to return for a value that does not parse.
 pub(crate) fn window(
     since: Option<&str>,
@@ -192,6 +218,11 @@ pub struct ListResult {
     /// Absent on the last page.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub next_offset: Option<usize>,
+    /// Set when this page holds fewer sessions than asked for because of a ceiling: a
+    /// `limit` above `TROVADOR_LIST_MAX`, or sessions that would have passed
+    /// `TROVADOR_RESPONSE_MAX_CHARS`. `next_offset` continues from there.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub truncated_by: Option<String>,
     /// Automated sessions trovador did not start, left out among those examined.
     pub hidden_automated: usize,
     pub sessions: Vec<SessionRow>,
@@ -240,7 +271,13 @@ fn list_inner(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
         .filter(|e| opts.backend.is_none_or(|b| e.backend == b))
         .filter(|e| opts.archived.is_none_or(|a| e.archived == a))
         .collect();
-    let limit = opts.limit.unwrap_or(ctx.limits.list_default).max(1);
+    let (limit, limit_note) = capped(
+        opts.limit,
+        ctx.limits.list_default,
+        ctx.limits.list_max,
+        "limit",
+        "TROVADOR_LIST_MAX",
+    );
     // Metadata from the index where the file has not changed since it was indexed. The
     // index is only read here, never created: listing must not leave state behind.
     let index = Index::open_existing(&ctx.paths, &ctx.limits);
@@ -259,6 +296,8 @@ fn list_inner(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
         .filter(|p| !p.is_empty())
         .map(str::to_ascii_lowercase);
     let mut sessions = Vec::new();
+    let mut chars = 0usize;
+    let mut budget_note = None;
     let mut examined = 0;
     let mut truncated = false;
     // Sessions that passed every filter so far, returned or skipped by the offset.
@@ -322,9 +361,27 @@ fn list_inner(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
             truncated = true;
             break;
         }
+        let r = row(e, meta, &ctx.limits);
+        let size = crate::output::json_chars(&r);
+        if !sessions.is_empty() && chars + size > ctx.limits.response_max_chars {
+            truncated = true;
+            budget_note = Some(over_budget(&ctx.limits));
+            break;
+        }
+        chars += size;
         passed += 1;
-        sessions.push(row(e, meta, &ctx.limits));
+        sessions.push(r);
     }
+    // The limit note only matters when the ceiling actually held a page short.
+    let truncated_by = [
+        (truncated && sessions.len() == limit)
+            .then_some(limit_note)
+            .flatten(),
+        budget_note,
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
     Ok(ListResult {
         total_sessions: all.len(),
         examined,
@@ -332,6 +389,7 @@ fn list_inner(ctx: &Ctx, opts: &ListOpts) -> Result<ListResult, Error> {
         offset,
         next_offset: truncated.then_some(offset + sessions.len()),
         truncated,
+        truncated_by: (!truncated_by.is_empty()).then(|| truncated_by.join("; ")),
         hidden_automated,
         sessions,
     })
@@ -606,6 +664,11 @@ pub struct SearchResult {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub next_offset: Option<usize>,
     pub hits: Vec<SearchHit>,
+    /// Set when this page holds less than asked for because of a ceiling: a `limit` above
+    /// `TROVADOR_SEARCH_MAX`, a `per_session` above `TROVADOR_PER_SESSION_MAX`, or hits that
+    /// would have passed `TROVADOR_RESPONSE_MAX_CHARS`. `next_offset` continues from there.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub truncated_by: Option<String>,
     /// Matching sessions the defaults left out, by reason.
     pub hidden: Hidden,
     /// True only when every session this search covers was indexed and current when the
@@ -689,11 +752,20 @@ fn search_inner(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
         }
         Err(error) => return Err(error.into()),
     };
-    let limit = opts.limit.unwrap_or(ctx.limits.search_default).max(1);
-    let per_session = opts
-        .per_session
-        .unwrap_or(ctx.limits.per_session_default)
-        .max(1);
+    let (limit, limit_note) = capped(
+        opts.limit,
+        ctx.limits.search_default,
+        ctx.limits.search_max,
+        "limit",
+        "TROVADOR_SEARCH_MAX",
+    );
+    let (per_session, per_session_note) = capped(
+        opts.per_session,
+        ctx.limits.per_session_default,
+        ctx.limits.per_session_max,
+        "per_session",
+        "TROVADOR_PER_SESSION_MAX",
+    );
     let vis = Visibility {
         archive_roots: Some(
             [
@@ -732,23 +804,49 @@ fn search_inner(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
     if readonly_note.is_some() {
         refresh.sessions = entries.len();
     }
-    let found = raw.rows;
-    let recognized = raw.hits.len();
-    let hits: Vec<SearchHit> = raw
-        .hits
-        .into_iter()
-        .filter_map(|h| {
-            let e = entries.get(&(h.backend, h.session_id.clone()))?;
-            // Issue #36: a complete final title without a newline is display metadata,
-            // so search must use the same bounded read as list and show.
-            let meta = idx.read_meta_entry(e, &ctx.limits).unwrap_or(h.meta);
-            Some(SearchHit {
-                row: row(e, meta, &ctx.limits),
-                match_count: h.match_count,
-                matches: h.matches,
-            })
-        })
-        .collect();
+    let page_full = raw.rows == limit;
+    let mut found = raw.rows;
+    let mut recognized = raw.hits.len();
+    let mut hits: Vec<SearchHit> = Vec::new();
+    let mut chars = 0usize;
+    let mut budget_note = None;
+    for (i, h) in raw.hits.into_iter().enumerate() {
+        let Some(e) = entries.get(&(h.backend, h.session_id.clone())) else {
+            continue;
+        };
+        // Issue #36: a complete final title without a newline is display metadata,
+        // so search must use the same bounded read as list and show.
+        let meta = idx.read_meta_entry(e, &ctx.limits).unwrap_or(h.meta);
+        let hit = SearchHit {
+            row: row(e, meta, &ctx.limits),
+            match_count: h.match_count,
+            matches: h.matches,
+        };
+        let size = crate::output::json_chars(&hit);
+        if !hits.is_empty() && chars + size > ctx.limits.response_max_chars {
+            // The page ends before this hit, so the next one starts at its row, and only
+            // the hits before it count toward this page.
+            found = h.row;
+            recognized = i;
+            budget_note = Some(over_budget(&ctx.limits));
+            break;
+        }
+        chars += size;
+        hits.push(hit);
+    }
+    let truncated_by = [
+        (page_full && budget_note.is_none())
+            .then_some(limit_note)
+            .flatten(),
+        hits.iter()
+            .any(|h| h.match_count > h.matches.len())
+            .then_some(per_session_note)
+            .flatten(),
+        budget_note,
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
 
     let mut hidden = raw.hidden.clone();
     // Matches whose file the scan could not see: in an unreadable root, or removed since
@@ -879,6 +977,7 @@ fn search_inner(ctx: &Ctx, opts: &SearchOpts) -> Result<SearchResult, Error> {
             .then_some(exhaustive && !hidden.any() && query_is_proof && offset == 0 && found == 0),
         hidden,
         hits,
+        truncated_by: (!truncated_by.is_empty()).then(|| truncated_by.join("; ")),
         exhaustive,
         note,
         coverage: Coverage {

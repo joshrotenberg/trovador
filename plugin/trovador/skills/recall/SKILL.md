@@ -33,6 +33,11 @@ A search returns one page of sessions. When the result has `next_offset`, pass i
 `offset` with the same other inputs to get the next page; no `next_offset` means that
 was the last. An empty later page never proves absence.
 
+Results are held to about 40,000 characters, and `limit` and `per_session` have
+ceilings. When a page was cut short, `truncated_by` says why and `next_offset` goes on
+from there. Keep `per_session` small (the default 3 is usually enough): `match_count`
+says how many records matched, and the transcript shows the rest.
+
 To browse instead of search, `sessions` with `action=list` returns sessions newest
 first, with the same `project`, `backend`, and `since`/`until` filters, and pages the
 same way with `next_offset` and `offset`. `archived=true` keeps only Codex threads
@@ -42,8 +47,9 @@ take it, and leaving it out includes both.
 ## Read
 
 Each hit has `matches[].index`. Open the transcript there: `sessions` with
-`action=transcript`, `session_id`, and `offset` set a few records before the index.
-Follow `next_offset` only as far as you need.
+`action=transcript`, `session_id`, `offset` set a few records before the index, and a
+small `limit` such as 20. Follow `next_offset` only as far as you need. This is the
+cheapest way to read what a match was about; prefer it to reading the whole session.
 A record of type `omitted` is something known with nothing to read. A record of type
 `unrecognized` is a shape trovador has not learned: its `name` is the provider's type and
 its `text` a shortened copy of the raw JSON. Read it as raw data; it may be partial.
@@ -58,8 +64,8 @@ whose history boundary is still open), the call fails and names the current revi
 instead of returning a page from a different state; start again from offset 0 without
 `expected_revision`.
 
-For the gist of a whole session, `sessions` with `action=text` returns it as plain
-text, in parts. Read the first part, follow `truncated.next_offset` for more (with the
+For the gist of a whole session, and only then, `sessions` with `action=text` returns
+it as plain text, in parts of about 40,000 characters. Read the first part, follow `truncated.next_offset` for more (with the
 same `expected_revision` rule), and summarize it yourself. A long session can run to many parts; read what the question
 needs.
 

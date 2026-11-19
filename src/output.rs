@@ -63,6 +63,12 @@ pub fn part(
     )
 }
 
+/// The length of `value` as compact JSON, the form an MCP caller receives. Bytes, which
+/// are never fewer than characters, so a budget held in bytes holds in characters too.
+pub fn json_chars(value: &impl Serialize) -> usize {
+    serde_json::to_string(value).map(|s| s.len()).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

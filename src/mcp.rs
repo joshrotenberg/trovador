@@ -125,8 +125,20 @@ fn to_json(value: &impl Serialize, opts: ServeOpts) -> tower_mcp::Result<serde_j
     Ok(v)
 }
 
+/// Compact JSON in the text content, with the same value as `structuredContent`.
+/// `CallToolResult::json` pretty-prints, which made the default search 32,516 characters
+/// against 25,940 compact, and hosts that cap results count the text. The MCP spec has a
+/// tool that returns structured content also return it as text, so both stay.
 fn json_result(value: &impl Serialize, opts: ServeOpts) -> tower_mcp::Result<CallToolResult> {
-    Ok(CallToolResult::json(to_json(value, opts)?))
+    let v = to_json(value, opts)?;
+    let text = compact(&v)?;
+    let mut result = CallToolResult::text(text);
+    result.structured_content = Some(v);
+    Ok(result)
+}
+
+fn compact(v: &serde_json::Value) -> tower_mcp::Result<String> {
+    serde_json::to_string(v).map_err(|e| tower_mcp::Error::internal(e.to_string()))
 }
 
 /// Error text can quote session content too, such as a provider's failure message.
@@ -209,8 +221,7 @@ fn resource_json(
     value: &impl Serialize,
     opts: ServeOpts,
 ) -> tower_mcp::Result<ReadResourceResult> {
-    let text = serde_json::to_string_pretty(&to_json(value, opts)?)
-        .map_err(|e| tower_mcp::Error::internal(e.to_string()))?;
+    let text = compact(&to_json(value, opts)?)?;
     Ok(ReadResourceResult {
         contents: vec![ResourceContent {
             uri,

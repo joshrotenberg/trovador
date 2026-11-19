@@ -930,7 +930,11 @@ fn a_page_stops_at_the_response_size_cap_and_says_so() {
     assert_eq!(p.records.len(), 3);
     assert!(p.has_more);
     assert_eq!(p.next_offset, Some(3));
-    assert!(p.truncated_by.unwrap().contains("response_max_chars"));
+    assert!(
+        p.truncated_by
+            .unwrap()
+            .contains("TROVADOR_RESPONSE_MAX_CHARS")
+    );
 }
 
 #[test]
