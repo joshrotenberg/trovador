@@ -11,8 +11,17 @@ documentation = "https://docs.rs/trovador"
 readme = "README.md"
 keywords = ["claude", "codex", "mcp", "agents", "sessions"]
 categories = ["command-line-utilities", "development-tools"]
-# Planning notes, parity scripts, and live tests are for this repository, not the crate.
-exclude = ["docs/", "scripts/", ".github/", "AGENTS.md", "CLAUDE.md"]
+# Planning notes, parity scripts, and release tooling are for this repository, not the crate.
+exclude = [
+    "docs/",
+    "scripts/",
+    ".github/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "cliff.toml",
+    "dist-workspace.toml",
+    "release-plz.toml",
+]
 
 [[bin]]
 name = "trovador"
@@ -42,3 +51,7 @@ tower-mcp = { version = "=0.23.2", features = ["testing"] }
 [profile.release]
 lto = "thin"
 strip = true
+
+# The profile dist builds release artifacts with.
+[profile.dist]
+inherits = "release"

@@ -2,7 +2,11 @@
 changelog_update = true
 # Changelog rules live in cliff.toml, as in claude-wrapper and codex-wrapper.
 changelog_config = "cliff.toml"
-git_release_enable = true
+# dist (dist-workspace.toml, .github/workflows/release.yml) creates the GitHub Release
+# with binaries and the installer when release-plz pushes the tag, so release-plz only
+# tags. The tag must be pushed with COMMITTER_TOKEN: a tag pushed with GITHUB_TOKEN does
+# not start other workflows.
+git_release_enable = false
 git_tag_enable = true
 pr_labels = ["release"]
 pr_draft = false
